@@ -1,0 +1,18 @@
+# 发布关卡：打 v* 标签 → 进入 production 环境（需要你本人在 GitHub 上点「Approve」）→ 构建并发 Release
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions: { contents: write }
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: production   # setup-github.sh 已建好；在 Settings → Environments 里确认 Required reviewers = 你自己
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci || npm install
+      - run: npm run verify
+      - env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh release create "${{ github.ref_name }}" --generate-notes

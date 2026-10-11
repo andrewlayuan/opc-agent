@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+CODEBUDDY.local.md
+.codebuddy/settings.local.json
+# 本地运行数据（SQLite、缓存、报告、本地设置与密钥），默认不进仓库
+.opc/

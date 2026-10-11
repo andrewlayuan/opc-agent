@@ -1,0 +1,29 @@
+# GitHub 为主仓，Gitee 只读镜像：main 和标签推送后同步到 Gitee。
+# 需要：Secrets GITEE_SSH_KEY（Gitee 部署公钥对应的私钥，需可写）；Variables GITEE_REPO（如 andrewlayuan/opc-agent）
+name: mirror-gitee
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: mirror-gitee
+  cancel-in-progress: true
+jobs:
+  mirror:
+    if: vars.GITEE_REPO != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: 推送到 Gitee
+        env:
+          KEY: ${{ secrets.GITEE_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && echo "$KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t ed25519,rsa gitee.com >> ~/.ssh/known_hosts 2>/dev/null
+          git remote add gitee "git@gitee.com:${{ vars.GITEE_REPO }}.git"
+          git push gitee "refs/remotes/origin/main:refs/heads/main" --force
+          git push gitee --tags --force

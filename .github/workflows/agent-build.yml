@@ -1,0 +1,42 @@
+# 云端构建：你在 Issue 上加标签 agent/build（前提：计划已 approved 并已合入 main）
+# → CodeBuddy 无头模式按计划构建 → 开 PR → CI → 你合并（G3）。
+name: agent-build
+on:
+  issues:
+    types: [labeled]
+concurrency: { group: "agent-build-${{ github.event.issue.number }}", cancel-in-progress: false }
+permissions: { contents: write, pull-requests: write, issues: write }
+jobs:
+  build:
+    # 只响应仓库所有者本人加的标签，防止别人触发 Agent
+    if: github.event.label.name == 'agent/build' && github.event.sender.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      N: ${{ github.event.issue.number }}
+      GH_TOKEN: ${{ secrets.OPC_BOT_TOKEN }}   # 用 PAT 开 PR，CI 才会被触发（GITHUB_TOKEN 开的 PR 不触发工作流）
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0, token: "${{ secrets.OPC_BOT_TOKEN }}" }
+      - uses: ./.github/actions/setup-codebuddy
+        with: { api-key: "${{ secrets.CODEBUDDY_API_KEY }}", env: "${{ vars.CODEBUDDY_INTERNET_ENVIRONMENT }}" }
+      - run: npm ci || npm install
+      - name: 检查计划已批准
+        run: |
+          f=$(ls docs/plans/${N}-*.md docs/plans/${N}.md 2>/dev/null | head -1)
+          [ -n "$f" ] && grep -q '^status: approved' "$f" && grep -q '^approved_by:' "$f" \
+            || { gh issue comment $N -b "❌ 没有找到已批准的 docs/plans/${N}-*.md，请先在本地 npm run approve -- ${N} 并合入 main"; exit 1; }
+          slug=$(basename "$f" .md | sed "s/^${N}-\{0,1\}//"); echo "BR=feat/${N}-${slug:-task}" >> $GITHUB_ENV
+      - run: git switch -c "$BR"
+      - name: CodeBuddy 按计划构建
+        run: |
+          codebuddy -p "$(sed "s/{{N}}/$N/g" .github/prompts/build.md)" -y \
+            --max-turns 80 --output-format json \
+            --disallowedTools "Bash(gh pr merge:*),Bash(git push:*),Bash(npm publish:*)" > /tmp/out.json
+          jq -r '.result // .' /tmp/out.json | tail -c 3000 > /tmp/summary.md || true
+      - name: 推送并开 PR
+        run: |
+          git add -A && git diff --cached --quiet && { gh issue comment $N -b "Agent 没有产生改动，详见 Actions 日志"; exit 1; }
+          git commit -m "feat(#${N}): agent build" || true
+          git push -u origin "$BR"
+          gh pr create --fill --base main --head "$BR" --label "agent" --body-file /tmp/summary.md

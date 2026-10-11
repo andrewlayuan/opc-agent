@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [ { "command": "node scripts/hooks/guard.mjs cursor session" } ],
+    "preToolUse": [ { "command": "node scripts/hooks/guard.mjs cursor pre", "matcher": "Write|Delete", "failClosed": true } ],
+    "beforeReadFile": [ { "command": "node scripts/hooks/guard.mjs cursor read", "failClosed": true } ],
+    "beforeShellExecution": [ { "command": "node scripts/hooks/guard.mjs cursor shell", "failClosed": true } ],
+    "stop": [ { "command": "node scripts/hooks/guard.mjs cursor stop", "loop_limit": 2 } ]
+  }
+}

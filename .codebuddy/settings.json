@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Read", "Grep", "Glob",
+      "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git switch:*)", "Bash(git add:*)", "Bash(git commit:*)",
+      "Bash(npm run verify:*)", "Bash(npm run test:*)", "Bash(npm run lint:*)", "Bash(npm run sync:*)", "Bash(npm run radar:*)", "Bash(npm test:*)", "Bash(node scripts/checks/:*)", "Bash(node scripts/evals/:*)",
+      "Bash(gh issue:*)", "Bash(gh pr create:*)", "Bash(gh pr view:*)", "Bash(gh pr checks:*)"
+    ],
+    "ask": ["Bash(git push:*)", "Bash(npm install:*)", "WebFetch"],
+    "deny": [
+      "Read(./.env)", "Read(./.env.*)", "Read(./secrets/**)",
+      "Bash(gh pr merge:*)", "Bash(npm publish:*)", "Bash(sudo:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "node \"$CODEBUDDY_PROJECT_DIR/scripts/hooks/guard.mjs\" cb session" } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Edit|Write|MultiEdit|Read|Bash",
+        "hooks": [ { "type": "command", "command": "node \"$CODEBUDDY_PROJECT_DIR/scripts/hooks/guard.mjs\" cb pre", "timeout": 20 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "node \"$CODEBUDDY_PROJECT_DIR/scripts/hooks/guard.mjs\" cb stop", "timeout": 300 } ] }
+    ]
+  }
+}
