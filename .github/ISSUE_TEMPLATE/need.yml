@@ -1,0 +1,13 @@
+name: 需求 / 缺陷
+description: 一句话说清要什么，Agent 会帮你写 intent
+labels: ["triage"]
+body:
+  - type: dropdown
+    id: lane
+    attributes:
+      label: 通道（不确定就选 B，Agent 会复核）
+      options: ["A 快车道：小缺陷/文案/配置", "B 标准道：已有能力包小功能", "C 重点道：新能力包/新源类型/跨包", "D 管控道：法务/财务/注册/安全"]
+  - type: textarea
+    id: what
+    attributes: { label: 要什么 / 出了什么问题, description: 为什么要、做成什么样算成功 }
+    validations: { required: true }

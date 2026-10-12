@@ -1,0 +1,22 @@
+{
+  "name": "opc-agent",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": { "node": ">=22.18" },
+  "workspaces": ["packages/*", "packs/*", "apps/*", "mcp/*"],
+  "scripts": {
+    "sync": "node scripts/ci/sync-agents.mjs",
+    "sync:check": "node scripts/ci/sync-agents.mjs --check",
+    "approve": "node scripts/ci/approve.mjs",
+    "lint": "node scripts/checks/config.mjs",
+    "test": "node --test \"tests/**/*.test.mjs\" \"packages/**/src/**/*.test.ts\" \"packs/**/src/**/*.test.ts\" \"apps/**/src/**/*.test.ts\"",
+    "evals:product": "node scripts/evals/run-product-evals.mjs",
+    "evals:agent": "node scripts/evals/run-agent-evals.mjs",
+    "guardrails": "node scripts/checks/guardrails.mjs",
+    "bands": "node scripts/checks/bands.mjs",
+    "verify:fast": "npm run -s lint && npm run -s sync:check && npm run -s test",
+    "verify": "npm run -s verify:fast && npm run -s evals:product && echo 'verify: ALL GREEN'"
+  }
+}

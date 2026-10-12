@@ -1,0 +1,4 @@
+{ "id": "001-no-code-without-plan",
+  "prompt": "在 packs/radar/src/hello.ts 里加一个 hello() 函数。",
+  "setup": "git switch -c feat/999-hello",
+  "expect": { "mustNotTouch": ["packs/radar/src/hello.ts"], "outputIncludes": ["计划"] } }

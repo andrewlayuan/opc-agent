@@ -1,0 +1,51 @@
+# CI 自动修复：Agent 开的 PR 若 CI 失败，CodeBuddy 最多自动修 2 次；第 3 次失败就停下并 @你。
+name: agent-autofix
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+jobs:
+  fix:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      (startsWith(github.event.workflow_run.head_branch, 'feat/') || startsWith(github.event.workflow_run.head_branch, 'fix/') || startsWith(github.event.workflow_run.head_branch, 'chore/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      BR: ${{ github.event.workflow_run.head_branch }}
+      GH_TOKEN: ${{ secrets.OPC_BOT_TOKEN }}   # 细粒度 PAT：用 GITHUB_TOKEN 推送/开 PR 不会触发 CI
+      CODEBUDDY_API_KEY: ${{ secrets.CODEBUDDY_API_KEY }}
+      CODEBUDDY_INTERNET_ENVIRONMENT: ${{ vars.CODEBUDDY_INTERNET_ENVIRONMENT }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.event.workflow_run.head_branch }}", fetch-depth: 0, token: "${{ secrets.OPC_BOT_TOKEN }}" }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: 次数上限（最多 2 次）
+        id: count
+        run: |
+          n=$(git log origin/main..HEAD --format=%s | grep -c '^\[autofix\]' || true)
+          echo "n=$n" >> "$GITHUB_OUTPUT"
+          if [ "$n" -ge 2 ]; then
+            gh pr comment "$BR" --body "🛑 自动修复已用完 2 次，仍未通过。@${{ github.repository_owner }} 请人工介入。"; exit 1; fi
+      - name: 取失败日志
+        run: gh run view ${{ github.event.workflow_run.id }} --log-failed | tail -n 300 > /tmp/fail.log
+      - run: npm install --no-audit --no-fund && npm i -g @tencent-ai/codebuddy-code
+      - name: CodeBuddy 修复（不改测试）
+        env:
+          OPC_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          git config user.name "opc-agent[bot]"; git config user.email "opc-agent@users.noreply.github.com"
+          codebuddy -p "$(cat .github/prompts/autofix.md)
+
+          失败日志（最后 300 行）：
+          $(cat /tmp/fail.log)" -y --max-turns 40 \
+            --disallowedTools "Bash(git push:*)" "Bash(gh:*)" "WebFetch"
+          git add -A && git commit -m "[autofix] ${{ steps.count.outputs.n }}: 修复 CI" || exit 0
+          git push origin "HEAD:$BR"

@@ -1,0 +1,23 @@
+# AI 审查（三遍法）：PR 打开或更新时，CodeBuddy 只读审查并评论。它只给建议，不改代码、不批准、不合并。
+name: agent-review
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize]
+permissions: { contents: read, pull-requests: write }
+jobs:
+  review:
+    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup-codebuddy
+        with: { api-key: "${{ secrets.CODEBUDDY_API_KEY }}", env: "${{ vars.CODEBUDDY_INTERNET_ENVIRONMENT }}" }
+      - run: git diff origin/${{ github.base_ref }}...HEAD > /tmp/pr.diff
+      - name: 三遍审查（只读）
+        run: |
+          codebuddy -p "$(cat .github/prompts/review.md)" -y --max-turns 30 \
+            --allowedTools "Read,Grep,Glob" --disallowedTools "Edit,Write,Bash" > /tmp/review.md
+      - env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md

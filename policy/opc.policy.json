@@ -1,0 +1,134 @@
+{
+  "$comment": "opc-agent 硬规则的唯一来源。本地钩子（CodeBuddy / Cursor）和 CI 必需检查都读这一份。改它需要你本人批准（Agent 改它会被拦）。",
+  "planGate": "on",
+  "codePaths": [
+    "apps/**",
+    "packages/**",
+    "packs/**",
+    "mcp/**"
+  ],
+  "protectedPaths": [
+    "policy/**",
+    "scripts/hooks/**",
+    "scripts/lib/**",
+    "scripts/checks/**",
+    "scripts/ci/**",
+    ".github/workflows/**",
+    ".github/prompts/**",
+    ".codebuddy/settings.json",
+    ".cursor/hooks.json",
+    "evals/agent/**"
+  ],
+  "secretPaths": [
+    ".env",
+    ".env.*",
+    "**/.env",
+    "**/.env.*",
+    "secrets/**",
+    "**/*.pem",
+    "**/*.key",
+    "**/id_rsa*",
+    "**/id_ed25519*",
+    ".opc/credentials*",
+    ".opc/settings*.json"
+  ],
+  "testPaths": [
+    "**/*.test.ts",
+    "**/*.test.js",
+    "**/*.spec.ts",
+    "tests/**",
+    "**/__tests__/**",
+    "evals/product/golden/**"
+  ],
+  "laneDPaths": [
+    "packs/legal/**",
+    "packs/finance/**",
+    "packs/registration/**",
+    "packages/core/src/security/**"
+  ],
+  "maxAgentsMdLines": 150,
+  "shell": {
+    "deny": [
+      {
+        "re": "(npm\\s+run(\\s+-s)?\\s+approve|scripts/ci/approve\\.mjs)",
+        "why": "批准计划（G2）只能由你本人在自己的终端执行"
+      },
+      {
+        "re": "docs/plans/.*approved|approved.*docs/plans/",
+        "why": "计划的 approved 只能由你本人用 npm run approve 写入（G2）"
+      },
+      {
+        "re": "rm\\s+-[a-zA-Z]*r[a-zA-Z]*f?\\s+(/|~|\\$HOME)(\\s|$)",
+        "why": "禁止删除根目录或家目录"
+      },
+      {
+        "re": "git\\s+push\\s+.*(--force|-f)(\\s|$).*\\b(main|master)\\b",
+        "why": "禁止强推主分支"
+      },
+      {
+        "re": "git\\s+push\\s+(origin|gitee)\\s+(HEAD:)?(main|master)(\\s|$)",
+        "why": "主分支只能通过 PR 合并，不能直接推"
+      },
+      {
+        "re": "gh\\s+pr\\s+merge",
+        "why": "合并是 G3 关口，只能由你本人点"
+      },
+      {
+        "re": "gh\\s+release\\s+create|npm\\s+publish|pnpm\\s+publish",
+        "why": "发布只走 release 工作流（有人工审批）"
+      },
+      {
+        "re": "(curl|wget)[^|]*\\|\\s*(ba|z)?sh",
+        "why": "禁止下载即执行"
+      },
+      {
+        "re": "(cat|less|more|head|tail|type)\\s+[^|;]*\\.env(\\.|\\s|$)",
+        "why": "禁止读取密钥文件"
+      },
+      {
+        "re": "printenv|env\\s*$|echo\\s+\\$\\{?[A-Z_]*(KEY|TOKEN|SECRET)",
+        "why": "禁止打印环境变量里的密钥"
+      },
+      {
+        "re": "git\\s+(commit|push).*--no-verify",
+        "why": "禁止跳过钩子"
+      },
+      {
+        "re": "gh\\s+api\\s+.*(/merge|/merges)",
+        "why": "合并是 G3 关口，只能由你本人点"
+      },
+      {
+        "re": "gh\\s+(pr|issue)\\s+edit\\s+.*(guardrail-ok|agent/build)",
+        "why": "guardrail-ok / agent/build 标签只能由你本人加"
+      },
+      {
+        "re": "gh\\s+label\\s+.*(guardrail-ok|agent/build)",
+        "why": "guardrail-ok / agent/build 标签只能由你本人加"
+      }
+    ],
+    "ask": [
+      {
+        "re": "git\\s+push",
+        "why": "推送到远端前确认一下"
+      },
+      {
+        "re": "(npm|pnpm|yarn)\\s+(add|install|i)\\s+[^-]",
+        "why": "新增依赖要确认（供应链风险）"
+      },
+      {
+        "re": "git\\s+reset\\s+--hard|git\\s+clean\\s+-[a-z]*f",
+        "why": "会丢弃改动"
+      }
+    ]
+  },
+  "owners": [
+    "andrewlayuan"
+  ],
+  "laneA": {
+    "maxChangedLines": 80,
+    "kinds": [
+      "fix",
+      "chore"
+    ]
+  }
+}

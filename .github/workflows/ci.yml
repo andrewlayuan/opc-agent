@@ -1,0 +1,29 @@
+# 必需检查（在分支规则里勾选 verify 和 guardrails）。人和 Agent 都绕不过去。
+name: CI
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+permissions: { contents: read }
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci || npm install
+      - run: npm run verify
+  guardrails:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: 用和本地钩子同一份规则复查整个 PR
+        env:
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: node scripts/checks/guardrails.mjs origin/${{ github.base_ref }}

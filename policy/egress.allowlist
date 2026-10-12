@@ -1,0 +1,9 @@
+# 运行时允许访问的外部地址（P0 情报雷达）。新增地址需要你本人确认（这是护栏文件）。
+api.github.com
+github.com
+export.arxiv.org
+hacker-news.firebaseio.com
+hn.algolia.com
+www.producthunt.com
+huggingface.co
+localhost:11434   # Ollama 本地模型

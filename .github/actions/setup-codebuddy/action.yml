@@ -1,0 +1,19 @@
+# 复用步骤：安装 Node + CodeBuddy CLI，并注入密钥与环境（中国版 internal / 海外版留空）
+name: setup-codebuddy
+description: 安装 Node 22 与 CodeBuddy Code CLI
+inputs:
+  api-key: { description: "CODEBUDDY_API_KEY", required: true }
+  env: { description: "CODEBUDDY_INTERNET_ENVIRONMENT（internal 或留空）", required: false, default: "" }
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with: { node-version: 22 }
+    - shell: bash
+      run: |
+        npm i -g @tencent-ai/codebuddy-code
+        echo "CODEBUDDY_API_KEY=${{ inputs.api-key }}" >> "$GITHUB_ENV"
+        [ -n "${{ inputs.env }}" ] && echo "CODEBUDDY_INTERNET_ENVIRONMENT=${{ inputs.env }}" >> "$GITHUB_ENV" || true
+        echo "CODEBUDDY_IS_SANDBOX=1" >> "$GITHUB_ENV"
+        git config --global user.name "opc-bot"; git config --global user.email "opc-bot@users.noreply.github.com"
+        codebuddy --version

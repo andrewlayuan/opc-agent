@@ -1,0 +1,50 @@
+# 每晚：① Agent 配置评估（只在护栏/说明/技能改动后跑，省钱）② 控制带检查 → 越界就开 Issue
+name: nightly
+on:
+  schedule: [{ cron: "0 18 * * *" }]   # 北京时间 02:00
+  workflow_dispatch:
+permissions: { contents: write, issues: write }
+jobs:
+  agent-evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: 最近 24 小时改过 Agent 配置吗
+        id: chg
+        run: |
+          c=$(git log --since="24 hours ago" --name-only --pretty=format: -- AGENTS.md CODEBUDDY.md .agents policy scripts/hooks evals/agent | grep -c . || true)
+          echo "n=$c" >> $GITHUB_OUTPUT
+      - if: steps.chg.outputs.n != '0' || github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/setup-codebuddy
+        with: { api-key: "${{ secrets.CODEBUDDY_API_KEY }}", env: "${{ vars.CODEBUDDY_INTERNET_ENVIRONMENT }}" }
+      - if: steps.chg.outputs.n != '0' || github.event_name == 'workflow_dispatch'
+        run: |
+          npm ci || npm install
+          node scripts/evals/run-agent-evals.mjs --tool codebuddy | tee /tmp/evals.md
+      - name: 研发指标存到 ops-data 分支（不污染 main）
+        if: always()
+        run: |
+          [ -f docs/reports/metrics.jsonl ] || exit 0
+          cp docs/reports/metrics.jsonl /tmp/new.jsonl
+          git fetch origin ops-data && git switch ops-data || git switch --orphan ops-data
+          mkdir -p docs/reports && cat /tmp/new.jsonl >> docs/reports/metrics.jsonl
+          git add docs/reports/metrics.jsonl && git -c user.name=opc-bot -c user.email=bot@noreply commit -m "metrics $(date +%F)" && git push origin ops-data || true
+  bands:
+    needs: agent-evals
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: git fetch origin ops-data && git show origin/ops-data:docs/reports/metrics.jsonl > /tmp/m.jsonl || echo -n > /tmp/m.jsonl
+      - name: 越过 2σ 就开 Issue（from-monitor），由你分诊
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          node scripts/checks/bands.mjs --file /tmp/m.jsonl > /tmp/b.json
+          jq -c '.[] | select(.level >= 2)' /tmp/b.json | while read -r r; do
+            id=$(jq -r .id <<<"$r"); lv=$(jq -r .level <<<"$r"); why=$(jq -r .why <<<"$r")
+            gh issue list --label from-monitor --state open --search "$id" --json number | jq -e 'length>0' >/dev/null && continue
+            gh issue create --title "[控制带 ${lv}σ] $id 异常" --label from-monitor $( [ "$lv" = 3 ] && echo --label priority/now ) \
+              --body "指标：$id（$(jq -r .desc <<<"$r")）$why。请用 /intent 让 Agent 写诊断意图，你来决定：马上修 / 排期 / 驳回。"
+          done

@@ -1,0 +1,11 @@
+{
+  "$comment": "控制带：nightly 工作流每天计算。σ = 过去 28 天的标准差。1σ 记录；2σ 开 Issue（from-monitor）由 Agent 写诊断；3σ 再加 priority/now，若由最近一次合并引起则起草 revert PR（仍需你合并）。",
+  "window": 28,
+  "minHistory": 7,
+  "metrics": {
+    "radar_items_per_day":      { "desc": "每日采集条目数", "direction": "both" },
+    "radar_source_fail_rate":   { "desc": "信息源失败比例", "direction": "up", "hardMax": 0.3 },
+    "report_citation_coverage": { "desc": "日报引用覆盖率", "direction": "down", "hardMin": 1.0 },
+    "agent_eval_pass_rate":     { "desc": "Agent 配置评估通过率", "direction": "down", "hardMin": 0.85 }
+  }
+}
