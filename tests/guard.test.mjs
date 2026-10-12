@@ -44,3 +44,23 @@ test('Cursor：preToolUse 不支持 ask，降级为 deny 并提示找人', () =>
 test('Cursor：读密钥被拦', () => {
   assert.equal(JSON.parse(run('cursor', 'read', { file_path: process.cwd() + '/secrets/a.json' }).out).permission, 'deny');
 });
+
+// 编辑器/IDE 的工具参数是 camelCase（filePath、new_str），钩子必须同样识别，否则会误拦正常写入、漏拦读密钥
+test('CodeBuddy IDE：filePath 参数读密钥被拦', () => {
+  assert.equal(run('cb', 'pre', { tool_name: 'Read', tool_input: { filePath: '.env.local' } }).code, 2);
+});
+test('CodeBuddy IDE：filePath 参数写普通文件放行', () => {
+  const r = run('cb', 'pre', { tool_name: 'Write', tool_input: { filePath: 'docs/notes.md', content: 'x' } });
+  assert.equal(r.code, 0); assert.equal(JSON.parse(r.out).hookSpecificOutput.permissionDecision, 'allow');
+});
+test('CodeBuddy IDE：filePath + new_str 不能把计划写成 approved', () => {
+  const r = run('cb', 'pre', { tool_name: 'Edit', tool_input: { filePath: 'docs/plans/3-x.md', old_str: 'status: draft', new_str: 'status: approved' } });
+  assert.equal(r.code, 2); assert.match(r.out, /approved/);
+});
+test('识别不出写入路径时按拦截处理，并说明原因', () => {
+  const r = run('cb', 'pre', { tool_name: 'Write', tool_input: { content: 'x' } });
+  assert.equal(r.code, 2); assert.match(r.out, /没有识别出/);
+});
+test('识别不出读取路径时按拦截处理', () => {
+  assert.equal(run('cb', 'pre', { tool_name: 'Read', tool_input: {} }).code, 2);
+});

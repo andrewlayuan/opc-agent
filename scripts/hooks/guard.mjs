@@ -15,16 +15,25 @@ let input = {};
 try { input = JSON.parse(readFileSync(0, 'utf8') || '{}'); } catch { /* 空输入 */ }
 const out = (o) => process.stdout.write(JSON.stringify(o));
 
+// 各工具的参数名不统一（file_path / filePath / path / target_file；new_string / new_str），统一在这里取
+const PATH_KEYS = ['file_path', 'filePath', 'path', 'target_file', 'targetFile'];
+const pickPath = (...objs) => { for (const o of objs) for (const k of PATH_KEYS) if (o && typeof o[k] === 'string' && o[k]) return o[k]; return ''; };
+const pickContent = (ti) => [ti.content, ti.new_string, ti.new_str, ti.newString,
+  ...(Array.isArray(ti.edits) ? ti.edits.map((e) => e?.new_string ?? e?.new_str ?? e?.newString) : [])]
+  .filter((x) => typeof x === 'string').join('\n');
+// 识别不出路径时按拦截处理（fail-closed），只列参数名、不列参数值，方便排查
+const noPath = (what, o) => ({ decision: 'deny', reason: `没有识别出要${what}的文件路径（参数：${Object.keys(o || {}).join(', ') || '无'}），钩子按拦截处理` });
+
 function decide() {
   if (ev === 'shell') return checkShell(input.command || input.tool_input?.command || '');
-  if (ev === 'read') return checkRead(input.file_path || input.tool_input?.file_path || '');
+  if (ev === 'read') { const f = pickPath(input, input.tool_input); return f ? checkRead(f) : noPath('读取', input.tool_input || input); }
   const ti = input.tool_input || {};
   const name = input.tool_name || '';
   if (/Bash|Shell/.test(name)) return checkShell(ti.command || '');
-  if (/^Read$/.test(name)) return checkRead(ti.file_path || ti.path || '');
-  const file = ti.file_path || ti.path || ti.target_file || input.file_path || '';
-  const content = ti.content ?? ti.new_string ?? (Array.isArray(ti.edits) ? ti.edits.map((e) => e.new_string).join('\n') : '');
-  return checkWrite(file, content);
+  if (/^Read$/.test(name)) { const f = pickPath(ti); return f ? checkRead(f) : noPath('读取', ti); }
+  const file = pickPath(ti, input);
+  if (!file) return noPath('写入', ti);
+  return checkWrite(file, pickContent(ti));
 }
 
 function session() {
