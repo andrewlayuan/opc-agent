@@ -1,6 +1,7 @@
 ---
 issue: 5
-status: draft        # 只能由你本人执行 npm run approve -- 5 改为批准（G2）
+status: approved
+approved_by: jason bourne @ 2026-10-13 08:35
 ---
 # 计划：加固本地钩子，并修复钩子自身的缺陷
 
