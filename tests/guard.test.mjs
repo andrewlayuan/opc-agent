@@ -29,9 +29,9 @@ test('CodeBuddy：Agent 不能把计划写成 approved', () => {
 test('CodeBuddy：main 上改代码被拦（planGate=on）', () => {
   assert.equal(run('cb', 'pre', { tool_name: 'Edit', tool_input: { file_path: 'packs/radar/src/a.ts', new_string: 'x' } }).code, 2);
 });
-test('CodeBuddy：改护栏文件 → 拦截并提示找本人确认（IDE 不对改文件弹询问框，#5 R4）', () => {
+test('CodeBuddy：改护栏文件 → ask', () => {
   const r = run('cb', 'pre', { tool_name: 'Edit', tool_input: { file_path: 'policy/opc.policy.json', new_string: '{}' } });
-  assert.equal(r.code, 2); assert.match(r.out, /本人确认/);
+  assert.equal(JSON.parse(r.out).hookSpecificOutput.permissionDecision, 'ask');
 });
 test('Cursor：shell 拦截与 ask', () => {
   assert.equal(JSON.parse(run('cursor', 'shell', { command: 'gh pr merge 1' }).out).permission, 'deny');

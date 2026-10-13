@@ -1,5 +1,5 @@
-// #5 护栏加固（docs/specs/5-guardrail-hardening.md 的 R1–R10）。
-// 钩子行为（R1–R4）用子进程调用 guard.mjs；命令规则（R5–R10）直接调 checkShell 做表驱动。
+// #5 护栏加固（docs/specs/5-guardrail-hardening.md 的 R1–R10，R4 已取消）。
+// 钩子行为（R1–R3）用子进程调用 guard.mjs；命令规则（R5–R10）直接调 checkShell 做表驱动。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -78,16 +78,14 @@ test('R3 read_file 按读规则处理（读护栏文件放行，不当成写）'
   assert.equal(run('cb', 'pre', { tool_name: 'READ_FILE', tool_input: { filePath: '.env' } }).code, 2);
 });
 
-// —— R4：CodeBuddy 下改文件类的"询问"降级为拦截；命令类的"询问"不变 ——
-test('R4 改护栏文件：拦截并提示找本人确认', () => {
-  const r = run('cb', 'pre', { tool_name: 'Edit', tool_input: { filePath: 'policy/opc.policy.json', new_str: '{}' } }, 'chore/9-x');
-  assert.equal(r.code, 2); assert.match(r.out, /本人确认/); assert.match(r.err, /本人确认/);
+// —— 询问保持不变（R4 已取消：负责人确认 IDE 对改文件的询问会弹框）——
+test('改护栏文件、改已有测试仍是 ask（camelCase 参数）', () => {
+  for (const ti of [{ filePath: 'policy/opc.policy.json', new_str: '{}' }, { filePath: 'tests/guard.test.mjs', new_str: 'x' }]) {
+    const r = run('cb', 'pre', { tool_name: 'Edit', tool_input: ti }, 'chore/9-x');
+    assert.equal(r.code, 0, ti.filePath); assert.equal(decisionOf(r), 'ask', ti.filePath);
+  }
 });
-test('R4 改已有测试：拦截并提示找本人确认', () => {
-  const r = run('cb', 'pre', { tool_name: 'Edit', tool_input: { file_path: 'tests/guard.test.mjs', new_string: 'x' } }, 'chore/9-x');
-  assert.equal(r.code, 2); assert.match(r.out, /本人确认/);
-});
-test('R4 命令类的询问不变：推送到功能分支仍是 ask', () => {
+test('推送到功能分支仍是 ask', () => {
   const r = run('cb', 'pre', { tool_name: 'Bash', tool_input: { command: 'git push -u origin chore/9-x' } }, 'chore/9-x');
   assert.equal(r.code, 0); assert.equal(decisionOf(r), 'ask');
 });
