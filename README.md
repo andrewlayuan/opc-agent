@@ -28,5 +28,5 @@ npm run approve -- <n> # G2：批准 docs/plans/<n>-*.md，只能由负责人本
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `npm run verify` 报 `Could not find '…/tests/**/*.test.mjs'` | Node 版本低于 22，`node --test` 不支持通配符 | 升级到 Node >= 22.18 |
+| `npm run verify` 报 `Could not find '…/tests/**/*.test.mjs'` | Node 版本过低（实测 Node 20 的 `node --test` 不展开通配符） | 升级到 Node >= 22.18 |
 | 会话开头显示 `当前分支：未知`，改代码时提示"分支名 不符合约定" | git 无法工作，常见原因是仓库目录属主与当前用户不一致（git 报 dubious ownership） | 让仓库目录属主与当前用户一致后，重开会话 |
