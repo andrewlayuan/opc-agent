@@ -50,11 +50,27 @@
   "shell": {
     "deny": [
       {
-        "re": "(npm\\s+run(\\s+-s)?\\s+approve|scripts/ci/approve\\.mjs)",
+        "re": "(^|[\\s;&|(])(npm|pnpm|yarn|bun)\\s+(run(-script)?\\s+)?(-\\S+\\s+)*approve(\\s|$|[;&|)])",
         "why": "批准计划（G2）只能由你本人在自己的终端执行"
       },
       {
-        "re": "docs/plans/.*approved|approved.*docs/plans/",
+        "re": "(^|[\\s;&|(])(node|bun|deno(\\s+run)?|tsx|ts-node|npx|(ba|z|da)?sh|source|\\.)\\s+(-\\S+\\s+)*[^\\s;&|]*scripts/ci/approve\\.mjs|(^|[;&|(\\n])\\s*[^\\s;&|]*scripts/ci/approve\\.mjs",
+        "why": "批准计划（G2）只能由你本人在自己的终端执行（查看脚本源码不受限）"
+      },
+      {
+        "re": "^(?=[\\s\\S]*approved)[\\s\\S]*(>|\\btee\\s+(-\\S+\\s+)*)\\s*[\"']?[^\\s;&|\"'<>]*docs/plans/",
+        "why": "计划的 approved 只能由你本人用 npm run approve 写入（G2）"
+      },
+      {
+        "re": "^(?=[\\s\\S]*approved)[\\s\\S]*\\b(sed|perl)\\b[^;&|\\n]*\\s(-[a-z]*i|--in-place)[^;&|\\n]*docs/plans/",
+        "why": "计划的 approved 只能由你本人用 npm run approve 写入（G2）"
+      },
+      {
+        "re": "^(?=[\\s\\S]*approved)[\\s\\S]*\\b(cp|mv|install|rsync|ln)\\s[^;&|\\n]*\\s[\"']?[^\\s;&|\"']*docs/plans/[^\\s;&|\"']*[\"']?\\s*($|[;&|\\n])",
+        "why": "计划的 approved 只能由你本人用 npm run approve 写入（G2）"
+      },
+      {
+        "re": "^(?=[\\s\\S]*approved)[\\s\\S]*(^|[\\s;&|(])(node|python[0-9.]*|perl|ruby|deno|bun|php)\\s[\\s\\S]*docs/plans/",
         "why": "计划的 approved 只能由你本人用 npm run approve 写入（G2）"
       },
       {
@@ -66,11 +82,15 @@
         "why": "禁止强推主分支"
       },
       {
-        "re": "git\\s+push\\s+(origin|gitee)\\s+(HEAD:)?(main|master)(\\s|$)",
+        "re": "(^|[\\s;&|(])git(\\s+(-[cC]\\s+\\S+|--[\\w-]+(=\\S+)?))*\\s+push\\b[^;&|\\n]*((\\s|:|\\+|[\"']|refs/heads/)(main|master)([\"']|\\s|[;&|)]|$)|\\s--(all|mirror)\\b)",
         "why": "主分支只能通过 PR 合并，不能直接推"
       },
       {
         "re": "gh\\s+pr\\s+merge",
+        "why": "合并是 G3 关口，只能由你本人点"
+      },
+      {
+        "re": "gh\\s+api\\b[\\s\\S]*\\b(mergePullRequest|enablePullRequestAutoMerge|mergeBranch)\\b",
         "why": "合并是 G3 关口，只能由你本人点"
       },
       {
@@ -90,6 +110,14 @@
         "why": "禁止打印环境变量里的密钥"
       },
       {
+        "re": "gh\\s+auth\\s+(token|git-credential)\\b|gh\\s+auth\\s+status\\b[^;&|\\n]*\\s(--show-token|-t)(\\s|=|$)|git\\s+credential(-[\\w-]+)?\\s+(fill|get)\\b",
+        "why": "禁止打印 gh / git 的登录凭据"
+      },
+      {
+        "re": "\\.config/gh(/|\\s|[\"']|$)",
+        "why": "禁止读取 gh 配置目录（里面有登录令牌）"
+      },
+      {
         "re": "git\\s+(commit|push).*--no-verify",
         "why": "禁止跳过钩子"
       },
@@ -98,12 +126,36 @@
         "why": "合并是 G3 关口，只能由你本人点"
       },
       {
-        "re": "gh\\s+(pr|issue)\\s+edit\\s+.*(guardrail-ok|agent/build)",
+        "re": "gh\\s+api\\b[\\s\\S]*\\b(create|update|delete)(BranchProtectionRule|RepositoryRuleset)\\b",
+        "why": "分支保护和 rulesets 只能由你本人改（读取不受限）"
+      },
+      {
+        "re": "gh\\s+api\\b(?=[^;&|\\n]*/(protection|rulesets)\\b)(?=[^;&|\\n]*(\\s(-X\\s*|--method[\\s=]+)[\"']?(POST|PUT|PATCH|DELETE)\\b|\\s(-f|-F|--field|--raw-field|--input)[\\s=]))",
+        "why": "分支保护和 rulesets 只能由你本人改（读取不受限）"
+      },
+      {
+        "re": "((^|[;&|(\\n])\\s*|(^|[\\s;&|(])((ba|z|da)?sh|source|\\.)\\s+(-\\S+\\s+)*)[^\\s;&|]*scripts/ci/setup-github\\.sh",
+        "why": "setup-github.sh 会改仓库设置（分支保护、标签），只能由你本人执行（查看源码不受限）"
+      },
+      {
+        "re": "gh\\s+(pr|issue)\\s+(create|edit)\\b[^;&|\\n]*\\s(--label|--add-label|--remove-label|-l)(\\s+|=)(\"[^\"]*|'[^']*|[^\\s\"';&|]*)(guardrail-ok|agent/build)",
         "why": "guardrail-ok / agent/build 标签只能由你本人加"
       },
       {
-        "re": "gh\\s+label\\s+.*(guardrail-ok|agent/build)",
+        "re": "gh\\s+api\\b(?=[^;&|\\n]*/labels\\b)(?=[^;&|\\n]*(\\s(-X\\s*|--method[\\s=]+)[\"']?(POST|PUT|PATCH|DELETE)\\b|\\s(-f|-F|--field|--raw-field|--input)[\\s=]))",
+        "why": "guardrail-ok / agent/build 标签只能由你本人加；用 gh api 改标签一律拦，加普通标签请用 gh pr edit --add-label"
+      },
+      {
+        "re": "gh\\s+api\\b[\\s\\S]*\\b(addLabelsToLabelable|removeLabelsFromLabelable|createLabel|updateLabel|deleteLabel|labelIds)\\b",
+        "why": "guardrail-ok / agent/build 标签只能由你本人加；用 GraphQL 改标签一律拦"
+      },
+      {
+        "re": "gh\\s+label\\s+(clone\\b|(create|edit|delete)\\b[^;&|\\n]*(guardrail-ok|agent/build))",
         "why": "guardrail-ok / agent/build 标签只能由你本人加"
+      },
+      {
+        "re": "(^|[\\s;&|(])(sudo|doas|pkexec)(\\s|$)",
+        "why": "禁止提权执行命令"
       }
     ],
     "ask": [

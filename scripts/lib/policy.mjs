@@ -86,9 +86,44 @@ export function checkRead(file) {
   return { decision: 'allow', reason: '' };
 }
 
+// 命令里出现的密钥路径（R5）：按空白、引号、重定向、管道、括号、$、=、: 等切成词，逐个按 secretPaths 匹配。
+// 裸目录名（如 secrets）也算：补一层 /_ 再匹配 secrets/** 这类目录规则。
+const WORD_SPLIT = /[\s'"`;&|<>(){}[\]$=:,]+/;
+export function secretWordIn(cmd = '') {
+  for (const w of cmd.split(WORD_SPLIT)) {
+    if (!w || w === '.' || w === '..') continue;
+    const p = rel(w).replace(/\/+$/, '');
+    if (p && (match(p, policy.secretPaths) || match(p + '/_', policy.secretPaths))) return w;
+  }
+  return '';
+}
+
+// 当前分支是 main / master 时，不写目标的推送（git push、git push origin、git push origin HEAD）会推到主分支（R7）
+const PUSH_RE = /(?:^|\s)git(?:\s+(?:-[cC]\s+\S+|--[\w-]+(?:=\S+)?))*\s+push(?:\s+(.*))?$/;
+const PUSH_OPT_WITH_VALUE = /^(-o|--push-option|--repo|--receive-pack|--exec)$/;
+export function pushesCurrentMain(cmd = '') {
+  if (!/^(main|master)$/.test(currentBranch())) return false;
+  for (const seg of cmd.split(/[;&|\n]+/)) {
+    const m = PUSH_RE.exec(seg.replace(/\d*[<>]+\s*\S*/g, ' ').trimEnd());
+    if (!m) continue;
+    const args = (m[1] || '').split(/\s+/).filter(Boolean);
+    const pos = [];
+    for (let i = 0; i < args.length; i++) {
+      if (PUSH_OPT_WITH_VALUE.test(args[i])) { i++; continue; }
+      if (!args[i].startsWith('-')) pos.push(args[i].replace(/^["']+|["']+$/g, ''));
+    }
+    const refs = pos.slice(1);
+    if (refs.length === 0 || refs.some((r) => /^\+?(HEAD|@)$/i.test(r))) return true;
+  }
+  return false;
+}
+
 // —— 规则 3：Agent 执行命令 ——
 export function checkShell(cmd = '') {
   for (const r of policy.shell.deny) if (new RegExp(r.re, 'i').test(cmd)) return { decision: 'deny', reason: `已拦截：${r.why}（${cmd.slice(0, 80)}）` };
+  const w = secretWordIn(cmd);
+  if (w) return { decision: 'deny', reason: `已拦截：命令里出现了密钥路径 ${w.slice(0, 80)}，Agent 不能读写密钥文件。需要的话请你本人执行。` };
+  if (pushesCurrentMain(cmd)) return { decision: 'deny', reason: `已拦截：当前在 ${currentBranch()} 分支上，不带目标的推送会推到主分支。主分支只能通过 PR 合并，请先建功能分支。` };
   for (const r of policy.shell.ask) if (new RegExp(r.re, 'i').test(cmd)) return { decision: 'ask', reason: r.why };
   return { decision: 'allow', reason: '' };
 }
