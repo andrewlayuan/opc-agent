@@ -19,5 +19,8 @@ jobs:
         run: |
           codebuddy -p "$(cat .github/prompts/review.md)" -y --max-turns 30 \
             --allowedTools "Read,Grep,Glob" --disallowedTools "Edit,Write,Bash" > /tmp/review.md
-      - env: { GH_TOKEN: "${{ github.token }}" }
-        run: gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md
+      - name: 整理并发评论（只保留报告本身；空输出时给出说明）
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          node scripts/ci/review-body.mjs < /tmp/review.md > /tmp/review-body.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review-body.md

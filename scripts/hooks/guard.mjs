@@ -1,15 +1,19 @@
 #!/usr/bin/env node
 // 统一钩子入口：CodeBuddy 和 Cursor 都调用这一个脚本，内部翻译两家的输入/输出格式。
 // 用法：node scripts/hooks/guard.mjs <cb|cursor> <pre|read|shell|stop|session>
-//   CodeBuddy：退出码 2 = 阻止；JSON 用 hookSpecificOutput.permissionDecision（支持 ask）
+//   CodeBuddy：退出码 2 = 阻止，原因同时写 stdout 和 stderr；JSON 用 hookSpecificOutput.permissionDecision（支持 ask）
 //   Cursor   ：输出 {"permission":"allow|deny|ask"}；preToolUse 不执行 ask，所以 ask 降级为 deny 并提示找你本人
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
-// 注意：脚本自身出错时按"拦截"处理（fail-closed），见文件末尾的 catch
-import { checkWrite, checkRead, checkShell, currentBranch, issueOf, planOf, ROOT } from '../lib/policy.mjs';
 
 const [, , tool = 'cb', ev = 'pre'] = process.argv;
+// CodeBuddy 拦截：IDE 文档说读 stderr，CLI 文档说优先读 stdout，两边都写
+const blockCb = (msg) => { process.stdout.write(msg); process.stderr.write(msg + '\n'); process.exit(2); };
+
+// 注意：脚本自身出错时按"拦截"处理（fail-closed），见文件末尾的 catch。
+// 规则引擎在 try 里动态加载：规则文件损坏、引擎语法错误时也能进 catch，而不是以退出码 1 退出（CodeBuddy 会当成放行）
 try {
+const { checkWrite, checkRead, checkShell, currentBranch, issueOf, planOf, ROOT } = await import('../lib/policy.mjs');
 
 let input = {};
 try { input = JSON.parse(readFileSync(0, 'utf8') || '{}'); } catch { /* 空输入 */ }
@@ -24,13 +28,17 @@ const pickContent = (ti) => [ti.content, ti.new_string, ti.new_str, ti.newString
 // 识别不出路径时按拦截处理（fail-closed），只列参数名、不列参数值，方便排查
 const noPath = (what, o) => ({ decision: 'deny', reason: `没有识别出要${what}的文件路径（参数：${Object.keys(o || {}).join(', ') || '无'}），钩子按拦截处理` });
 
+// 工具名各家不统一（Bash / execute_command / run_command；Read / read_file），不区分大小写
+const SHELL_TOOL = /bash|shell|execute_command|run_command/i;
+const READ_TOOL = /^(read|read_file)$/i;
+
 function decide() {
   if (ev === 'shell') return checkShell(input.command || input.tool_input?.command || '');
   if (ev === 'read') { const f = pickPath(input, input.tool_input); return f ? checkRead(f) : noPath('读取', input.tool_input || input); }
   const ti = input.tool_input || {};
   const name = input.tool_name || '';
-  if (/Bash|Shell/.test(name)) return checkShell(ti.command || '');
-  if (/^Read$/.test(name)) { const f = pickPath(ti); return f ? checkRead(f) : noPath('读取', ti); }
+  if (SHELL_TOOL.test(name)) return checkShell(ti.command || '');
+  if (READ_TOOL.test(name)) { const f = pickPath(ti); return f ? checkRead(f) : noPath('读取', ti); }
   const file = pickPath(ti, input);
   if (!file) return noPath('写入', ti);
   return checkWrite(file, pickContent(ti));
@@ -77,7 +85,7 @@ if (tool === 'cursor') {
   process.exit(0);
 }
 // CodeBuddy
-if (decision === 'deny') { process.stdout.write(reason); process.exit(2); }
+if (decision === 'deny') blockCb(reason);
 out({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision, permissionDecisionReason: reason || 'ok' } });
 process.exit(0);
 
@@ -86,5 +94,5 @@ process.exit(0);
   const msg = '护栏脚本出错，已按拦截处理：' + String(e?.message || e).slice(0, 200);
   if (ev === 'session' || ev === 'stop') process.exit(0);
   if (tool === 'cursor') { process.stdout.write(JSON.stringify({ permission: 'deny', user_message: msg, agent_message: msg })); process.exit(0); }
-  process.stdout.write(msg); process.exit(2);
+  blockCb(msg);
 }
