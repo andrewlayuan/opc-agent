@@ -18,6 +18,9 @@ export const PRESETS: { id: string; label: string; skills: string[]; format?: 'p
 
 export const INPUT_MIN = 10;
 export const INPUT_MAX = 4000;
+/** 单次评审最多组合的框架数；框架说明按数量均分总预算，避免提示词过长、输出过散 */
+export const MAX_SELECTED = 6;
+const SKILLS_TOTAL_CHARS = 40000;
 const SKILL_MAX_CHARS = 9000;
 const MAX_SKILLS = 3;
 const MAX_RUNNING = 2;
@@ -26,9 +29,18 @@ const RADAR_ITEMS = 8;
 
 export interface ReviewRequest {
   input: string;
-  mode: string;
-  skill?: string;
+  /** 预设方案 id，可多选；为空或只含 auto 时由模型自动匹配 */
+  presets: unknown;
+  /** 额外指定的单个框架（pm-skills 名称），可多选 */
+  skills: unknown;
   useRadar: boolean;
+}
+
+interface Plan {
+  mode: string;
+  auto: boolean;
+  prd: boolean;
+  chosen: string[];
 }
 
 export interface ReviewRef {
@@ -55,6 +67,14 @@ export interface ReviewView {
 
 type Row = Record<string, unknown>;
 
+/** 历史记录里的 mode 形如 idea+business+custom，转成可读名称 */
+export function modeLabel(mode: string): string {
+  return mode
+    .split('+')
+    .map((m) => (m === 'custom' ? '自选框架' : (PRESETS.find((p) => p.id === m)?.label.split(/[：（]/)[0] ?? m)))
+    .join(' + ');
+}
+
 export class PmAdvisor {
   readonly db: DB;
   readonly llm: Llm;
@@ -77,12 +97,31 @@ export class PmAdvisor {
     return this.skills.length > 0 && this.llm.enabled;
   }
 
-  presets(): { id: string; label: string; skills: string[] }[] {
-    return PRESETS.map((p) => ({ id: p.id, label: p.label, skills: p.skills.filter((s) => this.byName.has(s)) })).filter((p) => p.id === 'auto' || p.skills.length);
+  presets(): { id: string; label: string; short: string; skills: string[] }[] {
+    return PRESETS.map((p) => ({ id: p.id, label: p.label, short: modeLabel(p.id), skills: p.skills.filter((s) => this.byName.has(s)) })).filter(
+      (p) => p.id === 'auto' || p.skills.length,
+    );
   }
 
   catalog(): { name: string; plugin: string; group: string; description: string }[] {
     return this.skills.map((s) => ({ name: s.name, plugin: s.plugin, group: PLUGIN_LABELS[s.plugin] ?? s.plugin, description: s.description }));
+  }
+
+  /** 把多选的方案与框架合并成去重的框架清单（保持选择顺序）；超出上限直接报错 */
+  resolve(presetsIn: unknown, skillsIn: unknown): Plan {
+    const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+    const presetIds = [...new Set(strs(presetsIn))].slice(0, PRESETS.length);
+    const skillNames = [...new Set(strs(skillsIn))].slice(0, 70);
+    for (const p of presetIds) if (!PRESETS.some((x) => x.id === p)) throw new Error('未知的评审方案');
+    for (const s of skillNames) if (!this.byName.has(s)) throw new Error('包含无效的框架');
+    const picked = presetIds.filter((p) => p !== 'auto');
+    if (!picked.length && !skillNames.length) return { mode: 'auto', auto: true, prd: false, chosen: [] };
+    const fromPresets = picked.flatMap((p) => PRESETS.find((x) => x.id === p)!.skills);
+    const chosen = [...new Set([...fromPresets, ...skillNames])].filter((s) => this.byName.has(s));
+    if (!chosen.length) throw new Error('所选方案在当前 pm-skills 中没有可用的框架');
+    if (chosen.length > MAX_SELECTED) throw new Error(`一次最多组合 ${MAX_SELECTED} 个框架（当前 ${chosen.length} 个），请减少选择`);
+    const mode = [...picked, ...(skillNames.length ? ['custom'] : [])].join('+');
+    return { mode, auto: false, prd: chosen.length === 1 && chosen[0] === 'create-prd', chosen };
   }
 
   /** 校验请求并在后台启动；返回评审 id。抛出的 Error.message 可直接展示给用户。 */
@@ -92,14 +131,12 @@ export class PmAdvisor {
     const input = req.input.trim();
     if ([...input].length < INPUT_MIN) throw new Error(`请把需求或点子描述得具体一些（至少 ${INPUT_MIN} 个字）`);
     if ([...input].length > INPUT_MAX) throw new Error(`内容过长（最多 ${INPUT_MAX} 字）`);
-    const preset = PRESETS.find((p) => p.id === req.mode);
-    if (req.mode !== 'custom' && !preset) throw new Error('未知的评审方案');
-    if (req.mode === 'custom' && !(req.skill && this.byName.has(req.skill))) throw new Error('请选择一个有效的技能');
+    const plan = this.resolve(req.presets, req.skills);
     if (this.running >= MAX_RUNNING) throw new Error(`同时最多进行 ${MAX_RUNNING} 个评审，请稍后再试`);
-    const res = this.db.prepare("INSERT INTO pm_reviews(created_at, status, mode, input) VALUES (?, 'running', ?, ?)").run(Date.now(), req.mode, input);
+    const res = this.db.prepare("INSERT INTO pm_reviews(created_at, status, mode, input) VALUES (?, 'running', ?, ?)").run(Date.now(), plan.mode, input);
     const id = Number(res.lastInsertRowid);
     this.running++;
-    void this.run(id, { ...req, input })
+    void this.run(id, input, plan, req.useRadar)
       .catch((e) => {
         const msg = (e instanceof Error ? e.message : String(e)).slice(0, 300);
         this.log(`[pm] 评审 #${id} 失败：${msg}`);
@@ -109,25 +146,24 @@ export class PmAdvisor {
     return id;
   }
 
-  private async run(id: number, req: ReviewRequest): Promise<void> {
-    const preset = PRESETS.find((p) => p.id === req.mode);
-    let chosen: string[] = req.mode === 'custom' ? [req.skill!] : (preset?.skills ?? []).filter((s) => this.byName.has(s));
+  private async run(id: number, input: string, p: Plan, useRadar: boolean): Promise<void> {
+    let chosen = p.chosen;
     let keywords: string[] = [];
-    if (req.mode === 'auto' || req.useRadar) {
-      const plan = await this.plan(req.input, req.mode === 'auto');
-      if (req.mode === 'auto') chosen = plan.skills;
+    if (p.auto || useRadar) {
+      const plan = await this.plan(input, p.auto);
+      if (p.auto) chosen = plan.skills;
       keywords = plan.keywords;
     }
     if (!chosen.length) chosen = ['value-proposition', 'identify-assumptions-new', 'pre-mortem'].filter((s) => this.byName.has(s));
-    const refs = req.useRadar ? this.radarRefs(keywords) : [];
+    const refs = useRadar ? this.radarRefs(keywords) : [];
     this.db.prepare('UPDATE pm_reviews SET skills=?, item_ids=? WHERE id=?').run(JSON.stringify(chosen), JSON.stringify(refs.map((r) => r.id)), id);
 
     const content = await this.llm.chat(
       [
         { role: 'system', content: this.systemPrompt(chosen) },
-        { role: 'user', content: this.userPrompt(req.input, refs, preset?.format) },
+        { role: 'user', content: this.userPrompt(input, refs, p.prd ? 'prd' : undefined, chosen.length > 3 ? 4500 : 3000) },
       ],
-      { maxTokens: 6000, temperature: 0.5, timeoutMs: 240000 },
+      { maxTokens: chosen.length > 3 ? 8000 : 6000, temperature: 0.5, timeoutMs: 300000 },
     );
     const clean = content.replace(/https?:\/\/\S+/g, '').trim().slice(0, 40000);
     if (!clean) throw new Error('模型没有返回内容');
@@ -176,11 +212,12 @@ ${input}
   }
 
   private systemPrompt(chosen: string[]): string {
+    const perSkill = Math.min(SKILL_MAX_CHARS, Math.floor(SKILLS_TOTAL_CHARS / Math.max(1, chosen.length)));
     const blocks = chosen
       .map((n) => this.byName.get(n))
       .filter((s): s is PmSkill => Boolean(s))
       .map((s) => {
-        const body = s.body.replace(/\$ARGUMENTS/g, '用户在 <request> 中提交的内容').slice(0, SKILL_MAX_CHARS);
+        const body = s.body.replace(/\$ARGUMENTS/g, '用户在 <request> 中提交的内容').slice(0, perSkill);
         return `<skill name="${s.name}">\n${body}\n</skill>`;
       })
       .join('\n\n');
@@ -195,7 +232,7 @@ ${input}
 ${blocks}`;
   }
 
-  private userPrompt(input: string, refs: ReviewRef[], format?: 'prd'): string {
+  private userPrompt(input: string, refs: ReviewRef[], format: 'prd' | undefined, maxChars: number): string {
     const radar = refs.length
       ? `\n以下 <radar> 是 OPC Radar 近期采集的相关行业动态，可作为市场与竞争判断的佐证；引用时在句末用 [编号] 标注，不要编造未给出的事实：
 <radar>
@@ -210,7 +247,7 @@ ${refs.map((r) => this.refLine(r)).join('\n')}
 明确判断：值得做 / 有条件地做 / 暂不建议，并用一两句话说明核心理由。
 ## 机会与价值
 ## 框架分析
-依次运用每个框架，每个框架一个小节，以「### 框架名」开头。
+依次运用每个框架，每个框架一个小节，以「### 框架名」开头；多个框架结论重复的地方只写一次，并指出框架之间相互印证或矛盾之处。
 ## 最大风险与关键假设
 按“风险 × 影响”排序，每条附上成本最低的验证方法。
 ## 商业化路径
@@ -224,7 +261,7 @@ ${input}
 ${radar}
 ${structure}
 
-格式要求：章节标题用「## 」「### 」，条目用「- 」，需要对比时可用简单的 Markdown 表格（| 分隔）。不要输出任何 URL。全文控制在 3000 字以内。`;
+格式要求：章节标题用「## 」「### 」，条目用「- 」，需要对比时可用简单的 Markdown 表格（| 分隔）。不要输出任何 URL。全文控制在 ${maxChars} 字以内。`;
   }
 
   private refLine(r: ReviewRef): string {
@@ -265,7 +302,7 @@ ${structure}
       finished_at: r.finished_at == null ? null : Number(r.finished_at),
       status: String(r.status) as ReviewView['status'],
       mode,
-      mode_label: mode === 'custom' ? '指定技能' : (PRESETS.find((p) => p.id === mode)?.label.split('：')[0] ?? mode),
+      mode_label: modeLabel(mode),
       input: String(r.input),
       skills: JSON.parse(String(r.skills || '[]')) as string[],
       error: (r.error as string) ?? null,

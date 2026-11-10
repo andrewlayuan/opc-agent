@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { openDb } from '../../packages/core/db.ts';
 import type { Llm } from '../../packages/core/llm.ts';
 import { syncSources } from '../radar/collect.ts';
-import { PmAdvisor } from './advisor.ts';
+import { PmAdvisor, modeLabel } from './advisor.ts';
 import { loadPmSkills, parseSkill } from './skills.ts';
 import type { PmSkill } from './skills.ts';
 
@@ -51,7 +51,7 @@ function setup(llmImpl: { json?: (m: { content: string }[]) => unknown; chat?: (
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-pm-db-'));
   const db = openDb(path.join(dir, 't.db'));
   syncSources(db);
-  const skills: PmSkill[] = ['value-proposition', 'identify-assumptions-new', 'pre-mortem', 'lean-canvas', 'create-prd'].map((name) => ({
+  const skills: PmSkill[] = ['value-proposition', 'identify-assumptions-new', 'pre-mortem', 'lean-canvas', 'monetization-strategy', 'pricing-strategy', 'create-prd', 'strategy-red-team', 'swot-analysis'].map((name) => ({
     name,
     plugin: 'pm-product-strategy',
     description: `${name} desc`,
@@ -77,13 +77,61 @@ async function waitDone(advisor: PmAdvisor, id: number) {
 
 test('产品顾问：参数校验', () => {
   const { advisor, done } = setup({});
-  assert.throws(() => advisor.start({ input: '太短', mode: 'auto', useRadar: false }), /至少/);
-  assert.throws(() => advisor.start({ input: 'x'.repeat(4001), mode: 'auto', useRadar: false }), /过长/);
-  assert.throws(() => advisor.start({ input: '一个足够长的产品点子描述内容', mode: 'nope', useRadar: false }), /未知/);
-  assert.throws(() => advisor.start({ input: '一个足够长的产品点子描述内容', mode: 'custom', skill: '../x', useRadar: false }), /有效/);
+  const ok = '一个足够长的产品点子描述内容';
+  assert.throws(() => advisor.start({ input: '太短', presets: [], skills: [], useRadar: false }), /至少/);
+  assert.throws(() => advisor.start({ input: 'x'.repeat(4001), presets: [], skills: [], useRadar: false }), /过长/);
+  assert.throws(() => advisor.start({ input: ok, presets: ['nope'], skills: [], useRadar: false }), /未知/);
+  assert.throws(() => advisor.start({ input: ok, presets: [], skills: ['../x'], useRadar: false }), /无效/);
+  assert.throws(() => advisor.start({ input: ok, presets: ['idea', 'business', 'redteam'], skills: [], useRadar: false }), /最多组合 6 个框架（当前 7 个）/);
   // 预设里不存在的技能会被过滤掉
   assert.deepEqual(advisor.presets().find((p) => p.id === 'idea')?.skills, ['value-proposition', 'identify-assumptions-new', 'pre-mortem']);
   assert.equal(advisor.presets().find((p) => p.id === 'market'), undefined);
+  done();
+});
+
+test('产品顾问：多选合并、去重、上限与模式名称', () => {
+  const { advisor, done } = setup({});
+  // 不选或只选 auto = 智能匹配；非数组参数按未选择处理
+  assert.deepEqual(advisor.resolve([], []), { mode: 'auto', auto: true, prd: false, chosen: [] });
+  assert.equal(advisor.resolve(['auto'], undefined).auto, true);
+  assert.equal(advisor.resolve('idea', { x: 1 }).auto, true);
+  // 方案 + 自选框架合并，按选择顺序去重（pre-mortem 同时在 idea 与 redteam 中）
+  const p = advisor.resolve(['idea', 'redteam', 'auto'], ['swot-analysis', 'pre-mortem']);
+  assert.deepEqual(p.chosen, ['value-proposition', 'identify-assumptions-new', 'pre-mortem', 'strategy-red-team', 'swot-analysis']);
+  assert.equal(p.auto, false);
+  assert.equal(p.mode, 'idea+redteam+custom');
+  assert.equal(modeLabel(p.mode), '点子快评 + 战略红队 + 自选框架');
+  assert.equal(modeLabel('auto'), '智能匹配');
+  // 只选 PRD 才输出 PRD 格式；和别的组合时作为一个框架参与评审
+  assert.equal(advisor.resolve(['prd'], []).prd, true);
+  assert.equal(advisor.resolve(['prd'], ['lean-canvas']).prd, false);
+  // 正好 6 个可以，7 个拒绝
+  assert.equal(advisor.resolve(['idea', 'business'], []).chosen.length, 6);
+  assert.throws(() => advisor.resolve(['idea', 'business'], ['swot-analysis']), /最多组合 6/);
+  done();
+});
+
+test('产品顾问：多框架组合时按数量均分框架说明长度，并放宽篇幅', async () => {
+  let system = '';
+  let user = '';
+  let opts: { maxTokens?: number } = {};
+  const { advisor, done } = setup({});
+  (advisor.llm as unknown as { chat: unknown }).chat = async (m: { content: string }[], o: { maxTokens?: number }) => {
+    system = m[0].content;
+    user = m[1].content;
+    opts = o;
+    return '## 一句话结论\n- 值得做';
+  };
+  for (const s of advisor.skills) s.body = `BODY-${s.name} ` + 'x'.repeat(20000);
+  const id = advisor.start({ input: '一个足够长的产品点子描述内容', presets: ['idea', 'business'], skills: [], useRadar: false });
+  const r = await waitDone(advisor, id);
+  assert.equal(r.status, 'done');
+  assert.equal(r.skills.length, 6);
+  assert.equal(r.mode_label, '点子快评 + 商业模式与变现');
+  for (const n of r.skills) assert.match(system, new RegExp(`<skill name="${n}">`));
+  assert.ok(system.length < 45000, `system prompt too long: ${system.length}`);
+  assert.match(user, /4500 字以内/);
+  assert.equal(opts.maxTokens, 8000);
   done();
 });
 
@@ -100,7 +148,7 @@ test('产品顾问：智能匹配框架 + 引用雷达情报 + 去掉 URL', asyn
   });
   const now = Date.now();
   db.prepare("INSERT INTO items(source_id, url, title, norm_title, published_at, fetched_at, content, topics, title_zh, summary_zh, analyzed_at, importance) VALUES ('openai', 'https://a.com/1', 'Meta AI glasses sales double', '', ?, ?, 'AI glasses market', '[]', 'Meta AI 眼镜销量翻倍', '销量翻倍', 1, 4)").run(now, now);
-  const id = advisor.start({ input: '做一款面向老人的 AI 眼镜，提醒吃药和识别熟人', mode: 'auto', useRadar: true });
+  const id = advisor.start({ input: '做一款面向老人的 AI 眼镜，提醒吃药和识别熟人', presets: [], skills: [], useRadar: true });
   const r = await waitDone(advisor, id);
   assert.equal(r.status, 'done');
   assert.deepEqual(r.skills, ['lean-canvas', 'pre-mortem']);
@@ -118,7 +166,7 @@ test('产品顾问：智能匹配框架 + 引用雷达情报 + 去掉 URL', asyn
 
 test('产品顾问：模型失败时记录错误；重启后进行中的任务标记中断', async () => {
   const { db, advisor, done } = setup({ chat: () => Promise.reject(new Error('模型调用失败（HTTP 401）')) });
-  const id = advisor.start({ input: '给团队做一个周报自动生成工具', mode: 'idea', useRadar: false });
+  const id = advisor.start({ input: '给团队做一个周报自动生成工具', presets: ['idea'], skills: [], useRadar: false });
   const r = await waitDone(advisor, id);
   assert.equal(r.status, 'error');
   assert.match(r.error ?? '', /401/);

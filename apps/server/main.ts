@@ -6,7 +6,7 @@ import { allowHost } from '../../packages/core/net.ts';
 import { analyzeItem, generateBrief, latestBrief, translateItem } from '../../packs/radar/analyze.ts';
 import { GROUPS, collectOnce } from '../../packs/radar/collect.ts';
 import { enrichItem } from '../../packs/radar/enrich.ts';
-import { PmAdvisor } from '../../packs/pm/advisor.ts';
+import { MAX_SELECTED, PmAdvisor } from '../../packs/pm/advisor.ts';
 import { defaultSkillsDir, loadPmSkills } from '../../packs/pm/skills.ts';
 import { getInterests, setInterests } from '../../packs/radar/prefs.ts';
 import { getItem, listItems, stats } from '../../packs/radar/query.ts';
@@ -175,6 +175,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       llm: radar.llm.enabled,
       presets: pm.presets(),
       skills: pm.catalog(),
+      maxSelected: MAX_SELECTED,
     });
   }
   if (p === '/api/pm/reviews' && method === 'GET') return sendJson(res, 200, { reviews: pm.list(30) });
@@ -184,8 +185,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     try {
       id = pm.start({
         input: typeof body.input === 'string' ? body.input : '',
-        mode: typeof body.mode === 'string' ? body.mode.slice(0, 20) : 'auto',
-        skill: typeof body.skill === 'string' ? body.skill.slice(0, 64) : undefined,
+        presets: body.presets,
+        skills: body.skills,
         useRadar: body.useRadar !== false,
       });
     } catch (e) {

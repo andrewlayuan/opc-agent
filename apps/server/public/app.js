@@ -464,7 +464,7 @@ async function loadSources() {
 }
 
 // ---------------- 产品顾问 ----------------
-const pm = { meta: null, current: null, pollTimer: null };
+const pm = { meta: null, current: null, pollTimer: null, sel: { presets: [], skills: [] } };
 
 async function initPm() {
   if (pm.meta) return;
@@ -474,30 +474,93 @@ async function initPm() {
     toast(e.message);
     return;
   }
-  const mode = $('pm-mode');
-  mode.replaceChildren(...pm.meta.presets.map((p) => h('option', { value: p.id, text: p.label })), h('option', { value: 'custom', text: '指定单个框架…' }));
-  const groups = new Map();
-  for (const s of pm.meta.skills) {
-    if (!groups.has(s.group)) groups.set(s.group, []);
-    groups.get(s.group).push(s);
-  }
-  $('pm-skill').replaceChildren(...[...groups].map(([g, list]) => h('optgroup', { label: g }, list.map((s) => h('option', { value: s.name, title: s.description, text: s.name })))));
-  updatePmHint();
+  renderPmPicker();
   if (!pm.meta.enabled) {
     $('pm-submit').disabled = true;
     $('pm-hint').textContent = !pm.meta.skillsFound ? '未找到 pm-skills：请在服务器上运行 scripts/setup-pm-skills.sh 后重启服务。' : '未配置 DEEPSEEK_API_KEY，无法生成反馈。';
   }
 }
 
-function updatePmHint() {
-  if (!pm.meta) return;
-  const v = $('pm-mode').value;
-  $('pm-skill').hidden = v !== 'custom';
-  let text = '';
-  if (v === 'auto') text = '根据你的描述自动挑选 2-3 个最合适的框架。';
-  else if (v === 'custom') text = pm.meta.skills.find((s) => s.name === $('pm-skill').value)?.description ?? '';
-  else text = `使用框架：${pm.meta.presets.find((p) => p.id === v)?.skills.join(' · ') ?? ''}`;
-  if (pm.meta.enabled) $('pm-hint').textContent = text;
+/** 多选：方案（预设组合）+ 自选框架；都不选 = 智能匹配 */
+function pmMerged(sel = pm.sel) {
+  const fromPresets = sel.presets.flatMap((id) => pm.meta.presets.find((p) => p.id === id)?.skills ?? []);
+  return [...new Set([...fromPresets, ...sel.skills])];
+}
+
+function pmTry(next) {
+  const n = pmMerged(next).length;
+  if (n > pm.meta.maxSelected) {
+    toast(`一次最多组合 ${pm.meta.maxSelected} 个框架（这样选会有 ${n} 个）`);
+    return;
+  }
+  pm.sel = next;
+  renderPmPicker();
+}
+
+function togglePreset(id) {
+  if (id === 'auto') return pmTry({ presets: [], skills: [] });
+  const on = pm.sel.presets.includes(id);
+  pmTry({ ...pm.sel, presets: on ? pm.sel.presets.filter((x) => x !== id) : [...pm.sel.presets, id] });
+}
+
+function toggleSkill(name) {
+  if (pm.sel.skills.includes(name)) return pmTry({ ...pm.sel, skills: pm.sel.skills.filter((x) => x !== name) });
+  if (pmMerged().includes(name)) return toast('这个框架已包含在所选方案中');
+  pmTry({ ...pm.sel, skills: [...pm.sel.skills, name] });
+}
+
+function renderPmPicker() {
+  const merged = new Set(pmMerged());
+  const auto = merged.size === 0;
+  $('pm-presets').replaceChildren(
+    ...pm.meta.presets.map((p) => {
+      const on = p.id === 'auto' ? auto : pm.sel.presets.includes(p.id);
+      return h('button', {
+        type: 'button',
+        class: `chip${on ? ' on' : ''}`,
+        'aria-pressed': on ? 'true' : 'false',
+        title: p.id === 'auto' ? '不选任何方案时，按内容自动挑选 2-3 个框架' : `${p.label}\n框架：${p.skills.join(' · ')}`,
+        text: p.short,
+        onclick: () => togglePreset(p.id),
+      });
+    }),
+  );
+  const groups = new Map();
+  for (const s of pm.meta.skills) {
+    if (!groups.has(s.group)) groups.set(s.group, []);
+    groups.get(s.group).push(s);
+  }
+  $('pm-skills').replaceChildren(
+    ...[...groups].map(([g, list]) =>
+      h(
+        'div',
+        { class: 'pm-skill-group' },
+        h('div', { class: 'pm-skill-title', text: g }),
+        h(
+          'div',
+          { class: 'chips wrap-chips' },
+          list.map((s) => {
+            const own = pm.sel.skills.includes(s.name);
+            const via = !own && merged.has(s.name);
+            return h('button', {
+              type: 'button',
+              class: `chip${own ? ' on' : ''}${via ? ' via' : ''}`,
+              'aria-pressed': own ? 'true' : 'false',
+              title: via ? `已包含在所选方案中\n${s.description}` : s.description,
+              text: s.name,
+              onclick: () => toggleSkill(s.name),
+            });
+          }),
+        ),
+      ),
+    ),
+  );
+  $('pm-custom-count').textContent = pm.sel.skills.length ? `已选 ${pm.sel.skills.length} 个` : '';
+  if (!pm.meta.enabled) return;
+  const list = [...merged];
+  $('pm-hint').textContent = auto
+    ? '未选择方案：将根据你的描述自动挑选 2-3 个最合适的框架。'
+    : `将组合 ${list.length}/${pm.meta.maxSelected} 个框架：${list.join(' · ')}${list.length === 1 && list[0] === 'create-prd' ? '（输出 PRD 初稿）' : ''}`;
 }
 
 function renderReview(r) {
@@ -535,10 +598,16 @@ function renderReview(r) {
       }),
       h('button', {
         class: 'link',
-        text: '用相同内容再评一次',
+        text: '用相同内容和框架再评一次',
         onclick: () => {
           $('pm-input').value = r.input;
           updatePmCount();
+          const known = new Set(pm.meta?.skills.map((s) => s.name) ?? []);
+          const skills = r.skills.filter((s) => known.has(s));
+          if (pm.meta && skills.length && skills.length <= pm.meta.maxSelected) {
+            pm.sel = { presets: [], skills };
+            renderPmPicker();
+          }
           $('pm-input').focus();
           window.scrollTo({ top: 0, behavior: 'smooth' });
         },
@@ -617,10 +686,9 @@ async function submitPm(e) {
   const btn = $('pm-submit');
   btn.disabled = true;
   try {
-    const mode = $('pm-mode').value;
     const { id } = await api('/api/pm/reviews', {
       method: 'POST',
-      body: { input: $('pm-input').value, mode, skill: mode === 'custom' ? $('pm-skill').value : undefined, useRadar: $('pm-radar').checked },
+      body: { input: $('pm-input').value, presets: pm.sel.presets, skills: pm.sel.skills, useRadar: $('pm-radar').checked },
     });
     await openReview(id);
     loadPmHistory();
@@ -634,16 +702,28 @@ async function submitPm(e) {
 // ---------------- 视图切换与事件 ----------------
 function show(view) {
   for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('on', b.dataset.view === view);
-  for (const v of ['feed', 'brief', 'sources']) $(`view-${v}`).hidden = v !== view;
+  for (const v of ['feed', 'brief', 'pm', 'sources']) $(`view-${v}`).hidden = v !== view;
   $('q').hidden = view !== 'feed';
   if (view === 'brief') loadBrief();
   if (view === 'sources') loadSources();
+  if (view === 'pm') {
+    initPm();
+    loadPmHistory();
+  }
 }
 
 async function init() {
-  state.meta = await api('/api/meta');
+  const [meta, prefs] = await Promise.all([api('/api/meta'), api('/api/prefs/interests')]);
+  state.meta = meta;
+  state.interests = prefs.interests;
+  if (state.interests.topics.length) state.topic = FOCUS;
+  $('brief-focus').checked = state.interests.topics.length > 0;
   for (const [k, v] of Object.entries(state.meta.groups)) $('grp').append(h('option', { value: k, text: v }));
   renderTopics();
+  $('focus-edit').addEventListener('submit', saveFocus);
+  $('focus-cancel').addEventListener('click', () => ($('focus-edit').hidden = true));
+  $('pm-form').addEventListener('submit', submitPm);
+  $('pm-input').addEventListener('input', updatePmCount);
   for (const b of document.querySelectorAll('.tabs button')) b.addEventListener('click', () => show(b.dataset.view));
   for (const id of ['grp', 'days', 'important', 'starred']) $(id).addEventListener('change', () => loadItems());
   let qt;

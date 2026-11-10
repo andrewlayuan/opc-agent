@@ -126,6 +126,15 @@ textarea:focus { border-color: var(--fg); }
 .pm-intro { font-size: 13px; margin: 0 0 10px; }
 .pm-intro a { color: var(--accent); }
 .pm-form .filters select { max-width: 100%; }
+.pm-label { font-size: 13px; margin: 12px 0 0; }
+.pm-label .muted { font-size: 12px; margin-left: 6px; }
+.pm-custom { font-size: 13px; margin: 2px 0 4px; }
+.pm-custom summary { cursor: pointer; color: var(--muted); padding: 4px 0; }
+.pm-custom summary:hover { color: var(--fg); }
+.pm-skill-group { margin: 6px 0 2px; }
+.pm-skill-title { font-size: 12px; color: var(--muted); }
+.pm-skill-group .chips { padding: 4px 0; }
+.chip.via { color: var(--fg); border-style: dashed; border-color: var(--muted); }
 .pm-hint { font-size: 12.5px; margin: 2px 0 0; min-height: 1.4em; }
 .pm-result { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
 .pm-head { margin-bottom: 4px; }
