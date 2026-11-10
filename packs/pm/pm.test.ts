@@ -7,6 +7,7 @@ import { openDb } from '../../packages/core/db.ts';
 import type { Llm } from '../../packages/core/llm.ts';
 import { syncSources } from '../radar/collect.ts';
 import { PmAdvisor, modeLabel } from './advisor.ts';
+import type { PmError } from './advisor.ts';
 import { loadPmSkills, parseSkill } from './skills.ts';
 import type { PmSkill } from './skills.ts';
 
@@ -215,5 +216,142 @@ test('多轮：重启时进行中的轮次标记为中断', () => {
   const m = db.prepare('SELECT status, error FROM pm_messages').get() as { status: string; error: string };
   assert.equal(m.status, 'error');
   assert.equal(m.error, '服务重启，已中断');
+  done();
+});
+
+const LONG_DOC = (tag: string) => `# ${tag}\n` + '详细内容'.repeat(80);
+/** 首版返回 v1 文档；之后最后一条 user 消息含「改」则改写，否则回答 */
+function fakeTurn(m: { content: string }[]): string {
+  const last = m.at(-1)!.content;
+  if (m.length <= 2) return LONG_DOC('首版');
+  return /改/.test(last) ? `[改写]\n${LONG_DOC('改写版')}\n---变更说明---\n改了定价` : '[回答]\n解释';
+}
+async function doneReview(advisor: PmAdvisor): Promise<number> {
+  const id = advisor.start({ input: '给团队做一个周报自动生成工具', presets: ['idea'], skills: [], useRadar: false });
+  const r = await waitDone(advisor, id);
+  assert.equal(r.status, 'done');
+  return id;
+}
+async function waitTurn(advisor: PmAdvisor, id: number) {
+  for (let i = 0; i < 200; i++) {
+    if (!advisor.get(id)!.messages.some((x) => x.status === 'running')) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error('timeout');
+}
+const statusOf = (fn: () => unknown) => {
+  try {
+    fn();
+  } catch (e) {
+    return { status: (e as PmError).status, message: (e as Error).message };
+  }
+  return null;
+};
+
+test('多轮：回答不产生版本，改写产生 v2，并以最新版为上下文', async () => {
+  const seen: string[] = [];
+  const { advisor, done } = setup({ chat: (m) => (seen.push(m.map((x) => x.content).join('\n')), fakeTurn(m)) });
+  const id = await doneReview(advisor);
+  let r = advisor.get(id)!;
+  assert.equal(r.latest, 1);
+  assert.deepEqual(r.versions.map((v) => v.source), ['ai_initial']);
+  advisor.ask(id, '为什么选这个市场？', 'auto');
+  await waitTurn(advisor, id);
+  r = advisor.get(id)!;
+  assert.equal(r.latest, 1);
+  assert.deepEqual(r.messages.map((x) => [x.role, x.kind, x.status]), [['user', 'ask', 'done'], ['assistant', 'ask', 'done']]);
+  assert.equal(r.messages[1].content, '解释');
+  advisor.ask(id, '把定价改成年费', 'auto');
+  await waitTurn(advisor, id);
+  r = advisor.get(id)!;
+  assert.equal(r.latest, 2);
+  assert.equal(r.versions[1].source, 'ai_revise');
+  assert.equal(r.versions[1].note, '改了定价');
+  assert.equal(r.messages.at(-1)!.version_n, 2);
+  assert.equal(r.messages.at(-1)!.kind, 'revise');
+  assert.match(r.content ?? '', /^# 改写版/);
+  assert.match(seen.at(-1)!, /当前文档（v1）[\s\S]*# 首版/);
+  assert.match(seen.at(-1)!, /为什么选这个市场？[\s\S]*解释/);
+  assert.match(advisor.version(id, 1)!.content, /^# 首版/);
+  assert.equal(advisor.version(id, 9), null);
+  done();
+});
+
+test('多轮：首版未完成或失败、长度、并发都会被拒绝；进行中不能删除', async () => {
+  let hang = false;
+  const { db, advisor, done } = setup({ chat: (m) => (hang && m.length > 2 ? new Promise<string>(() => {}) : fakeTurn(m)) });
+  const running = Number(db.prepare("INSERT INTO pm_reviews(created_at, status, mode, input) VALUES (1, 'running', 'idea', 'x')").run().lastInsertRowid);
+  assert.deepEqual(statusOf(() => advisor.ask(running, '为什么呢', 'auto')), { status: 400, message: '首版评审完成后才能继续对话' });
+  const failed = Number(db.prepare("INSERT INTO pm_reviews(created_at, status, mode, input) VALUES (1, 'error', 'idea', 'x')").run().lastInsertRowid);
+  assert.equal(statusOf(() => advisor.ask(failed, '为什么呢', 'auto'))!.status, 400);
+  assert.equal(statusOf(() => advisor.ask(999, '为什么呢', 'auto'))!.status, 404);
+  const id = await doneReview(advisor);
+  assert.equal(statusOf(() => advisor.ask(id, 'x', 'auto'))!.status, 400);
+  assert.equal(statusOf(() => advisor.ask(id, 'x'.repeat(4001), 'auto'))!.status, 400);
+  hang = true;
+  advisor.ask(id, '为什么呢', 'auto');
+  assert.deepEqual(statusOf(() => advisor.ask(id, '再问一次', 'auto')), { status: 409, message: '上一轮还在进行中' });
+  assert.deepEqual(statusOf(() => advisor.delete(id)), { status: 409, message: '上一轮还在进行中' });
+  assert.equal(statusOf(() => advisor.saveManual(id, '# 手改\n内容', 1))!.status, 409);
+  done();
+});
+
+test('多轮：手动版本、冲突、内容未变化，之后的追问基于手动版', async () => {
+  const seen: string[] = [];
+  const { advisor, done } = setup({ chat: (m) => (seen.push(m.map((x) => x.content).join('\n')), fakeTurn(m)) });
+  const id = await doneReview(advisor);
+  assert.equal(advisor.saveManual(id, '# 手改\n我补充的内容', 1), 2);
+  const r = advisor.get(id)!;
+  assert.equal(r.versions[1].source, 'manual');
+  assert.equal(r.versions[1].note, null);
+  assert.equal(r.messages.length, 0);
+  assert.deepEqual(statusOf(() => advisor.saveManual(id, '# 另一版', 1)), { status: 409, message: '已有更新的 v2' });
+  assert.deepEqual(statusOf(() => advisor.saveManual(id, '  # 手改\n我补充的内容 ', 2)), { status: 400, message: '内容没有变化' });
+  assert.equal(statusOf(() => advisor.saveManual(id, '   ', 2))!.status, 400);
+  assert.equal(statusOf(() => advisor.saveManual(id, 'x'.repeat(40001), 2))!.status, 400);
+  assert.equal(statusOf(() => advisor.saveManual(id, '# 新', 'abc'))!.status, 409);
+  advisor.ask(id, '为什么这么改', 'auto');
+  await waitTurn(advisor, id);
+  assert.match(seen.at(-1)!, /当前文档（v2）[\s\S]*# 手改/);
+  done();
+});
+
+test('多轮：模型失败时该轮标记错误、文档不变；revise 模式强制改写', async () => {
+  let fail = false;
+  const { advisor, done } = setup({ chat: (m) => (fail && m.length > 2 ? Promise.reject(new Error('模型调用超时')) : m.length > 2 ? LONG_DOC('强制改写') : fakeTurn(m)) });
+  const id = await doneReview(advisor);
+  fail = true;
+  advisor.ask(id, '为什么呢', 'auto');
+  await waitTurn(advisor, id);
+  let r = advisor.get(id)!;
+  assert.equal(r.messages.at(-1)!.status, 'error');
+  assert.match(r.messages.at(-1)!.error ?? '', /超时/);
+  assert.equal(r.latest, 1);
+  fail = false;
+  advisor.ask(id, '整体再精简一点', 'revise');
+  await waitTurn(advisor, id);
+  r = advisor.get(id)!;
+  assert.equal(r.latest, 2);
+  assert.equal(r.versions[1].note, '根据你的要求修订');
+  done();
+});
+
+test('多轮：删除会话时级联删除消息与版本；list 返回 latest/turns 并按更新时间排序', async () => {
+  const { db, advisor, done } = setup({ chat: fakeTurn });
+  const a = await doneReview(advisor);
+  const b = await doneReview(advisor);
+  await new Promise((r) => setTimeout(r, 5));
+  advisor.ask(a, '把定价改成年费', 'auto');
+  await waitTurn(advisor, a);
+  const list = advisor.list();
+  assert.deepEqual(list.map((x) => x.id), [a, b]);
+  assert.equal(list[0].latest, 2);
+  assert.equal(list[0].turns, 1);
+  assert.equal(list[1].latest, 1);
+  assert.equal(list[1].turns, 0);
+  assert.ok(advisor.delete(a));
+  const n = (t: string) => (db.prepare(`SELECT count(*) AS n FROM ${t} WHERE review_id=?`).get(a) as { n: number }).n;
+  assert.equal(n('pm_messages'), 0);
+  assert.equal(n('pm_versions'), 0);
   done();
 });
