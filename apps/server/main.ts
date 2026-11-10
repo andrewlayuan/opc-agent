@@ -6,7 +6,8 @@ import { allowHost } from '../../packages/core/net.ts';
 import { analyzeItem, generateBrief, latestBrief, translateItem } from '../../packs/radar/analyze.ts';
 import { GROUPS, collectOnce } from '../../packs/radar/collect.ts';
 import { enrichItem } from '../../packs/radar/enrich.ts';
-import { MAX_SELECTED, PmAdvisor } from '../../packs/pm/advisor.ts';
+import { MAX_SELECTED, PmAdvisor, PmError } from '../../packs/pm/advisor.ts';
+import { exportMarkdown, renderPrintHtml } from '../../packs/pm/render.ts';
 import { defaultSkillsDir, loadPmSkills } from '../../packs/pm/skills.ts';
 import { getInterests, setInterests } from '../../packs/radar/prefs.ts';
 import { getItem, listItems, stats } from '../../packs/radar/query.ts';
@@ -37,6 +38,22 @@ function idFrom(m: RegExpMatchArray): number {
   const id = Number(m[1]);
   if (!Number.isSafeInteger(id) || id <= 0) throw new HttpError(400, '非法 id');
   return id;
+}
+
+/** 把产品顾问的业务错误映射为 HTTP 状态码 */
+function pmCall<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (e) {
+    if (e instanceof PmError) throw new HttpError(e.status, e.message);
+    throw e;
+  }
+}
+
+function versionNo(s: string): number {
+  const n = Number(s);
+  if (!Number.isSafeInteger(n) || n <= 0) throw new HttpError(404, '版本不存在');
+  return n;
 }
 
 let briefRunning = false;
@@ -201,8 +218,40 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     return sendJson(res, 200, { review: r });
   }
   if (m && method === 'DELETE') {
-    if (!pm.delete(idFrom(m))) throw new HttpError(404, '评审不存在或仍在进行中');
+    const id = idFrom(m);
+    if (!pmCall(() => pm.delete(id))) throw new HttpError(404, '评审不存在或仍在进行中');
     return sendJson(res, 200, { ok: true });
+  }
+  m = p.match(/^\/api\/pm\/reviews\/(\d+)\/messages$/);
+  if (m && method === 'POST') {
+    const id = idFrom(m);
+    const body = await readJson(req, 16 * 1024);
+    const messageId = pmCall(() => pm.ask(id, typeof body.text === 'string' ? body.text : '', body.mode));
+    return sendJson(res, 202, { messageId });
+  }
+  m = p.match(/^\/api\/pm\/reviews\/(\d+)\/versions$/);
+  if (m && method === 'POST') {
+    const id = idFrom(m);
+    const body = await readJson(req, 96 * 1024);
+    const n = pmCall(() => pm.saveManual(id, typeof body.content === 'string' ? body.content : '', body.baseN));
+    return sendJson(res, 201, { n });
+  }
+  m = p.match(/^\/api\/pm\/reviews\/(\d+)\/versions\/(\d+)(\/download)?$/);
+  if (m && method === 'GET') {
+    const id = idFrom(m);
+    const v = pm.version(id, versionNo(m[2]));
+    const r = v ? pm.get(id) : null;
+    if (!v || !r) throw new HttpError(404, '版本不存在');
+    if (!m[3]) return sendJson(res, 200, { version: v });
+    const data = Buffer.from(exportMarkdown(r, v, pm.refs(id)));
+    res.writeHead(200, {
+      'content-type': 'text/markdown; charset=utf-8',
+      'content-disposition': `attachment; filename="opc-review-${id}-v${v.n}.md"`,
+      'cache-control': 'no-store',
+      'content-length': data.length,
+    });
+    res.end(data);
+    return;
   }
 
   if (p === '/api/sources' && method === 'GET') {
@@ -288,6 +337,21 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/login' && user) {
       res.writeHead(302, { location: '/' }).end();
+      return;
+    }
+    const pr = url.pathname.match(/^\/print\/pm\/(\d+)\/(\d+)$/);
+    if (pr) {
+      if (!user) {
+        res.writeHead(302, { location: '/login' }).end();
+        return;
+      }
+      const id = idFrom(pr);
+      const v = pm.version(id, versionNo(pr[2]));
+      const r = v ? pm.get(id) : null;
+      if (!v || !r) throw new HttpError(404, 'Not found');
+      const html = Buffer.from(renderPrintHtml(r, v, pm.refs(id)));
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-length': html.length });
+      res.end(req.method === 'HEAD' ? undefined : html);
       return;
     }
     const s = staticFor(url.pathname);
