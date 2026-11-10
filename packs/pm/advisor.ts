@@ -90,7 +90,22 @@ export class PmAdvisor {
     this.log = log;
     this.byName = new Map(skills.map((s) => [s.name, s]));
     // 进程重启时中断的任务不会再完成
-    db.prepare("UPDATE pm_reviews SET status='error', error='服务重启，任务中断，请重新提交', finished_at=? WHERE status='running'").run(Date.now());
+    const now = Date.now();
+    db.prepare("UPDATE pm_reviews SET status='error', error='服务重启，任务中断，请重新提交', finished_at=? WHERE status='running'").run(now);
+    db.prepare("UPDATE pm_messages SET status='error', error='服务重启，已中断', finished_at=? WHERE status='running'").run(now);
+  }
+
+  /** 在一个事务中执行；出错回滚并抛出 */
+  private tx<T>(fn: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const out = fn();
+      this.db.exec('COMMIT');
+      return out;
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
   }
 
   get enabled(): boolean {
@@ -133,7 +148,7 @@ export class PmAdvisor {
     if ([...input].length > INPUT_MAX) throw new Error(`内容过长（最多 ${INPUT_MAX} 字）`);
     const plan = this.resolve(req.presets, req.skills);
     if (this.running >= MAX_RUNNING) throw new Error(`同时最多进行 ${MAX_RUNNING} 个评审，请稍后再试`);
-    const res = this.db.prepare("INSERT INTO pm_reviews(created_at, status, mode, input) VALUES (?, 'running', ?, ?)").run(Date.now(), plan.mode, input);
+    const res = this.db.prepare("INSERT INTO pm_reviews(created_at, updated_at, status, mode, input) VALUES (?, ?, 'running', ?, ?)").run(Date.now(), Date.now(), plan.mode, input);
     const id = Number(res.lastInsertRowid);
     this.running++;
     void this.run(id, input, plan, req.useRadar)
@@ -167,7 +182,11 @@ export class PmAdvisor {
     );
     const clean = content.replace(/https?:\/\/\S+/g, '').trim().slice(0, 40000);
     if (!clean) throw new Error('模型没有返回内容');
-    this.db.prepare("UPDATE pm_reviews SET status='done', content=?, finished_at=? WHERE id=?").run(clean, Date.now(), id);
+    const now = Date.now();
+    this.tx(() => {
+      this.db.prepare("UPDATE pm_reviews SET status='done', content=?, finished_at=?, updated_at=? WHERE id=?").run(clean, now, now, id);
+      this.db.prepare("INSERT INTO pm_versions(review_id, n, created_at, source, content) VALUES (?, 1, ?, 'ai_initial', ?)").run(id, now, clean);
+    });
   }
 
   /** 第一步：选框架（auto 时）并提取检索关键词 */

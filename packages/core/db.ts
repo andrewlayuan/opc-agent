@@ -117,6 +117,37 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX pm_reviews_created ON pm_reviews(created_at DESC);
   `,
+  `
+  CREATE TABLE pm_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_id INTEGER NOT NULL REFERENCES pm_reviews(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    role TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    version_n INTEGER,
+    status TEXT NOT NULL DEFAULT 'done',
+    error TEXT
+  );
+  CREATE INDEX pm_messages_review ON pm_messages(review_id, id);
+  CREATE TABLE pm_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_id INTEGER NOT NULL REFERENCES pm_reviews(id) ON DELETE CASCADE,
+    n INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    content TEXT NOT NULL,
+    message_id INTEGER,
+    note TEXT,
+    UNIQUE (review_id, n)
+  );
+  ALTER TABLE pm_reviews ADD COLUMN updated_at INTEGER;
+  INSERT INTO pm_versions(review_id, n, created_at, source, content)
+    SELECT id, 1, coalesce(finished_at, created_at), 'ai_initial', content
+    FROM pm_reviews WHERE status = 'done' AND content IS NOT NULL;
+  UPDATE pm_reviews SET updated_at = coalesce(finished_at, created_at);
+  `,
 ];
 
 export type DB = DatabaseSync;

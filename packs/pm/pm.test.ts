@@ -175,3 +175,45 @@ test('产品顾问：模型失败时记录错误；重启后进行中的任务�
   assert.equal((db.prepare("SELECT count(*) AS n FROM pm_reviews WHERE status='running'").get() as { n: number }).n, 0);
   done();
 });
+
+test('多轮：首版完成写入 v1 并更新 updated_at', async () => {
+  const { db, advisor, done } = setup({ chat: () => '# 结论\n' + '正文'.repeat(150) });
+  const id = advisor.start({ input: '给团队做一个周报自动生成工具', presets: ['idea'], skills: [], useRadar: false });
+  await waitDone(advisor, id);
+  const v = db.prepare('SELECT n, source, content FROM pm_versions WHERE review_id=?').all(id) as { n: number; source: string; content: string }[];
+  assert.equal(v.length, 1);
+  assert.equal(v[0].n, 1);
+  assert.equal(v[0].source, 'ai_initial');
+  assert.match(v[0].content, /^# 结论/);
+  assert.ok(Number((db.prepare('SELECT updated_at FROM pm_reviews WHERE id=?').get(id) as { updated_at: number }).updated_at) > 0);
+  done();
+});
+
+test('多轮：迁移把旧的已完成评审回填为 v1', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-pm-mig-'));
+  const file = path.join(dir, 't.db');
+  let db = openDb(file);
+  db.exec('DROP TABLE IF EXISTS pm_messages; DROP TABLE IF EXISTS pm_versions; PRAGMA user_version = 3;');
+  const cols = db.prepare('PRAGMA table_info(pm_reviews)').all() as { name: string }[];
+  if (cols.some((c) => c.name === 'updated_at')) db.exec('ALTER TABLE pm_reviews DROP COLUMN updated_at');
+  db.prepare("INSERT INTO pm_reviews(created_at, finished_at, status, mode, input, content) VALUES (1, 2, 'done', 'idea', 'x', '旧内容')").run();
+  db.prepare("INSERT INTO pm_reviews(created_at, status, mode, input) VALUES (1, 'error', 'idea', 'y')").run();
+  db.close();
+  db = openDb(file);
+  const v = db.prepare('SELECT review_id, n, source, content, created_at FROM pm_versions').all();
+  assert.deepEqual(v.map((x) => ({ ...x })), [{ review_id: 1, n: 1, source: 'ai_initial', content: '旧内容', created_at: 2 }]);
+  assert.equal((db.prepare('SELECT updated_at FROM pm_reviews WHERE id=2').get() as { updated_at: number }).updated_at, 1);
+  db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('多轮：重启时进行中的轮次标记为中断', () => {
+  const { db, advisor, done } = setup({});
+  const rid = Number(db.prepare("INSERT INTO pm_reviews(created_at, status, mode, input, content) VALUES (1, 'done', 'idea', 'x', 'c')").run().lastInsertRowid);
+  db.prepare("INSERT INTO pm_messages(review_id, created_at, role, kind, status) VALUES (?, 1, 'assistant', 'ask', 'running')").run(rid);
+  new PmAdvisor(db, advisor.llm, advisor.skills, () => {});
+  const m = db.prepare('SELECT status, error FROM pm_messages').get() as { status: string; error: string };
+  assert.equal(m.status, 'error');
+  assert.equal(m.error, '服务重启，已中断');
+  done();
+});
