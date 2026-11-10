@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OPC Radar</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="wrap bar-in">
+      <a class="brand" href="/" aria-label="OPC Radar">Radar</a>
+      <nav class="tabs" role="tablist">
+        <button data-view="feed" class="on">动态</button>
+        <button data-view="brief">简报</button>
+        <button data-view="pm">产品顾问</button>
+        <button data-view="sources">信息源</button>
+      </nav>
+      <div class="bar-right">
+        <input id="q" type="search" placeholder="搜索" autocomplete="off" maxlength="200">
+        <button id="refresh" class="ghost" title="立即采集并分析">刷新</button>
+        <button id="logout" class="ghost" title="退出登录">退出</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section id="view-feed">
+      <div class="chips" id="topics"></div>
+      <div class="focus-bar" id="focus-bar" hidden></div>
+      <form class="focus-edit" id="focus-edit" hidden>
+        <div class="focus-title">我的关注 <span class="muted">选你最关心的方向，「★ 我的关注」只显示这些方向的重点内容</span></div>
+        <div class="chips wrap-chips" id="focus-topics"></div>
+        <div class="filters">
+          <label>重点程度
+            <select id="focus-min">
+              <option value="3">值得了解及以上（重要度 ≥3）</option>
+              <option value="4">只看重要（重要度 ≥4）</option>
+              <option value="0">全部</option>
+            </select>
+          </label>
+          <span class="spacer"></span>
+          <button type="button" class="ghost" id="focus-cancel">取消</button>
+          <button type="submit">保存</button>
+        </div>
+      </form>
+      <div class="filters">
+        <select id="grp" aria-label="来源类型"><option value="">全部来源</option></select>
+        <select id="days" aria-label="时间范围">
+          <option value="1">24 小时</option>
+          <option value="3">3 天</option>
+          <option value="7" selected>7 天</option>
+          <option value="30">30 天</option>
+          <option value="">全部</option>
+        </select>
+        <label class="check"><input type="checkbox" id="important"> 只看重要</label>
+        <label class="check"><input type="checkbox" id="starred"> 收藏</label>
+        <span class="status" id="status"></span>
+      </div>
+      <ol class="list" id="list"></ol>
+      <div class="more"><button id="more" class="ghost" hidden>加载更多</button></div>
+      <p class="empty" id="empty" hidden>暂无内容。点右上角「刷新」开始采集。</p>
+    </section>
+
+    <section id="view-brief" hidden>
+      <div class="brief-head">
+        <span class="muted" id="brief-time"></span>
+        <span class="brief-actions">
+          <label class="check"><input type="checkbox" id="brief-focus"> 只看我的关注</label>
+          <button id="brief-gen">生成今日简报</button>
+        </span>
+      </div>
+      <article class="brief" id="brief"></article>
+    </section>
+
+    <section id="view-pm" hidden>
+      <form class="pm-form" id="pm-form" autocomplete="off">
+        <p class="pm-intro muted">资深商业化产品经理视角的专业反馈。方法框架来自 <a href="https://github.com/phuryn/pm-skills" target="_blank" rel="noopener noreferrer">pm-skills</a>，可结合雷达里的行业动态。</p>
+        <textarea id="pm-input" rows="6" maxlength="4000" placeholder="描述你的需求或点子，越具体反馈越准：&#10;· 目标用户是谁，他们现在怎么解决这个问题&#10;· 你设想的方案、想怎么赚钱&#10;· 已知的约束（团队、预算、时间、渠道）"></textarea>
+        <div class="filters">
+          <select id="pm-mode" aria-label="评审方案"></select>
+          <select id="pm-skill" aria-label="指定技能" hidden></select>
+          <label class="check"><input type="checkbox" id="pm-radar" checked> 结合雷达情报</label>
+          <span class="spacer"></span>
+          <span class="muted" id="pm-count">0/4000</span>
+          <button type="submit" id="pm-submit">获取反馈</button>
+        </div>
+        <p class="pm-hint muted" id="pm-hint"></p>
+      </form>
+      <div class="pm-result" id="pm-result" hidden></div>
+      <div class="grp-title" id="pm-history-title" hidden>历史评审</div>
+      <ol class="pm-history" id="pm-history"></ol>
+    </section>
+
+    <section id="view-sources" hidden>
+      <form class="add" id="add-source" autocomplete="off">
+        <input name="name" placeholder="名称" maxlength="80" required>
+        <input name="url" type="url" placeholder="RSS / Atom 地址（https）" required>
+        <label class="check"><input type="checkbox" name="zh"> 中文</label>
+        <label class="check"><input type="checkbox" name="filter"> 只保留关注主题</label>
+        <button type="submit">添加</button>
+      </form>
+      <div id="sources"></div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

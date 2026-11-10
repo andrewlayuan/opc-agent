@@ -1,0 +1,16 @@
+# 把 OPC Radar 情报库作为 MCP 服务接入 DeepSeek Harness。
+# 用法：bin/dsh web --patch /opt/opc-agent/integrations/dsh/opc-radar.cordis.yml
+# 工具会以 mcp__opc_radar__radar_latest / radar_search / radar_item / radar_brief 出现。
+- insert:
+    - id: mcp-opc-radar
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: opc_radar
+        transport: stdio
+        command: node
+        args:
+          - --disable-warning=ExperimentalWarning
+          - /opt/opc-agent/mcp/opc-radar/server.ts
+        cwd: /opt/opc-agent
+        env:
+          OPC_DATA_DIR: /opt/opc-agent/data

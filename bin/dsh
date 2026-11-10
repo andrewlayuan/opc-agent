@@ -1,0 +1,8 @@
+#!/bin/sh
+# 本仓库内的 DeepSeek Harness 入口：使用源码构建产物，状态目录固定在 /opt/opc-agent/.dsh
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+NODE24="${DSH_NODE_BIN:-/root/.workbuddy/binaries/node/versions/24.14.0/bin}"
+# $ROOT/bin 在前：会话里的 agent-reach 指向隔离 HOME 的包装脚本
+export PATH="$ROOT/bin:$NODE24:$PATH"
+export DSH_HOME="${DSH_HOME:-$ROOT/.dsh}"
+exec node "$ROOT/deepseek-harness/apps/cli/lib/bin.js" "$@"

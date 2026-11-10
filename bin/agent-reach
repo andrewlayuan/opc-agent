@@ -1,0 +1,8 @@
+#!/bin/sh
+# Agent-Reach 入口：独立 venv，HOME 隔离在 /opt/opc-agent/.agent-reach-home（不读写真实 ~）
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export HOME="$ROOT/.agent-reach-home"
+export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache" XDG_DATA_HOME="$HOME/.local/share"
+export PATH="$ROOT/agent-reach/.venv/bin:$HOME/.local/bin:$PATH"
+mkdir -p "$HOME" && chmod 700 "$HOME"
+exec "$ROOT/agent-reach/.venv/bin/agent-reach" "$@"

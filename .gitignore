@@ -1,0 +1,13 @@
+node_modules/
+data/
+.dsh/
+.env
+.env.*
+*.pem
+secrets/
+# 独立仓库，单独维护
+deepseek-harness/
+dsh-superagent-prototype/
+agent-reach/
+.agent-reach-home/
+pm-skills/

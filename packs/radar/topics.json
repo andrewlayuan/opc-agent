@@ -1,0 +1,64 @@
+{
+  "$comment": "关注主题。hint 供模型判断归类边界（可选）；autoTag=false 表示关键词过于宽泛，分析后只采用模型判定（关键词仍用于采集过滤）。keywords 用于采集过滤与自动打标签（不区分大小写；纯字母且 ≤4 个字符的词按整词匹配）。可自行增删。",
+  "topics": [
+    {
+      "id": "llm",
+      "label": "大模型",
+      "hint": "基座/开源/推理模型的发布、能力与评测",
+      "keywords": ["GPT-", "GPT5", "Claude", "Gemini", "Llama", "Qwen", "DeepSeek", "Mistral", "Kimi", "GLM", "MiniMax", "Doubao", "豆包", "通义", "千问", "文心", "混元", "Grok", "Gemma", "Phi-", "open-weight", "open weights", "frontier model", "foundation model", "LLM", "大模型", "基座模型", "开源模型", "模型发布", "reasoning model", "推理模型"]
+    },
+    {
+      "id": "multimodal",
+      "label": "多模态",
+      "keywords": ["multimodal", "multi-modal", "vision-language", "VLM", "omni", "text-to-video", "video generation", "image generation", "text-to-image", "image-text-to-text", "text-to-speech", "Sora", "Veo", "Imagen", "Midjourney", "Flux", "Stable Diffusion", "diffusion", "world model", "3D generation", "多模态", "文生视频", "文生图", "视频生成", "图像生成", "世界模型", "可灵", "即梦", "Seedance", "Hunyuan"]
+    },
+    {
+      "id": "agent",
+      "label": "Agent 框架",
+      "keywords": ["agent", "agents", "agentic", "multi-agent", "LangGraph", "LangChain", "AutoGen", "CrewAI", "Agents SDK", "agent framework", "orchestration", "computer use", "browser use", "harness", "智能体", "多智能体"]
+    },
+    {
+      "id": "skills",
+      "label": "Skills / MCP",
+      "keywords": ["skill", "skills", "MCP", "Model Context Protocol", "A2A", "tool use", "tool calling", "function calling", "plugin", "工具调用", "技能"]
+    },
+    {
+      "id": "memory",
+      "label": "记忆",
+      "keywords": ["memory", "long-term memory", "mem0", "Letta", "MemGPT", "context engineering", "context window", "long context", "记忆", "长期记忆", "上下文工程", "长上下文"]
+    },
+    {
+      "id": "voice",
+      "label": "Voice Agent",
+      "keywords": ["voice", "speech", "TTS", "ASR", "STT", "realtime", "real-time", "audio", "Whisper", "pipecat", "LiveKit", "speech-to-speech", "voice agent", "语音", "实时语音", "语音合成", "语音识别"]
+    },
+    {
+      "id": "rag",
+      "label": "RAG",
+      "keywords": ["RAG", "retrieval", "retrieval-augmented", "embedding", "embeddings", "vector", "rerank", "reranker", "GraphRAG", "knowledge graph", "search", "检索", "向量", "知识库", "知识图谱"]
+    },
+    {
+      "id": "coding",
+      "label": "AI 编程",
+      "keywords": ["coding agent", "code generation", "Claude Code", "Codex", "Cursor", "Copilot", "Windsurf", "CodeBuddy", "SWE-bench", "vibe coding", "AI 编程", "代码生成", "编程助手"]
+    },
+    {
+      "id": "infra",
+      "label": "训练与推理",
+      "keywords": ["inference", "serving", "vLLM", "SGLang", "Ollama", "quantization", "fine-tuning", "fine-tune", "RLHF", "reinforcement learning", "GPU", "benchmark", "eval", "evals", "推理加速", "微调", "强化学习", "评测"]
+    },
+    {
+      "id": "hardware",
+      "label": "AI 硬件",
+      "hint": "AI 芯片、GPU/加速卡、算力与数据中心、AI 终端设备（AI PC/手机/眼镜）；只是提到芯片公司名不算",
+      "keywords": ["MI300", "MI325", "MI350", "MI355", "MI400", "Blackwell", "Rubin", "Hopper", "H100", "H200", "H20", "B200", "B300", "GB200", "GB300", "NVL72", "DGX", "Jetson", "TPU", "Trillium", "Ironwood", "Trainium", "Inferentia", "MTIA", "Groq", "Cerebras", "SambaNova", "Tenstorrent", "昇腾", "寒武纪", "摩尔线程", "沐曦", "壁仞", "海光", "AI chip", "AI chips", "semiconductor", "chipmaker", "TSMC", "HBM", "NPU", "AI PC", "Copilot+ PC", "Snapdragon", "AI glasses", "smart glasses", "AI 硬件", "芯片", "算力", "智算", "半导体", "台积电", "加速卡", "显卡", "AI 眼镜", "智能眼镜", "可穿戴", "AI 手机", "RTX PRO", "GPU cluster", "GPU 集群", "AI factory", "AI factories", "AI 工厂", "data center", "数据中心", "AI wearable", "AI 终端"]
+    },
+    {
+      "id": "product",
+      "label": "AI 产品",
+      "autoTag": false,
+      "hint": "AI 应用与产品发布、商业化、融资收购",
+      "keywords": ["launch", "launches", "launched", "introducing", "now available", "beta", "app", "assistant", "ChatGPT", "Perplexity", "funding", "raises", "acquires", "发布", "上线", "推出", "融资", "收购"]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "name": "opc-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OPC Radar：AI 技术情报雷达（采集、去重、DeepSeek 分析与中文翻译），可作为 MCP 服务接入 DeepSeek Harness",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning apps/server/main.ts",
+    "radar:run": "node --disable-warning=ExperimentalWarning apps/server/cli.ts run",
+    "brief": "node --disable-warning=ExperimentalWarning apps/server/cli.ts brief",
+    "hash-password": "node --disable-warning=ExperimentalWarning scripts/hash-password.ts",
+    "mcp": "node --disable-warning=ExperimentalWarning mcp/opc-radar/server.ts",
+    "dsh:web": "bash scripts/dsh-web.sh",
+    "test": "node --disable-warning=ExperimentalWarning --test \"packages/**/*.test.ts\" \"packs/**/*.test.ts\" \"apps/**/*.test.ts\" \"mcp/**/*.test.ts\""
+  }
+}
