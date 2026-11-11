@@ -176,3 +176,33 @@ textarea:focus { border-color: var(--fg); }
   #logout { display: none; }
   .tabs button { padding: 4px 6px; }
 }
+
+/* 产品顾问：版本、编辑、多轮对话 */
+.pm-doc { padding-bottom: 20px; }
+.pm-versions { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 16px; margin: 14px 0 6px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.ver-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.ver { display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: none; color: var(--fg); font-size: 13px; }
+.ver small { color: var(--muted); font-size: 11px; }
+.ver.on { color: var(--bg); background: var(--fg); border-color: var(--fg); }
+.ver.on small { color: var(--bg); opacity: .75; }
+.ver-actions { display: inline-flex; flex-wrap: wrap; gap: 14px; align-items: center; font-size: 13px; }
+.ver-actions a.link { color: var(--muted); text-decoration: none; }
+.ver-actions a.link:hover { color: var(--accent); }
+button.link:disabled { opacity: .4; cursor: not-allowed; }
+.pm-edit { width: 100%; min-height: 360px; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.pm-doc .row, .pm-reply .row { display: flex; align-items: center; gap: 14px; margin-top: 8px; }
+.pm-reply .row button[type=submit] { margin-left: auto; }
+.pm-conflict { margin-top: 6px; font-size: 13px; display: flex; gap: 12px; align-items: center; }
+.pm-conflict:empty { display: none; }
+.pm-thread { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.pm-thread > .muted { font-size: 13px; }
+.pm-msg { margin: 10px 0; }
+.pm-msg.user { display: flex; flex-direction: column; align-items: flex-end; }
+.pm-msg.user .bubble { max-width: 85%; padding: 8px 12px; border-radius: 12px 12px 2px 12px; background: var(--soft); white-space: pre-wrap; word-break: break-word; }
+.pm-msg.user small { margin-top: 2px; font-size: 11px; }
+.pm-msg.assistant { padding: 2px 0 2px 12px; border-left: 2px solid var(--line); }
+.pm-msg.assistant.brief { padding-bottom: 2px; }
+.pm-event { margin: 8px 0; font-size: 13px; }
+.pm-event button.link { color: var(--accent); }
+.pm-reply { margin: 12px 0 8px; }
+.pm-reply textarea { width: 100%; }
