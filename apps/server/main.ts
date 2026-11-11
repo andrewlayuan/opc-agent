@@ -12,7 +12,7 @@ import { defaultSkillsDir, loadPmSkills } from '../../packs/pm/skills.ts';
 import { getInterests, setInterests } from '../../packs/radar/prefs.ts';
 import { getItem, listItems, stats } from '../../packs/radar/query.ts';
 import { Radar } from '../../packs/radar/service.ts';
-import { HttpError, parseCookies, readJson, sameOrigin, securityHeaders, sendJson, staticFor } from './http.ts';
+import { HttpError, clientIp, parseCookies, readJson, sameOrigin, securityHeaders, sendJson, staticFor } from './http.ts';
 
 const cfg = loadConfig({ requireAuth: true });
 const db = openDb(cfg.dbPath);
@@ -65,7 +65,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   if (method !== 'GET' && method !== 'HEAD' && !sameOrigin(req, cfg.publicOrigin)) throw new HttpError(403, '跨站请求被拒绝');
 
   if (p === '/api/login' && method === 'POST') {
-    const ip = req.socket.remoteAddress ?? 'unknown';
+    const ip = clientIp(req, cfg.trustProxy);
     if (!limiter.allowed(ip)) throw new HttpError(429, '尝试次数过多，请 15 分钟后再试');
     const body = await readJson(req, 4096);
     const username = typeof body.username === 'string' ? body.username.slice(0, 100) : '';

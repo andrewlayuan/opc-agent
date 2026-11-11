@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { isIP } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type http from 'node:http';
@@ -94,6 +95,21 @@ export function sendJson(res: http.ServerResponse, status: number, body: unknown
   const data = Buffer.from(JSON.stringify(body));
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': data.length });
   res.end(data);
+}
+
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+/**
+ * 客户端 IP。只有开启 trustProxy 且连接来自本机反代时才读 X-Forwarded-For，
+ * 并取最右一段（由本机代理写入，客户端无法伪造）；否则用 socket 地址。
+ */
+export function clientIp(req: http.IncomingMessage, trustProxy: boolean): string {
+  const remote = req.socket.remoteAddress ?? 'unknown';
+  if (!trustProxy || !LOOPBACK.has(remote)) return remote;
+  const raw = req.headers['x-forwarded-for'];
+  const header = Array.isArray(raw) ? raw.join(',') : raw ?? '';
+  const last = header.split(',').map((s) => s.trim()).filter(Boolean).pop() ?? '';
+  return isIP(last) ? last : remote;
 }
 
 /** 写操作必须同源：Origin（或 Referer）与 Host 一致，或等于配置的公开地址 */

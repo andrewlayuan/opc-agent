@@ -16,6 +16,8 @@ export interface AppConfig {
   host: string;
   port: number;
   publicOrigin: string;
+  /** 前面有本机反代（Caddy）时设为 true，按 X-Forwarded-For 取客户端 IP */
+  trustProxy: boolean;
   dataDir: string;
   dbPath: string;
   adminUser: string;
@@ -41,6 +43,7 @@ export function loadConfig(opts: { requireAuth?: boolean } = {}): AppConfig {
     host: process.env.OPC_HOST?.trim() || '127.0.0.1',
     port,
     publicOrigin: (process.env.OPC_PUBLIC_ORIGIN?.trim() || `http://127.0.0.1:${port}`).replace(/\/+$/, ''),
+    trustProxy: ['1', 'true', 'on'].includes(process.env.OPC_TRUST_PROXY?.trim().toLowerCase() ?? ''),
     dataDir,
     dbPath: path.join(dataDir, 'opc.db'),
     adminUser: process.env.OPC_ADMIN_USER?.trim() || '',
