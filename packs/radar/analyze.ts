@@ -43,7 +43,19 @@ function clampStr(v: unknown, max: number): string {
   return typeof v === 'string' ? v.trim().slice(0, max) : '';
 }
 
-export async function analyzeItem(db: DB, llm: Llm, topics: Topic[], id: number): Promise<void> {
+const RELEVANCE_FIELDS = `,
+  "relevance": 0-3 的整数（与该用户当前项目/关注的关联：0 无关，3 直接相关）,
+  "relevance_zh": "一句话说明关联，0 分时为空字符串"`;
+
+/** 模型给出的相关度：取整并限制在 0–3；非数字为 null；0 分说明置空 */
+function relevanceOf(r: unknown, zh: unknown): { relevance: number | null; relevance_zh: string | null } {
+  const n = typeof r === 'number' ? r : typeof r === 'string' && r.trim() !== '' ? Number(r) : NaN;
+  if (!Number.isFinite(n)) return { relevance: null, relevance_zh: null };
+  const v = Math.min(3, Math.max(0, Math.round(n)));
+  return { relevance: v, relevance_zh: v === 0 ? '' : clampStr(zh, 120) };
+}
+
+export async function analyzeItem(db: DB, llm: Llm, topics: Topic[], id: number, ctx = ''): Promise<void> {
   const it = loadItem(db, id);
   if (!it) throw new Error('条目不存在');
   const topicList = topicPromptList(topics);
@@ -55,7 +67,7 @@ export async function analyzeItem(db: DB, llm: Llm, topics: Topic[], id: number)
   "summary_zh": "一句话中文摘要，不超过 80 字，说清是什么",
   "analysis": ["要点1：为什么值得关注/新在哪里", "要点2：对开发者或产品的影响", "要点3（可选）：局限、风险或待验证之处"],
   "topics": ["从这些主题 id 中选 0-3 个：${topicList}"],
-  "importance": 1-5 的整数（5=行业级重大发布，4=重要版本或重要研究，3=值得了解，2=一般，1=噪音）
+  "importance": 1-5 的整数（5=行业级重大发布，4=重要版本或重要研究，3=值得了解，2=一般，1=噪音）${ctx ? RELEVANCE_FIELDS : ''}
 }
 analysis 每条不超过 60 字，用中文。
 
@@ -64,9 +76,9 @@ analysis 每条不超过 60 字，用中文。
 标题：${it.title}
 链接：${it.url}
 内容：${it.content.slice(0, 5000) || '（无正文，仅有标题）'}
-</item>`;
+</item>${ctx ? `\n\n下面是读者的背景，只用于判断 relevance，不影响其他字段：\n${ctx}` : ''}`;
   try {
-    const out = await llm.json<{ title_zh?: unknown; summary_zh?: unknown; analysis?: unknown; topics?: unknown; importance?: unknown }>(
+    const out = await llm.json<{ title_zh?: unknown; summary_zh?: unknown; analysis?: unknown; topics?: unknown; importance?: unknown; relevance?: unknown; relevance_zh?: unknown }>(
       [
         { role: 'system', content: '你是严谨的中文 AI 技术情报分析师，只输出 JSON。' },
         { role: 'user', content: prompt },
@@ -88,6 +100,10 @@ analysis 每条不超过 60 字，用中文。
       Date.now(),
       id,
     );
+    if (ctx) {
+      const r = relevanceOf(out.relevance, out.relevance_zh);
+      db.prepare('UPDATE items SET relevance=?, relevance_zh=? WHERE id=?').run(r.relevance, r.relevance_zh, id);
+    }
   } catch (e) {
     db.prepare('UPDATE items SET analysis_error=? WHERE id=?').run((e instanceof Error ? e.message : String(e)).slice(0, 300), id);
     throw e;
@@ -114,16 +130,32 @@ export async function translateItem(db: DB, llm: Llm, id: number): Promise<strin
 }
 
 /** 分析尚未分析的新条目（最新优先，重复条目跳过） */
-export async function analyzePending(db: DB, llm: Llm, topics: Topic[], limit: number, log: (s: string) => void = () => {}): Promise<number> {
+export async function analyzePending(
+  db: DB,
+  llm: Llm,
+  topics: Topic[],
+  limit: number,
+  log: (s: string) => void = () => {},
+  ctx?: () => string,
+): Promise<number> {
   if (!llm.enabled || limit <= 0) return 0;
   const rows = db
     .prepare('SELECT id FROM items WHERE analyzed_at IS NULL AND dup_of IS NULL AND (analysis_error IS NULL) ORDER BY published_at DESC LIMIT ?')
     .all(limit) as { id: number }[];
+  if (!rows.length) return 0;
+  let context = '';
+  if (ctx) {
+    try {
+      context = ctx();
+    } catch (e) {
+      log(`  读取用户上下文失败（按无上下文分析）：${e instanceof Error ? e.message : e}`);
+    }
+  }
   let ok = 0;
   await Promise.all(
     rows.map(async (r) => {
       try {
-        await analyzeItem(db, llm, topics, r.id);
+        await analyzeItem(db, llm, topics, r.id, context);
         ok++;
       } catch (e) {
         log(`  分析失败 #${r.id}: ${e instanceof Error ? e.message : e}`);
@@ -232,7 +264,7 @@ function briefRows(db: DB, start: number, focus: string[]): BriefRow[] {
 }
 
 /** focus 非空时只纳入这些主题；关注范围内 24 小时条目太少会自动放宽到 72 小时 */
-export async function generateBrief(db: DB, llm: Llm, topics: Topic[], hours = 24, focusIn: string[] = []): Promise<BriefResult> {
+export async function generateBrief(db: DB, llm: Llm, topics: Topic[], hours = 24, focusIn: string[] = [], ctx = ''): Promise<BriefResult> {
   const valid = new Set(topics.map((t) => t.id));
   const focus = [...new Set(focusIn.filter((t) => valid.has(t)))];
   const end = Date.now();
@@ -258,9 +290,11 @@ export async function generateBrief(db: DB, llm: Llm, topics: Topic[], hours = 2
 基于以下条目写一份${focus.length ? '聚焦读者关注方向的' : '今日'} AI 简报：
 1. 开头「今日要点」3-5 条，每条一句话，并在句末用 [编号] 标注来源（可多个，如 [2][5]）。
 2. 然后按主题分节（${focus.length ? focus.map((t) => labels[t]).join('、') : '如 大模型、多模态、Agent、记忆、Voice、RAG、AI 编程、AI 硬件、产品'}），每节 2-5 条，同样用 [编号] 标注。没有内容的主题省略。
-3. 最后「值得跟进」1-3 条：给出简短判断或建议。
+3. 最后「值得跟进」1-3 条：给出简短判断或建议。${
+          ctx ? '\n4. 若条目与用户正在做的事有关，在该条后用一句话点出关联。\n5. 最后加「## 与你相关」1-3 条（没有相关的就省略这一节）。' : ''
+        }
 使用纯文本：节标题以「## 」开头，条目以「- 」开头。不要输出任何 URL。
-
+${ctx ? `\n下面是读者的背景，只用于判断关联，不要当作资讯来源：\n${ctx}\n` : ''}
 <items>
 ${list}
 </items>`,

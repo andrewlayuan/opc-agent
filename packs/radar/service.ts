@@ -29,11 +29,13 @@ export class Radar {
   readonly state: RunState = { running: false, phase: 'idle', startedAt: null, lastFinishedAt: null, lastResult: null };
   private timer: NodeJS.Timeout | null = null;
   private log: (s: string) => void;
+  private analyzeContext?: () => string;
 
-  constructor(db: DB, cfg: AppConfig, log: (s: string) => void = (s) => console.log(s)) {
+  constructor(db: DB, cfg: AppConfig, log: (s: string) => void = (s) => console.log(s), opts: { analyzeContext?: () => string } = {}) {
     this.db = db;
     this.cfg = cfg;
     this.log = log;
+    this.analyzeContext = opts.analyzeContext;
     this.llm = new Llm(cfg.llm);
     this.reach = new Reach();
     this.topics = loadTopics();
@@ -55,7 +57,7 @@ export class Radar {
         await enrichPending(this.db, this.reach, this.cfg.fulltextLimit, this.cfg.llm.analyzeLimitPerRun, this.log);
       }
       this.state.phase = '分析中';
-      const analyzed = await analyzePending(this.db, this.llm, this.topics, this.cfg.llm.analyzeLimitPerRun, this.log);
+      const analyzed = await analyzePending(this.db, this.llm, this.topics, this.cfg.llm.analyzeLimitPerRun, this.log, this.analyzeContext);
       if (this.llm.enabled) {
         this.state.phase = '主题校准';
         const n = await retagPending(this.db, this.llm, this.topics, RETAG_PER_RUN, this.log);

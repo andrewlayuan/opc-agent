@@ -10,6 +10,8 @@ export interface ListParams {
   days?: number;
   minImportance?: number;
   starred?: boolean;
+  /** 只看与用户相关（relevance ≥2） */
+  relevant?: boolean;
   includeDup?: boolean;
   before?: number; // published_at 游标
   limit?: number;
@@ -24,6 +26,8 @@ export interface ItemView {
   analysis: string[];
   topics: string[];
   importance: number | null;
+  relevance: number | null;
+  relevance_zh: string | null;
   lang: string;
   author: string | null;
   published_at: number;
@@ -37,7 +41,7 @@ export interface ItemView {
   dup_of: number | null;
 }
 
-const COLS = `i.id, i.url, i.title, i.title_zh, i.summary_zh, i.analysis_zh, i.topics, i.importance, i.lang, i.author,
+const COLS = `i.id, i.url, i.title, i.title_zh, i.summary_zh, i.analysis_zh, i.topics, i.importance, i.relevance, i.relevance_zh, i.lang, i.author,
   i.published_at, i.source_id, s.name AS source_name, s.grp, i.starred, i.analyzed_at, i.analysis_error,
   (i.translation_zh IS NOT NULL) AS has_tr, i.dup_of`;
 
@@ -53,6 +57,8 @@ function toView(r: Row): ItemView {
     analysis: r.analysis_zh ? (JSON.parse(String(r.analysis_zh)) as string[]) : [],
     topics: JSON.parse(String(r.topics || '[]')) as string[],
     importance: r.importance == null ? null : Number(r.importance),
+    relevance: r.relevance == null ? null : Number(r.relevance),
+    relevance_zh: (r.relevance_zh as string) ?? null,
     lang: String(r.lang),
     author: (r.author as string) ?? null,
     published_at: Number(r.published_at),
@@ -104,6 +110,7 @@ export function listItems(db: DB, p: ListParams): ItemView[] {
     args.push(p.minImportance);
   }
   if (p.starred) where.push('i.starred = 1');
+  if (p.relevant) where.push('i.relevance >= 2');
   if (p.before) {
     where.push('i.published_at < ?');
     args.push(p.before);
