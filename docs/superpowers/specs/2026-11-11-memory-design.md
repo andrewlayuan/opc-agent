@@ -106,7 +106,7 @@ ALTER TABLE pm_messages ADD COLUMN context_refs TEXT;  -- 每轮用到的同上
 | `turn_ask` / `turn_revise` | 每轮追问完成时（advisor 内部） | 追问 / 要求改写：前 80 字 | `{text ≤800, answer ≤400 或 note}` |
 | `version_manual` | `saveManual` 成功后 | 手动编辑 v3 | `{removed ≤600, added ≤600}`（按段落求差） |
 
-- **合并**：
+- **合并**（只作用于雷达类事件 `item_*`、`interests_update`、`brief_generate`；产品顾问类事件每条内容都不同，一律不合并）：
   - 同一个 ref 在 10 分钟内还没整理的 `item_star` 与 `item_unstar` 互相抵消：删掉未整理的那条，不再新增，返回 null。
   - 同一个 ref、同一个 kind 在 10 分钟内还没整理的重复事件，只保留最新一条（更新已有行的 at、summary、payload）。
 - **段落差异**：`paragraphDiff(before, after): { removed: string; added: string }`，按空行切分段落后做集合差，各自截断到 600 字。
@@ -162,7 +162,8 @@ ALTER TABLE pm_messages ADD COLUMN context_refs TEXT;  -- 每轮用到的同上
   - `/(?<!\d)1[3-9]\d{9}(?!\d)/`
   - `/(?<!\d)\d{17}[\dXx](?!\d)/`
   - `/[\w.+-]+@[\w-]+\.[A-Za-z]{2,}/`
-- 与已有条目或本批已接受的 add 内容完全相同的 add 丢弃。
+- 与已有条目或本批已接受的 add 内容完全相同的 add 丢弃；内容与原条目相同的 update 丢弃。
+- add 或 update 的内容与 `<rejected>` 中某条完全相同时丢弃（服务端兜底，不只依赖提示词）。
 - 最多保留 8 个操作；画像超出 1500 字时截断；画像为空字符串或与当前相同时，按 null 处理。
 
 ### 4.5 落库
@@ -170,6 +171,7 @@ ALTER TABLE pm_messages ADD COLUMN context_refs TEXT;  -- 每轮用到的同上
 所有操作在一个事务中完成：
 
 - 逐条执行操作，并写 `memory_changes`（source 为 auto，带 event_ids；update 和 delete 的 event_ids 为本批全部事件 id）。
+- 模型调用期间条目被删掉，或 `updated_at` 晚于本批开始时间（用户刚改过）时，跳过针对该条的操作。
 - 条目超过 60 条时，按 `manual ASC, coalesce(last_used_at, updated_at) ASC, hits ASC, id ASC` 淘汰，source 记为 evict。
 - 画像有变化时写一条 profile 变更。
 - 把这一批事件标记 `consumed_at`。
@@ -330,7 +332,7 @@ ALTER TABLE pm_messages ADD COLUMN context_refs TEXT;  -- 每轮用到的同上
   - `packs/radar/analyze.ts`：relevance 与简报。
   - `packs/radar/query.ts`：`rel` 筛选与新字段。
   - `packs/radar/service.ts`：采集时传入分析上下文。
-  - `apps/server/main.ts`：路由、事件写入、`MemoryKeeper` 启停。
+  - `apps/server/main.ts`：事件写入、`MemoryKeeper` 启停；记忆相关路由放在新文件 `apps/server/memory-api.ts`，避免 main.ts 继续膨胀。
   - `mcp/opc-radar/server.ts`。
   - `integrations/dsh/skills/pm-advisor/SKILL.md`。
   - `apps/server/public/index.html`、`app.js`、`style.css`。
