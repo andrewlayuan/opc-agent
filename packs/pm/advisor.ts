@@ -117,6 +117,24 @@ export function modeLabel(mode: string): string {
     .join(' + ');
 }
 
+/** 文档的「## 一句话结论」一节；没有这一节时取开头。按字截断到 max */
+export function conclusionOf(doc: string, max: number): string {
+  const lines = doc.split('\n');
+  const at = lines.findIndex((l) => /^##\s*一句话结论/.test(l));
+  let text = '';
+  if (at >= 0) {
+    const body: string[] = [];
+    for (const l of lines.slice(at + 1)) {
+      if (/^#{1,2}\s/.test(l)) break;
+      body.push(l);
+    }
+    text = body.join('\n').trim();
+  }
+  if (!text) text = doc.trim();
+  const cps = [...text];
+  return cps.length > max ? cps.slice(0, max).join('') : text;
+}
+
 export class PmAdvisor {
   readonly db: DB;
   readonly llm: Llm;
