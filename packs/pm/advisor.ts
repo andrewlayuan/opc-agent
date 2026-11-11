@@ -100,6 +100,8 @@ export interface AdvisorEvent {
 export interface AdvisorHooks {
   context?: (purpose: 'pm', opts: { query: string; excludeReview?: number }) => AdvisorContext;
   onEvent?: (e: AdvisorEvent) => void;
+  /** 本轮成功完成后，回报实际注入提示词的记忆 id */
+  used?: (memoryIds: number[]) => void;
 }
 
 const clip = (s: string, n: number): string => {
@@ -294,6 +296,7 @@ export class PmAdvisor {
       this.db.prepare("UPDATE pm_reviews SET status='done', content=?, finished_at=?, updated_at=? WHERE id=?").run(clean, now, now, id);
       this.db.prepare("INSERT INTO pm_versions(review_id, n, created_at, source, content) VALUES (?, 1, ?, 'ai_initial', ?)").run(id, now, clean);
     });
+    this.markUsed(ctx);
     this.emit({
       kind: 'review_create',
       refId: id,
@@ -312,6 +315,15 @@ export class PmAdvisor {
     } catch (e) {
       this.log(`[pm] 读取用户上下文失败，按无上下文继续：${e instanceof Error ? e.message : e}`);
       return null;
+    }
+  }
+
+  private markUsed(ctx: { refs: ContextRefs } | null): void {
+    if (!ctx?.refs.memories.length || !this.hooks.used) return;
+    try {
+      this.hooks.used(ctx.refs.memories);
+    } catch (e) {
+      this.log(`[pm] 更新记忆使用次数失败：${e instanceof Error ? e.message : e}`);
     }
   }
 
@@ -585,6 +597,7 @@ ${structure}
       }
       this.db.prepare('UPDATE pm_reviews SET updated_at=? WHERE id=?').run(now, id);
     });
+    this.markUsed(ctx);
     const brief = clip(text.replace(/\s+/g, ' '), 80);
     this.emit(
       res.kind === 'revise'

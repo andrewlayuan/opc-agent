@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { openDb } from '../../packages/core/db.ts';
 import type { DB } from '../../packages/core/db.ts';
 import { conclusionOf } from '../pm/advisor.ts';
-import { recallHistory, resolveRefs, trigramOverlap, userContext } from './context.ts';
+import { recallHistory, resolveRefs, touchMemories, trigramOverlap, userContext } from './context.ts';
 
 const T = 1_800_000_000_000;
 const DAY = 86_400_000;
@@ -103,15 +103,19 @@ test('userContext：brief 只含 interest/decision；analyze 只含画像前 400
   done();
 });
 
-test('userContext：track 默认更新 hits/last_used_at，analyze 与 track:false 不更新', () => {
+test('userContext 只读，不更新 hits；touchMemories 才更新 hits/last_used_at', () => {
   const { db, done } = tmp();
   const id = mem(db, 'interest', '关注端侧 AI 硬件');
-  const row = () => ({ ...(db.prepare('SELECT hits, last_used_at FROM memories WHERE id = ?').get(id) as object) });
-  userContext(db, 'analyze', { now: T });
-  userContext(db, 'pm', { query: 'x', now: T, track: false });
-  assert.deepEqual(row(), { hits: 0, last_used_at: null });
-  userContext(db, 'brief', { now: T });
-  assert.deepEqual(row(), { hits: 1, last_used_at: T });
+  const other = mem(db, 'fact', '在做律所工具');
+  const row = (x: number) => ({ ...(db.prepare('SELECT hits, last_used_at FROM memories WHERE id = ?').get(x) as object) });
+  for (const p of ['analyze', 'brief', 'pm'] as const) assert.ok(userContext(db, p, { query: '端侧 AI 硬件', now: T }).memoryIds.includes(id));
+  assert.deepEqual(row(id), { hits: 0, last_used_at: null });
+  touchMemories(db, [id], T);
+  assert.deepEqual(row(id), { hits: 1, last_used_at: T });
+  assert.deepEqual(row(other), { hits: 0, last_used_at: null });
+  assert.doesNotThrow(() => touchMemories(db, []));
+  touchMemories(db, [id, 9999], T + 1);
+  assert.deepEqual(row(id), { hits: 2, last_used_at: T + 1 });
   done();
 });
 
@@ -142,6 +146,19 @@ test('recallHistory：命中片段、排除当前会话、取最新结论与改�
   const ctx = userContext(db, 'pm', { query: '合同审查工具怎么定价', now: T });
   assert.deepEqual(ctx.reviewIds, [r1]);
   assert.match(ctx.text, /## 过去的讨论\n- #\d+ \d{4}-\d{2}-\d{2}｜面向中小律所的合同审查工具\n {2}命中：.+\n {2}结论：值得做：按席位收费\n {2}最近改写：改成按席位定价/);
+  done();
+});
+
+test('recallHistory：只召回已完成的评审，失败与进行中的不召回', () => {
+  const { db, done } = tmp();
+  const ok = review(db, '面向中小律所的合同审查工具', [{ content: '## 一句话结论\n值得做' }]);
+  const bad = review(db, '律所合同审查工具的另一版', []);
+  const run = review(db, '律所合同审查工具第三版', []);
+  db.prepare("UPDATE pm_reviews SET status = 'error' WHERE id = ?").run(bad);
+  db.prepare("UPDATE pm_reviews SET status = 'running' WHERE id = ?").run(run);
+  assert.deepEqual(recallHistory(db, '合同审查工具', { limit: 3 }).map((h) => h.review_id), [ok]);
+  db.prepare("UPDATE pm_reviews SET status = 'done' WHERE id = ?").run(bad);
+  assert.equal(recallHistory(db, '合同审查工具', { limit: 3 }).length, 2);
   done();
 });
 

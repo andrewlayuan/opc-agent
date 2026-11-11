@@ -415,6 +415,40 @@ test('产品顾问：context 抛错或返回空文本时照常完成，context_r
   }
 });
 
+test('产品顾问：used 只在首版与追问成功后以实际注入的记忆 id 调用；失败轮次不调用；used 抛错不影响结果', async () => {
+  const used: number[][] = [];
+  let fail = false;
+  const { advisor, done } = setup(
+    { chat: (m) => (fail ? Promise.reject(new Error('模型挂了')) : fakeTurn(m)) },
+    { context: () => ({ text: CTX, memoryIds: [3, 5], reviewIds: [] }), used: (ids) => used.push(ids) },
+  );
+  const id = await doneReview(advisor);
+  assert.deepEqual(used, [[3, 5]]);
+  fail = true;
+  advisor.ask(id, '为什么选这个市场？', 'auto');
+  await waitTurn(advisor, id);
+  assert.equal(advisor.get(id)!.messages[1].status, 'error');
+  assert.deepEqual(used, [[3, 5]]);
+  fail = false;
+  advisor.ask(id, '为什么选这个市场？', 'auto');
+  await waitTurn(advisor, id);
+  assert.deepEqual(used, [[3, 5], [3, 5]]);
+  done();
+
+  const empty: number[][] = [];
+  const e = setup({ chat: fakeTurn }, { context: () => ({ text: '', memoryIds: [], reviewIds: [] }), used: (ids) => empty.push(ids) });
+  await doneReview(e.advisor);
+  assert.deepEqual(empty, []);
+  e.done();
+
+  const bad = setup({ chat: fakeTurn }, { context: () => ({ text: CTX, memoryIds: [3], reviewIds: [] }), used: () => {
+    throw new Error('boom');
+  } });
+  const id2 = await doneReview(bad.advisor);
+  assert.equal(bad.advisor.get(id2)!.status, 'done');
+  bad.done();
+});
+
 test('产品顾问：onEvent 在首版与每轮完成后各调用一次；onEvent 抛错不影响结果', async () => {
   const events: AdvisorEvent[] = [];
   const { advisor, done } = setup({ chat: fakeTurn }, { onEvent: (e) => events.push(e) });

@@ -4,7 +4,7 @@ import { loadConfig } from '../../packages/core/config.ts';
 import { openDb } from '../../packages/core/db.ts';
 import { allowHost } from '../../packages/core/net.ts';
 import { MemoryKeeper } from '../../packs/memory/consolidate.ts';
-import { resolveRefs, userContext } from '../../packs/memory/context.ts';
+import { resolveRefs, touchMemories, userContext } from '../../packs/memory/context.ts';
 import { paragraphDiff, recordEvent } from '../../packs/memory/events.ts';
 import type { EventInput } from '../../packs/memory/events.ts';
 import { analyzeItem, generateBrief, latestBrief, translateItem } from '../../packs/radar/analyze.ts';
@@ -27,6 +27,7 @@ const pmSkillsDir = defaultSkillsDir();
 const pm = new PmAdvisor(db, radar.llm, loadPmSkills(pmSkillsDir), undefined, {
   context: (_, o) => userContext(db, 'pm', o),
   onEvent: (e) => record({ ...e, refType: 'review' }),
+  used: (ids) => touchMemories(db, ids),
 });
 const limiter = new LoginLimiter();
 const isHttps = cfg.publicOrigin.startsWith('https://');
@@ -78,12 +79,21 @@ function record(input: EventInput | (() => EventInput | null)): void {
 }
 
 /** 上下文计算出错时按无上下文继续 */
-function safeContext(purpose: 'analyze' | 'brief'): string {
+function safeContext(purpose: 'analyze' | 'brief'): { text: string; memoryIds: number[] } {
   try {
-    return userContext(db, purpose).text;
+    return userContext(db, purpose);
   } catch (err) {
     console.error('[memory] 读取用户上下文失败', err);
-    return '';
+    return { text: '', memoryIds: [] };
+  }
+}
+
+/** 模型调用成功后再给用到的记忆计数；失败只记日志 */
+function safeTouch(ids: number[]): void {
+  try {
+    touchMemories(db, ids);
+  } catch (err) {
+    console.error('[memory] 更新记忆使用次数失败', err);
   }
 }
 
@@ -176,7 +186,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const id = idFrom(m);
     if (!getItem(db, id)) throw new HttpError(404, '条目不存在');
     await enrichItem(db, radar.reach, id);
-    await analyzeItem(db, radar.llm, radar.topics, id, safeContext('analyze'));
+    await analyzeItem(db, radar.llm, radar.topics, id, safeContext('analyze').text);
     const item = getItem(db, id);
     if (item) record({ kind: 'item_analyze', refType: 'item', refId: id, summary: `手动分析：${itemTitle(item)}`, payload: { topics: item.topics } });
     return sendJson(res, 200, { item });
@@ -228,7 +238,9 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       const body = await readJson(req, 1024);
       const focus = body.focus ? getInterests(db, radar.topics).topics : [];
       if (body.focus && !focus.length) throw new HttpError(400, '还没有设置「我的关注」');
-      const b = await generateBrief(db, radar.llm, radar.topics, 24, focus, safeContext('brief'));
+      const ctx = safeContext('brief');
+      const b = await generateBrief(db, radar.llm, radar.topics, 24, focus, ctx.text);
+      safeTouch(ctx.memoryIds);
       record({ kind: 'brief_generate', refType: 'brief', refId: b.id, summary: `生成简报${focus.length ? `（聚焦：${topicLabels(focus).join('、')}）` : ''}`, payload: { focus } });
       return sendJson(res, 200, { brief: b });
     } finally {

@@ -87,7 +87,14 @@ function render(profile: string, mems: Memory[], hist: HistoryHit[]): string {
 
 const analyzeCache = new WeakMap<DB, { key: string; value: UserContext }>();
 
-export function userContext(db: DB, purpose: Purpose, opts: { query?: string; excludeReview?: number; track?: boolean; now?: number } = {}): UserContext {
+/** 模型调用成功后，给实际注入的记忆计数并更新最近使用时间 */
+export function touchMemories(db: DB, ids: number[], now: number = Date.now()): void {
+  if (!ids.length) return;
+  db.prepare(`UPDATE memories SET hits = hits + 1, last_used_at = ? WHERE id IN (${ids.map(() => '?').join(',')})`).run(now, ...ids);
+}
+
+/** 只读：拼装上下文，不更新 hits（调用方在模型成功后调用 touchMemories） */
+export function userContext(db: DB, purpose: Purpose, opts: { query?: string; excludeReview?: number; now?: number } = {}): UserContext {
   const now = opts.now ?? Date.now();
   let cacheKey = '';
   if (purpose === 'analyze') {
@@ -133,10 +140,6 @@ export function userContext(db: DB, purpose: Purpose, opts: { query?: string; ex
     value = profile || memoryIds.length || hist.length ? { text, memoryIds, reviewIds: hist.map((h) => h.review_id) } : EMPTY;
   }
 
-  const track = opts.track ?? purpose !== 'analyze';
-  if (track && value.memoryIds.length) {
-    db.prepare(`UPDATE memories SET hits = hits + 1, last_used_at = ? WHERE id IN (${value.memoryIds.map(() => '?').join(',')})`).run(now, ...value.memoryIds);
-  }
   if (purpose === 'analyze') analyzeCache.set(db, { key: cacheKey, value });
   return value;
 }
@@ -163,7 +166,9 @@ export function recallHistory(db: DB, query: string, opts: { exclude?: number; l
     const rows = db
       .prepare(
         `SELECT review_id, bm25(history_fts) AS s, snippet(history_fts, 2, '【', '】', '…', 40) AS snip
-         FROM history_fts WHERE history_fts MATCH ? ORDER BY s LIMIT 200`,
+         FROM history_fts WHERE history_fts MATCH ?
+           AND review_id IN (SELECT id FROM pm_reviews WHERE status = 'done')
+         ORDER BY s LIMIT 200`,
       )
       .all(match) as { review_id: number; snip: string }[];
     const best = new Map<number, string>();
