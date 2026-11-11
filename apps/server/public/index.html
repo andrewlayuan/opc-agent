@@ -15,6 +15,7 @@
         <button data-view="feed" class="on">动态</button>
         <button data-view="brief">简报</button>
         <button data-view="pm">产品顾问</button>
+        <button data-view="memory">我的记忆</button>
         <button data-view="sources">信息源</button>
       </nav>
       <div class="bar-right">
@@ -56,6 +57,7 @@
         </select>
         <label class="check"><input type="checkbox" id="important"> 只看重要</label>
         <label class="check"><input type="checkbox" id="starred"> 收藏</label>
+        <label class="check" title="分析时判断为与你当前项目或关注相关的条目"><input type="checkbox" id="rel"> 与我相关</label>
         <span class="status" id="status"></span>
       </div>
       <ol class="list" id="list"></ol>
@@ -95,6 +97,24 @@
       <div class="pm-result" id="pm-result" hidden></div>
       <div class="grp-title" id="pm-history-title" hidden>历史评审</div>
       <ol class="pm-history" id="pm-history"></ol>
+    </section>
+
+    <section id="view-memory" hidden>
+      <div class="brief-head">
+        <span class="muted" id="mem-pending"></span>
+      </div>
+      <p class="mem-intro muted">根据你在雷达和产品顾问里的操作自动整理，用来个性化分析、简报和评审。可以随时修改、撤销或清空。</p>
+      <div class="grp-title">画像</div>
+      <div class="mem-profile" id="mem-profile"></div>
+      <div class="grp-title">记忆条目</div>
+      <div id="mem-items"></div>
+      <div class="grp-title">最近变化</div>
+      <ol class="mem-changes" id="mem-changes"></ol>
+      <div class="actions mem-actions">
+        <button type="button" id="mem-run">立即整理</button>
+        <a class="link" id="mem-export" href="/api/memory/export" download>导出</a>
+        <button type="button" class="ghost" id="mem-clear">清空</button>
+      </div>
     </section>
 
     <section id="view-sources" hidden>

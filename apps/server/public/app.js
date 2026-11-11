@@ -82,6 +82,7 @@ function filters() {
   if ($('important').checked) min = 4;
   if (min) p.set('min', String(min));
   if ($('starred').checked) p.set('starred', '1');
+  if ($('rel').checked) p.set('rel', '1');
   const q = $('q').value.trim();
   if (q) p.set('q', q);
   p.set('limit', '30');
@@ -96,13 +97,15 @@ function dots(n) {
   return el;
 }
 
+const relTag = (it) => (it.relevance >= 2 ? h('span', { class: 'rel', title: it.relevance_zh || '与你当前的项目或关注相关', text: '与你相关' }) : null);
+
 function renderItem(it) {
   const zhTitle = it.title_zh || it.title;
   const showOrig = it.title_zh && it.title_zh !== it.title;
   const li = h('li', { class: 'item' });
   li.append(
     h('div', { class: 'meta' }, h('span', { text: it.source_name }), h('span', { text: '·' }), h('span', { text: ago(it.published_at) }), dots(it.importance), it.starred ? h('span', { text: '★' }) : null),
-    h('a', { class: 'title', href: '#', onclick: (e) => { e.preventDefault(); toggleOpen(it.id, li); }, text: zhTitle }),
+    h('div', { class: 'title-row' }, h('a', { class: 'title', href: '#', onclick: (e) => { e.preventDefault(); toggleOpen(it.id, li); }, text: zhTitle }), relTag(it)),
     showOrig ? h('p', { class: 'orig', text: it.title }) : null,
     it.summary_zh ? h('p', { class: 'summary', text: it.summary_zh }) : !it.analyzed ? h('p', { class: 'summary muted', text: it.analysis_error ? '分析失败，展开后可重试' : '待分析' }) : null,
     it.topics.length ? h('div', { class: 'tags' }, it.topics.map((t) => h('span', { class: 'tag', text: topicLabel(t) }))) : null,
@@ -128,6 +131,7 @@ async function loadDetail(id, box, li) {
 
 function detailChildren(item, box, li) {
   const out = [];
+  if (item.relevance >= 2 && item.relevance_zh) out.push(h('div', { class: 'label', text: '与你相关' }), h('p', { class: 'rel-why', text: item.relevance_zh }));
   if (item.analysis.length) {
     out.push(h('div', { class: 'label', text: '分析' }), h('ul', {}, item.analysis.map((a) => h('li', { text: a }))));
   } else if (item.analysis_error) {
@@ -593,7 +597,7 @@ function renderReview(r) {
   } else if (r.status === 'error' || !r.latest) {
     parts.push(h('div', { class: 'brief' }, h('p', { class: 'err', text: `评审失败：${r.error || '没有可用的文档'}` })));
   } else {
-    parts.push(renderVersions(r), renderDoc(r), renderThread(r), renderReply(r));
+    parts.push(contextNote(r.context), renderVersions(r), renderDoc(r), renderThread(r), renderReply(r));
   }
   if (r.status === 'done') {
     parts.push(
@@ -619,7 +623,41 @@ function renderReview(r) {
       ),
     );
   }
-  box.replaceChildren(...parts);
+  box.replaceChildren(...parts.filter(Boolean));
+}
+
+/** 「参考了 N 条记忆、M 次历史讨论」：展开后列出记忆内容与可跳转的历史会话 */
+function contextNote(c, inline = false) {
+  const ms = c?.memories ?? [];
+  const rs = c?.reviews ?? [];
+  if (!ms.length && !rs.length) return null;
+  return h(
+    'details',
+    { class: `pm-ctx${inline ? ' inline' : ''}` },
+    h('summary', { text: `参考了 ${ms.length} 条记忆、${rs.length} 次历史讨论` }),
+    ms.length ? h('ul', {}, ms.map((m) => h('li', { text: `${MEM_LABEL[m.kind] ? `[${MEM_LABEL[m.kind]}] ` : ''}${m.content}` }))) : null,
+    rs.length
+      ? h(
+          'ul',
+          {},
+          rs.map((x) =>
+            h(
+              'li',
+              {},
+              h('button', {
+                type: 'button',
+                class: 'link',
+                text: `#${x.id} ${x.input}`,
+                onclick: () => {
+                  openReview(x.id);
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                },
+              }),
+            ),
+          ),
+        )
+      : null,
+  );
 }
 
 function renderVersions(r) {
@@ -772,9 +810,9 @@ function renderThread(r) {
         );
       }
       if (m.kind === 'revise' && m.version_n) {
-        return h('div', { class: 'pm-event' }, h('button', { type: 'button', class: 'link', text: `→ 生成了 v${m.version_n}：${m.content}`, onclick: () => selectVersion(r.id, m.version_n) }));
+        return h('div', { class: 'pm-event' }, h('button', { type: 'button', class: 'link', text: `→ 生成了 v${m.version_n}：${m.content}`, onclick: () => selectVersion(r.id, m.version_n) }), contextNote(m.context, true));
       }
-      return h('div', { class: 'pm-msg assistant brief' }, ...renderMarkdown(m.content, r.refs));
+      return h('div', { class: 'pm-msg assistant brief' }, ...renderMarkdown(m.content, r.refs), contextNote(m.context, true));
     }),
   );
 }
@@ -914,13 +952,190 @@ async function submitPm(e) {
   }
 }
 
+// ---------------- 我的记忆 ----------------
+const MEM_KINDS = ['fact', 'preference', 'decision', 'interest'];
+const MEM_LABEL = { fact: '事实', preference: '偏好', decision: '决定', interest: '关注' };
+const OP_LABEL = { add: '新增', update: '修改', delete: '删除', profile: '画像' };
+const SRC_LABEL = { auto: '自动整理', manual: '手动', undo: '撤销', evict: '超出上限淘汰' };
+const mem = { data: null, editProfile: false, editItem: null, addKind: null, pollTimer: null };
+
+const clipText = (s, n = 200) => ([...s].length > n ? `${[...s].slice(0, n).join('')}…` : s);
+
+async function loadMemory() {
+  clearTimeout(mem.pollTimer);
+  try {
+    mem.data = await api('/api/memory');
+    renderMemory();
+    if (mem.data.running && !$('view-memory').hidden) mem.pollTimer = setTimeout(loadMemory, 3000);
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+/** 写操作：成功后重新加载；失败提示并恢复按钮 */
+async function memDo(btn, fn, after) {
+  if (btn) btn.disabled = true;
+  try {
+    await fn();
+    after?.();
+  } catch (e) {
+    toast(e.message);
+    if (btn) btn.disabled = false;
+    return;
+  }
+  await loadMemory();
+}
+
+function renderMemory() {
+  const d = mem.data;
+  if (!d) return;
+  const pend = d.running ? '正在整理…' : d.pending ? `还有 ${d.pending} 条交互待整理` : '交互都已整理';
+  $('mem-pending').textContent = d.llm ? pend : `${pend} · 未配置模型，暂不自动整理`;
+  $('mem-run').disabled = !d.llm || d.running;
+  $('mem-clear').disabled = false;
+  $('mem-profile').replaceChildren(...renderProfileBox(d.profile));
+  $('mem-items').replaceChildren(...MEM_KINDS.map((k) => renderMemGroup(k, d.memories.filter((m) => m.kind === k))));
+  $('mem-changes').replaceChildren(...(d.changes.length ? d.changes.map(renderChange) : [h('li', { class: 'muted', text: '还没有变化。' })]));
+}
+
+function renderProfileBox(p) {
+  if (mem.editProfile) {
+    const ta = h('textarea', { rows: '8', maxlength: '1500', 'aria-label': '编辑画像', placeholder: '用几句话描述你自己：在做什么、目标用户、阶段、偏好的沟通方式…' });
+    ta.value = p.content;
+    return [
+      ta,
+      h(
+        'div',
+        { class: 'row' },
+        h('button', { type: 'button', text: '保存', onclick: (e) => memDo(e.currentTarget, () => api('/api/memory/profile', { method: 'PUT', body: { content: ta.value } }), () => (mem.editProfile = false)) }),
+        h('button', { type: 'button', class: 'link', text: '取消', onclick: () => ((mem.editProfile = false), renderMemory()) }),
+      ),
+    ];
+  }
+  const body = p.content ? h('div', { class: 'brief mem-md' }, ...renderMarkdown(p.content)) : h('p', { class: 'muted', text: '还没有画像。整理器会根据你的交互逐步生成，也可以自己写。' });
+  return [
+    body,
+    h(
+      'div',
+      { class: 'row' },
+      p.manual ? h('small', { class: 'muted', text: '手动编辑过' }) : null,
+      h('button', { type: 'button', class: 'link', text: '编辑', onclick: () => ((mem.editProfile = true), renderMemory()) }),
+    ),
+  ];
+}
+
+function memEditor(value, save, done) {
+  const input = h('input', { type: 'text', maxlength: '200', 'aria-label': '记忆内容', placeholder: '一句话，最多 200 字' });
+  input.value = value;
+  const cancel = () => {
+    mem.editItem = null;
+    mem.addKind = null;
+    renderMemory();
+  };
+  const submit = (btn) => {
+    const v = input.value.trim();
+    if (!v) return toast('内容不能为空');
+    memDo(btn, () => save(v), done);
+  };
+  const ok = h('button', { type: 'button', text: '保存', onclick: (e) => submit(e.currentTarget) });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submit(ok);
+    } else if (e.key === 'Escape') cancel();
+  });
+  return h('li', { class: 'mem-row editing' }, input, ok, h('button', { type: 'button', class: 'link', text: '取消', onclick: cancel }));
+}
+
+function renderMemGroup(k, list) {
+  const rows = list.map((m) =>
+    mem.editItem === m.id
+      ? memEditor(m.content, (v) => api(`/api/memory/items/${m.id}`, { method: 'PUT', body: { content: v } }), () => (mem.editItem = null))
+      : h(
+          'li',
+          { class: 'mem-row' },
+          h('span', { class: 'mem-text', text: m.content }),
+          m.manual ? h('span', { class: 'tag', text: '手动' }) : null,
+          h('span', { class: 'info', text: m.last_used_at ? `最近使用 ${ago(m.last_used_at)}` : '尚未使用' }),
+          h('button', { type: 'button', class: 'link', text: '编辑', onclick: () => ((mem.editItem = m.id), (mem.addKind = null), renderMemory()) }),
+          h('button', {
+            type: 'button',
+            class: 'link',
+            text: '删除',
+            onclick: (e) => {
+              if (!confirm(`删除这条记忆？\n${m.content}`)) return;
+              memDo(e.currentTarget, () => api(`/api/memory/items/${m.id}`, { method: 'DELETE' }));
+            },
+          }),
+        ),
+  );
+  if (mem.addKind === k) rows.push(memEditor('', (v) => api('/api/memory/items', { method: 'POST', body: { kind: k, content: v } }), () => (mem.addKind = null)));
+  return h(
+    'div',
+    { class: 'mem-group', 'data-kind': k },
+    h('div', { class: 'mem-group-title', text: MEM_LABEL[k] }),
+    h('ul', { class: 'mem-list' }, rows.length ? rows : h('li', { class: 'muted mem-empty', text: '暂无' })),
+    mem.addKind === k ? null : h('button', { type: 'button', class: 'link', text: '添加', onclick: () => ((mem.addKind = k), (mem.editItem = null), renderMemory()) }),
+  );
+}
+
+function renderChange(c) {
+  const text = (o) => (o && o.content != null ? clipText(String(o.content)) : '');
+  const before = text(c.before);
+  const after = text(c.after);
+  const label = c.op === 'profile' ? OP_LABEL.profile : `${OP_LABEL[c.op] ?? c.op}${MEM_LABEL[c.kind] ? ` · ${MEM_LABEL[c.kind]}` : ''}`;
+  const diff = h('div', { class: 'mem-diff' });
+  if (before) diff.append(h('del', { text: before }));
+  if (before && after) diff.append(h('span', { class: 'muted', text: ' → ' }));
+  if (after) diff.append(h('ins', { text: after }));
+  return h(
+    'li',
+    { class: `mem-change${c.undone_at ? ' undone' : ''}` },
+    h(
+      'div',
+      { class: 'meta' },
+      h('span', { class: 'tag', text: label }),
+      h('span', { text: SRC_LABEL[c.source] ?? c.source }),
+      h('span', { text: ago(c.at) }),
+      c.undone_at ? h('span', { text: '已撤销' }) : null,
+      c.undoable ? h('button', { type: 'button', class: 'link', text: '撤销', onclick: (e) => memDo(e.currentTarget, () => api(`/api/memory/changes/${c.id}/undo`, { method: 'POST', body: {} })) }) : null,
+    ),
+    diff,
+    c.reason ? h('div', { class: 'muted mem-note', text: `理由：${c.reason}` }) : null,
+    c.events.length ? h('div', { class: 'muted mem-note', text: `来源：${c.events.join('；')}` }) : null,
+  );
+}
+
+async function runMemory(e) {
+  await memDo(e.currentTarget, async () => {
+    const r = await api('/api/memory/consolidate', { method: 'POST', body: {} });
+    toast(r.started ? '已开始整理' : '没有待整理的交互');
+  });
+}
+
+async function clearAllMemory(e) {
+  if (!confirm('将删除画像、全部记忆、变化记录和待整理的交互，无法恢复。继续吗？')) return;
+  const ans = prompt('请输入「清空」确认');
+  if (ans !== '清空') {
+    if (ans != null) toast('输入不匹配，没有清空');
+    return;
+  }
+  await memDo(e.currentTarget, () => api('/api/memory', { method: 'DELETE', body: { confirm: '清空' } }), () => {
+    mem.editProfile = false;
+    mem.editItem = null;
+    mem.addKind = null;
+    toast('已清空');
+  });
+}
+
 // ---------------- 视图切换与事件 ----------------
 function show(view) {
   for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('on', b.dataset.view === view);
-  for (const v of ['feed', 'brief', 'pm', 'sources']) $(`view-${v}`).hidden = v !== view;
+  for (const v of ['feed', 'brief', 'pm', 'memory', 'sources']) $(`view-${v}`).hidden = v !== view;
   $('q').hidden = view !== 'feed';
   if (view === 'brief') loadBrief();
   if (view === 'sources') loadSources();
+  if (view === 'memory') loadMemory();
   if (view === 'pm') {
     initPm();
     loadPmHistory();
@@ -940,7 +1155,9 @@ async function init() {
   $('pm-form').addEventListener('submit', submitPm);
   $('pm-input').addEventListener('input', updatePmCount);
   for (const b of document.querySelectorAll('.tabs button')) b.addEventListener('click', () => show(b.dataset.view));
-  for (const id of ['grp', 'days', 'important', 'starred']) $(id).addEventListener('change', () => loadItems());
+  for (const id of ['grp', 'days', 'important', 'starred', 'rel']) $(id).addEventListener('change', () => loadItems());
+  $('mem-run').addEventListener('click', runMemory);
+  $('mem-clear').addEventListener('click', clearAllMemory);
   let qt;
   $('q').addEventListener('input', () => {
     clearTimeout(qt);
