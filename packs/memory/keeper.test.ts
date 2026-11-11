@@ -163,3 +163,42 @@ test('模型未启用：notify 与 start 不安排任何定时器', async () => 
   assert.equal(calls(), 0);
   done();
 });
+
+test('stop 之后 notify 不再安排定时器', async () => {
+  const { db, clock, keeper, done } = setup();
+  keeper.start();
+  keeper.stop();
+  ev(db, clock, 'review_create', 1);
+  keeper.notify('review_create');
+  for (let i = 1; i <= 10; i++) ev(db, clock, 'item_star', i);
+  keeper.notify('item_star');
+  assert.equal(clock.count(), 0);
+  assert.equal(keeper.running, false);
+  done();
+});
+
+test('定时器回调里数据库出错只记日志，不抛出', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-keep-'));
+  const db = openDb(path.join(dir, 't.db'));
+  const clock = fakeClock();
+  const logs: string[] = [];
+  const keeper = new MemoryKeeper(db, { enabled: true } as unknown as Llm, { clock, run: async () => ({ events: 0, applied: 0, profile: false, skipped: 0 }), log: (s) => logs.push(s) });
+  keeper.start();
+  db.close();
+  await clock.advance(6 * MIN);
+  assert.ok(logs.length >= 2, logs.join('\n'));
+  keeper.stop();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('巡检：任何类型的未整理事件最早一条满 30 分钟都会触发（覆盖整理失败的产品顾问事件）', async () => {
+  const { db, clock, keeper, calls, done } = setup();
+  keeper.start();
+  await clock.advance(31 * SEC);
+  ev(db, clock, 'review_create', 1);
+  await clock.advance(25 * MIN);
+  assert.equal(calls(), 0);
+  await clock.advance(10 * MIN);
+  assert.equal(calls(), 1);
+  done();
+});

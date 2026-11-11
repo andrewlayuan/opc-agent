@@ -1,7 +1,7 @@
 // 调用模型前拼装用户上下文：画像 + 相关记忆 + 过去的讨论（FTS5 trigram 召回）
 import type { DB } from '../../packages/core/db.ts';
 import { conclusionOf } from '../pm/advisor.ts';
-import { cut } from './events.ts';
+import { cut, fence } from './events.ts';
 import { KIND_LABELS, getProfile, len, listMemories } from './store.ts';
 import type { Memory } from './store.ts';
 
@@ -69,17 +69,17 @@ function rank(ms: Memory[], q: string, now: number): Memory[] {
 const day = (t: number) => new Date(t).toISOString().slice(0, 10);
 
 function fmtHit(h: HistoryHit): string {
-  const lines = [`- #${h.review_id} ${day(h.created_at)}｜${h.input}`];
-  if (h.snippet) lines.push(`  命中：${h.snippet}`);
-  if (h.conclusion) lines.push(`  结论：${h.conclusion}`);
-  if (h.note) lines.push(`  最近改写：${h.note}`);
+  const lines = [`- #${h.review_id} ${day(h.created_at)}｜${fence(h.input)}`];
+  if (h.snippet) lines.push(`  命中：${fence(h.snippet)}`);
+  if (h.conclusion) lines.push(`  结论：${fence(h.conclusion)}`);
+  if (h.note) lines.push(`  最近改写：${fence(h.note)}`);
   return lines.join('\n');
 }
 
 function render(profile: string, mems: Memory[], hist: HistoryHit[]): string {
   const parts = [OPEN];
-  if (profile) parts.push(`## 关于用户\n${profile}`);
-  if (mems.length) parts.push(`## 相关记忆\n${mems.map((m) => `- [${KIND_LABELS[m.kind] ?? m.kind}] ${m.content}`).join('\n')}`);
+  if (profile) parts.push(`## 关于用户\n${fence(profile)}`);
+  if (mems.length) parts.push(`## 相关记忆\n${mems.map((m) => `- [${KIND_LABELS[m.kind] ?? m.kind}] ${fence(m.content)}`).join('\n')}`);
   if (hist.length) parts.push(`## 过去的讨论\n${hist.map(fmtHit).join('\n')}`);
   parts.push(CLOSE);
   return parts.join('\n');

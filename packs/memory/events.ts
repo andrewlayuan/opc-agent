@@ -34,6 +34,9 @@ export const cut = (s: string, n: number): string => {
   return cps.length > n ? cps.slice(0, n).join('') : s;
 };
 
+/** 中和数据里形如 <x> / </x> 的标签片段，防止闭合提示词的外层框架 */
+export const fence = (s: string): string => s.replace(/<(\/?[A-Za-z_][\w-]*)[^<>]*>/g, '‹$1›');
+
 function payloadJson(p: Record<string, unknown> | undefined): string {
   const s = JSON.stringify(p ?? {});
   if (Buffer.byteLength(s) <= PAYLOAD_MAX_BYTES) return s;

@@ -957,16 +957,17 @@ const MEM_KINDS = ['fact', 'preference', 'decision', 'interest'];
 const MEM_LABEL = { fact: '事实', preference: '偏好', decision: '决定', interest: '关注' };
 const OP_LABEL = { add: '新增', update: '修改', delete: '删除', profile: '画像' };
 const SRC_LABEL = { auto: '自动整理', manual: '手动', undo: '撤销', evict: '超出上限淘汰' };
-const mem = { data: null, editProfile: false, editItem: null, addKind: null, pollTimer: null };
+const mem = { data: null, editProfile: false, editItem: null, addKind: null, pollTimer: null, profileDraft: null, itemDraft: null };
 
 const clipText = (s, n = 200) => ([...s].length > n ? `${[...s].slice(0, n).join('')}…` : s);
 
-async function loadMemory() {
+/** poll=true 时是整理中的自动刷新：正在编辑时不重建画像和条目，避免打断输入 */
+async function loadMemory(poll = false) {
   clearTimeout(mem.pollTimer);
   try {
     mem.data = await api('/api/memory');
-    renderMemory();
-    if (mem.data.running && !$('view-memory').hidden) mem.pollTimer = setTimeout(loadMemory, 3000);
+    renderMemory(poll && (mem.editProfile || mem.editItem != null || mem.addKind != null));
+    if (mem.data.running && !$('view-memory').hidden) mem.pollTimer = setTimeout(() => loadMemory(true), 3000);
   } catch (e) {
     toast(e.message);
   }
@@ -986,29 +987,32 @@ async function memDo(btn, fn, after) {
   await loadMemory();
 }
 
-function renderMemory() {
+function renderMemory(keepEditors = false) {
   const d = mem.data;
   if (!d) return;
   const pend = d.running ? '正在整理…' : d.pending ? `还有 ${d.pending} 条交互待整理` : '交互都已整理';
   $('mem-pending').textContent = d.llm ? pend : `${pend} · 未配置模型，暂不自动整理`;
   $('mem-run').disabled = !d.llm || d.running;
   $('mem-clear').disabled = false;
-  $('mem-profile').replaceChildren(...renderProfileBox(d.profile));
-  $('mem-items').replaceChildren(...MEM_KINDS.map((k) => renderMemGroup(k, d.memories.filter((m) => m.kind === k))));
+  if (!keepEditors) {
+    $('mem-profile').replaceChildren(...renderProfileBox(d.profile));
+    $('mem-items').replaceChildren(...MEM_KINDS.map((k) => renderMemGroup(k, d.memories.filter((m) => m.kind === k))));
+  }
   $('mem-changes').replaceChildren(...(d.changes.length ? d.changes.map(renderChange) : [h('li', { class: 'muted', text: '还没有变化。' })]));
 }
 
 function renderProfileBox(p) {
   if (mem.editProfile) {
     const ta = h('textarea', { rows: '8', maxlength: '1500', 'aria-label': '编辑画像', placeholder: '用几句话描述你自己：在做什么、目标用户、阶段、偏好的沟通方式…' });
-    ta.value = p.content;
+    ta.value = mem.profileDraft ?? p.content;
+    ta.addEventListener('input', () => (mem.profileDraft = ta.value));
     return [
       ta,
       h(
         'div',
         { class: 'row' },
-        h('button', { type: 'button', text: '保存', onclick: (e) => memDo(e.currentTarget, () => api('/api/memory/profile', { method: 'PUT', body: { content: ta.value } }), () => (mem.editProfile = false)) }),
-        h('button', { type: 'button', class: 'link', text: '取消', onclick: () => ((mem.editProfile = false), renderMemory()) }),
+        h('button', { type: 'button', text: '保存', onclick: (e) => memDo(e.currentTarget, () => api('/api/memory/profile', { method: 'PUT', body: { content: ta.value } }), () => ((mem.editProfile = false), (mem.profileDraft = null))) }),
+        h('button', { type: 'button', class: 'link', text: '取消', onclick: () => ((mem.editProfile = false), (mem.profileDraft = null), renderMemory()) }),
       ),
     ];
   }
@@ -1026,16 +1030,18 @@ function renderProfileBox(p) {
 
 function memEditor(value, save, done) {
   const input = h('input', { type: 'text', maxlength: '200', 'aria-label': '记忆内容', placeholder: '一句话，最多 200 字' });
-  input.value = value;
+  input.value = mem.itemDraft ?? value;
+  input.addEventListener('input', () => (mem.itemDraft = input.value));
   const cancel = () => {
     mem.editItem = null;
     mem.addKind = null;
+    mem.itemDraft = null;
     renderMemory();
   };
   const submit = (btn) => {
     const v = input.value.trim();
     if (!v) return toast('内容不能为空');
-    memDo(btn, () => save(v), done);
+    memDo(btn, () => save(v), () => ((mem.itemDraft = null), done()));
   };
   const ok = h('button', { type: 'button', text: '保存', onclick: (e) => submit(e.currentTarget) });
   input.addEventListener('keydown', (e) => {
@@ -1057,7 +1063,7 @@ function renderMemGroup(k, list) {
           h('span', { class: 'mem-text', text: m.content }),
           m.manual ? h('span', { class: 'tag', text: '手动' }) : null,
           h('span', { class: 'info', text: m.last_used_at ? `最近使用 ${ago(m.last_used_at)}` : '尚未使用' }),
-          h('button', { type: 'button', class: 'link', text: '编辑', onclick: () => ((mem.editItem = m.id), (mem.addKind = null), renderMemory()) }),
+          h('button', { type: 'button', class: 'link', text: '编辑', onclick: () => ((mem.editItem = m.id), (mem.addKind = null), (mem.itemDraft = null), renderMemory()) }),
           h('button', {
             type: 'button',
             class: 'link',
@@ -1075,7 +1081,7 @@ function renderMemGroup(k, list) {
     { class: 'mem-group', 'data-kind': k },
     h('div', { class: 'mem-group-title', text: MEM_LABEL[k] }),
     h('ul', { class: 'mem-list' }, rows.length ? rows : h('li', { class: 'muted mem-empty', text: '暂无' })),
-    mem.addKind === k ? null : h('button', { type: 'button', class: 'link', text: '添加', onclick: () => ((mem.addKind = k), (mem.editItem = null), renderMemory()) }),
+    mem.addKind === k ? null : h('button', { type: 'button', class: 'link', text: '添加', onclick: () => ((mem.addKind = k), (mem.editItem = null), (mem.itemDraft = null), renderMemory()) }),
   );
 }
 
@@ -1124,6 +1130,8 @@ async function clearAllMemory(e) {
     mem.editProfile = false;
     mem.editItem = null;
     mem.addKind = null;
+    mem.profileDraft = null;
+    mem.itemDraft = null;
     toast('已清空');
   });
 }

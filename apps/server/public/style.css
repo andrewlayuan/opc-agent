@@ -174,7 +174,10 @@ textarea:focus { border-color: var(--fg); }
   .bar-in { gap: 10px; }
   #q { width: 96px; }
   #logout { display: none; }
-  .tabs button { padding: 4px 6px; }
+  .tabs button { padding: 4px 6px; flex: none; white-space: nowrap; }
+  .tabs { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .bar-right { flex: none; }
 }
 
 /* 产品顾问：版本、编辑、多轮对话 */

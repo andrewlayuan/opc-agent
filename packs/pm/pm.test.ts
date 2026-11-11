@@ -372,7 +372,7 @@ test('产品顾问：首版 system 提示词含用户背景并写入 context_ref
   const system = systems[0];
   assert.match(system, /## 关于你服务的用户\n<user_context>律所<\/user_context>\n结合用户背景与偏好；如与其过去的决定矛盾，明确指出。/);
   assert.ok(system.indexOf('## 关于你服务的用户') < system.indexOf('下面 <skill>'));
-  assert.deepEqual(calls, [{ query: '给团队做一个周报自动生成工具' }]);
+  assert.deepEqual(calls, [{ query: '给团队做一个周报自动生成工具', excludeReview: id }]);
   assert.deepEqual(advisor.get(id)!.context_refs, { memories: [3], reviews: [] });
   done();
 });

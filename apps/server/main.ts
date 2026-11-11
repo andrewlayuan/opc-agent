@@ -67,10 +67,11 @@ function versionNo(s: string): number {
 
 let briefRunning = false;
 
-/** 操作成功后记录交互事件；失败只记日志，不影响原操作的响应 */
-function record(e: EventInput): void {
+/** 操作成功后记录交互事件；传函数时在 try 内构造。失败只记日志，不影响原操作的响应 */
+function record(input: EventInput | (() => EventInput | null)): void {
   try {
-    if (recordEvent(db, e) !== null) keeper.notify(e.kind);
+    const e = typeof input === 'function' ? input() : input;
+    if (e && recordEvent(db, e) !== null) keeper.notify(e.kind);
   } catch (err) {
     console.error('[memory] 记录事件失败', err);
   }
@@ -186,8 +187,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     if (!getItem(db, id)) throw new HttpError(404, '条目不存在');
     await enrichItem(db, radar.reach, id);
     const translation = await translateItem(db, radar.llm, id);
-    const item = getItem(db, id);
-    if (item) record({ kind: 'item_translate', refType: 'item', refId: id, summary: `翻译全文：${itemTitle(item)}`, payload: {} });
+    record(() => {
+      const item = getItem(db, id);
+      return item ? { kind: 'item_translate', refType: 'item', refId: id, summary: `翻译全文：${itemTitle(item)}`, payload: {} } : null;
+    });
     return sendJson(res, 200, { translation });
   }
   m = p.match(/^\/api\/items\/(\d+)\/star$/);
@@ -196,17 +199,18 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const body = await readJson(req, 1024);
     const r = db.prepare('UPDATE items SET starred=? WHERE id=?').run(body.starred ? 1 : 0, id);
     if (!r.changes) throw new HttpError(404, '条目不存在');
-    const item = getItem(db, id);
-    if (item) {
+    record(() => {
+      const item = getItem(db, id);
+      if (!item) return null;
       const meta = [topicLabels(item.topics).join('/'), item.importance ? `重要度 ${item.importance}` : ''].filter(Boolean).join('，');
-      record({
+      return {
         kind: body.starred ? 'item_star' : 'item_unstar',
         refType: 'item',
         refId: id,
         summary: `${body.starred ? '收藏' : '取消收藏'}：${itemTitle(item)}${meta ? `（${meta}）` : ''}`,
         payload: { topics: item.topics, importance: item.importance },
-      });
-    }
+      };
+    });
     return sendJson(res, 200, { ok: true });
   }
 
@@ -301,8 +305,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const body = await readJson(req, 192 * 1024);
     const content = typeof body.content === 'string' ? body.content : '';
     const n = pmCall(() => pm.saveManual(id, content, body.baseN));
-    const prev = pm.version(id, n - 1);
-    record({ kind: 'version_manual', refType: 'review', refId: id, summary: `手动编辑 v${n}`, payload: paragraphDiff(prev?.content ?? '', content.trim()) });
+    record(() => ({ kind: 'version_manual', refType: 'review', refId: id, summary: `手动编辑 v${n}`, payload: paragraphDiff(pm.version(id, n - 1)?.content ?? '', content.trim()) }));
     return sendJson(res, 201, { n });
   }
   m = p.match(/^\/api\/pm\/reviews\/(\d+)\/versions\/(\d+)(\/download)?$/);

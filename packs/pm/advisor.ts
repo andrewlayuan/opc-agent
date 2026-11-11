@@ -275,7 +275,7 @@ export class PmAdvisor {
     }
     if (!chosen.length) chosen = ['value-proposition', 'identify-assumptions-new', 'pre-mortem'].filter((s) => this.byName.has(s));
     const refs = useRadar ? this.radarRefs(keywords) : [];
-    const ctx = this.userContext({ query: input });
+    const ctx = this.userContext({ query: input, excludeReview: id });
     this.db
       .prepare('UPDATE pm_reviews SET skills=?, item_ids=?, context_refs=? WHERE id=?')
       .run(JSON.stringify(chosen), JSON.stringify(refs.map((r) => r.id)), ctx ? JSON.stringify(ctx.refs) : null, id);

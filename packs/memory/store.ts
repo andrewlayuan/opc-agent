@@ -136,12 +136,19 @@ function checkKind(v: unknown): MemoryKind {
   return v;
 }
 
+const FULL_MSG = `记忆已满 ${MAX_MEMORIES} 条，请先删除不需要的`;
+
+/** 已满且全是手动条目：再加一条只能淘汰手动条目，因此拒绝 */
+function isFull(db: DB): boolean {
+  const r = db.prepare('SELECT count(*) AS n, sum(manual = 0) AS auto FROM memories').get() as { n: number; auto: number | null };
+  return Number(r.n) >= MAX_MEMORIES && !Number(r.auto ?? 0);
+}
+
 export function addMemory(db: DB, kind: unknown, content: unknown, now = Date.now()): number {
   const k = checkKind(kind);
   const c = cleanContent(content);
   return tx(db, () => {
-    const r = db.prepare('SELECT count(*) AS n, sum(manual = 0) AS auto FROM memories').get() as { n: number; auto: number | null };
-    if (Number(r.n) >= MAX_MEMORIES && !Number(r.auto ?? 0)) throw new MemoryError(409, `记忆已满 ${MAX_MEMORIES} 条，请先删除不需要的`);
+    if (isFull(db)) throw new MemoryError(409, FULL_MSG);
     const id = Number(db.prepare('INSERT INTO memories(kind, content, manual, created_at, updated_at) VALUES (?, ?, 1, ?, ?)').run(k, c, now, now).lastInsertRowid);
     logChange(db, { op: 'add', memoryId: id, kind: k, after: { kind: k, content: c, manual: true }, source: 'manual' }, now);
     evictOverflow(db, now);
@@ -241,6 +248,7 @@ export function undoChange(db: DB, id: number, now = Date.now()): void {
         db.prepare('UPDATE memories SET kind = ?, content = ?, manual = ?, updated_at = ? WHERE id = ?').run(before.kind, String(before.content), before.manual ? 1 : 0, now, mid);
       } else {
         if (exists || !before || !isKind(before.kind)) throw new MemoryError(409, CONFLICT);
+        if (isFull(db)) throw new MemoryError(409, FULL_MSG);
         db.prepare('INSERT INTO memories(id, kind, content, manual, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(mid, before.kind, String(before.content), before.manual ? 1 : 0, now, now);
       }
     }

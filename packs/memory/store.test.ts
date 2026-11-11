@@ -219,3 +219,15 @@ test('recentChanges：附来源事件 summary，undoable 与 undoChange 判断�
   assert.equal(ex.changes.length, 2);
   done();
 });
+
+test('撤销删除/淘汰：其余 60 条全是手动时拒绝，不淘汰手动条目', () => {
+  const { db, done } = tmp();
+  for (let i = 0; i < MAX_MEMORIES - 1; i++) db.prepare('INSERT INTO memories(kind, content, manual, created_at, updated_at) VALUES (?, ?, 1, ?, ?)').run('fact', `手动${i}`, T, T);
+  autoAdd(db, 'fact', '自动一条');
+  addMemory(db, 'fact', '新手动', T + 1);
+  const evict = Number((db.prepare("SELECT id FROM memory_changes WHERE source = 'evict'").get() as { id: number }).id);
+  assert.throws(() => undoChange(db, evict, T + 2), { status: 409, message: '记忆已满 60 条，请先删除不需要的' });
+  assert.equal(listMemories(db).filter((m) => m.manual).length, MAX_MEMORIES);
+  assert.equal(all(db, 'SELECT undone_at FROM memory_changes WHERE id = ' + evict)[0].undone_at, null);
+  done();
+});
