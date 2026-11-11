@@ -7,6 +7,7 @@ const view = (o: Partial<ReviewView> = {}): ReviewView => ({
   id: 12,
   created_at: Date.UTC(2026, 10, 10, 2, 0),
   finished_at: null,
+  context_refs: null,
   updated_at: Date.UTC(2026, 10, 10, 2, 0),
   status: 'done',
   mode: 'idea',

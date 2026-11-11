@@ -7,7 +7,7 @@ import { openDb } from '../../packages/core/db.ts';
 import type { Llm } from '../../packages/core/llm.ts';
 import { syncSources } from '../radar/collect.ts';
 import { PmAdvisor, modeLabel } from './advisor.ts';
-import type { PmError } from './advisor.ts';
+import type { AdvisorEvent, AdvisorHooks, PmError } from './advisor.ts';
 import { loadPmSkills, parseSkill } from './skills.ts';
 import type { PmSkill } from './skills.ts';
 
@@ -48,7 +48,7 @@ test('加载技能目录：固定层级、排除无关插件、拒绝符号链�
   fs.rmSync(outside, { recursive: true, force: true });
 });
 
-function setup(llmImpl: { json?: (m: { content: string }[]) => unknown; chat?: (m: { content: string }[]) => string | Promise<string> }) {
+function setup(llmImpl: { json?: (m: { content: string }[]) => unknown; chat?: (m: { content: string }[]) => string | Promise<string> }, hooks: AdvisorHooks = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-pm-db-'));
   const db = openDb(path.join(dir, 't.db'));
   syncSources(db);
@@ -63,7 +63,7 @@ function setup(llmImpl: { json?: (m: { content: string }[]) => unknown; chat?: (
     json: async (m: { content: string }[]) => llmImpl.json?.(m) ?? {},
     chat: async (m: { content: string }[]) => llmImpl.chat?.(m) ?? '',
   } as unknown as Llm;
-  const advisor = new PmAdvisor(db, llm, skills, () => {});
+  const advisor = new PmAdvisor(db, llm, skills, () => {}, hooks);
   return { db, advisor, done: () => (db.close(), fs.rmSync(dir, { recursive: true, force: true })) };
 }
 
@@ -357,4 +357,94 @@ test('多轮：删除会话时级联删除消息与版本；list 返回 latest/t
   assert.equal(n('pm_messages'), 0);
   assert.equal(n('pm_versions'), 0);
   done();
+});
+
+const CTX = '<user_context>律所</user_context>';
+
+test('产品顾问：首版 system 提示词含用户背景并写入 context_refs', async () => {
+  const systems: string[] = [];
+  const calls: { query: string; excludeReview?: number }[] = [];
+  const { advisor, done } = setup(
+    { chat: (m) => (systems.push(m[0].content), fakeTurn(m)) },
+    { context: (_p, o) => (calls.push(o), { text: CTX, memoryIds: [3], reviewIds: [] }) },
+  );
+  const id = await doneReview(advisor);
+  const system = systems[0];
+  assert.match(system, /## 关于你服务的用户\n<user_context>律所<\/user_context>\n结合用户背景与偏好；如与其过去的决定矛盾，明确指出。/);
+  assert.ok(system.indexOf('## 关于你服务的用户') < system.indexOf('下面 <skill>'));
+  assert.deepEqual(calls, [{ query: '给团队做一个周报自动生成工具' }]);
+  assert.deepEqual(advisor.get(id)!.context_refs, { memories: [3], reviews: [] });
+  done();
+});
+
+test('产品顾问：追问时 query 为本轮输入 + 原始需求前 200 字，excludeReview 为当前会话，refs 写入消息', async () => {
+  const systems: string[] = [];
+  const calls: { query: string; excludeReview?: number }[] = [];
+  const { advisor, done } = setup(
+    { chat: (m) => (systems.push(m[0].content), fakeTurn(m)) },
+    { context: (_p, o) => (calls.push(o), { text: CTX, memoryIds: [3], reviewIds: calls.length > 1 ? [7] : [] }) },
+  );
+  const id = await doneReview(advisor);
+  advisor.ask(id, '把定价改成年费', 'auto');
+  await waitTurn(advisor, id);
+  assert.deepEqual(calls[1], { query: '把定价改成年费\n给团队做一个周报自动生成工具', excludeReview: id });
+  assert.match(systems[1], /## 关于你服务的用户/);
+  const msgs = advisor.get(id)!.messages;
+  assert.deepEqual(msgs.map((m) => m.context_refs), [null, { memories: [3], reviews: [7] }]);
+  done();
+});
+
+test('产品顾问：context 抛错或返回空文本时照常完成，context_refs 为 null，提示词不含「关于你服务的用户」', async () => {
+  for (const context of [
+    () => {
+      throw new Error('boom');
+    },
+    () => ({ text: '', memoryIds: [], reviewIds: [] }),
+  ]) {
+    const systems: string[] = [];
+    const { advisor, done } = setup({ chat: (m) => (systems.push(m[0].content), fakeTurn(m)) }, { context });
+    const id = await doneReview(advisor);
+    advisor.ask(id, '为什么选这个市场？', 'auto');
+    await waitTurn(advisor, id);
+    const r = advisor.get(id)!;
+    assert.equal(r.context_refs, null);
+    assert.equal(r.messages[1].status, 'done');
+    assert.equal(r.messages[1].context_refs, null);
+    for (const s of systems) assert.doesNotMatch(s, /关于你服务的用户/);
+    done();
+  }
+});
+
+test('产品顾问：onEvent 在首版与每轮完成后各调用一次；onEvent 抛错不影响结果', async () => {
+  const events: AdvisorEvent[] = [];
+  const { advisor, done } = setup({ chat: fakeTurn }, { onEvent: (e) => events.push(e) });
+  const id = await doneReview(advisor);
+  advisor.ask(id, '为什么选这个市场？', 'auto');
+  await waitTurn(advisor, id);
+  advisor.ask(id, '把定价改成年费' + '细'.repeat(900), 'auto');
+  await waitTurn(advisor, id);
+  assert.deepEqual(events.map((e) => [e.kind, e.refId]), [
+    ['review_create', id],
+    ['turn_ask', id],
+    ['turn_revise', id],
+  ]);
+  assert.equal(events[0].summary, '评审：给团队做一个周报自动生成工具（点子快评）');
+  assert.equal(events[0].payload.input, '给团队做一个周报自动生成工具');
+  assert.ok([...String(events[0].payload.conclusion)].length <= 400);
+  assert.equal(events[1].summary, '追问：为什么选这个市场？');
+  assert.deepEqual(events[1].payload, { text: '为什么选这个市场？', answer: '解释' });
+  assert.match(events[2].summary, /^要求改写：把定价改成年费/);
+  assert.ok([...events[2].summary].length <= 86);
+  assert.equal([...String(events[2].payload.text)].length, 800);
+  assert.equal(events[2].payload.note, '改了定价');
+  done();
+
+  const bad = setup({ chat: fakeTurn }, { onEvent: () => {
+    throw new Error('boom');
+  } });
+  const id2 = await doneReview(bad.advisor);
+  bad.advisor.ask(id2, '为什么选这个市场？', 'auto');
+  await waitTurn(bad.advisor, id2);
+  assert.equal(bad.advisor.get(id2)!.messages[1].status, 'done');
+  bad.done();
 });

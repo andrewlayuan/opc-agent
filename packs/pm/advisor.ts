@@ -72,9 +72,50 @@ export interface ReviewView {
   latest: number;
   versions: VersionMeta[];
   messages: MessageView[];
+  /** 首版用到的记忆 id 与历史会话 id */
+  context_refs: ContextRefs | null;
 }
 
-export type ReviewSummary = Omit<ReviewView, 'content' | 'refs' | 'versions' | 'messages'> & { turns: number };
+export type ReviewSummary = Omit<ReviewView, 'content' | 'refs' | 'versions' | 'messages' | 'context_refs'> & { turns: number };
+
+export interface ContextRefs {
+  memories: number[];
+  reviews: number[];
+}
+
+/** 由外部（记忆模块）提供的用户上下文；advisor 本身不依赖记忆模块 */
+export interface AdvisorContext {
+  text: string;
+  memoryIds: number[];
+  reviewIds: number[];
+}
+
+export interface AdvisorEvent {
+  kind: 'review_create' | 'turn_ask' | 'turn_revise';
+  refId: number;
+  summary: string;
+  payload: Record<string, unknown>;
+}
+
+export interface AdvisorHooks {
+  context?: (purpose: 'pm', opts: { query: string; excludeReview?: number }) => AdvisorContext;
+  onEvent?: (e: AdvisorEvent) => void;
+}
+
+const clip = (s: string, n: number): string => {
+  const cps = [...s];
+  return cps.length > n ? cps.slice(0, n).join('') : s;
+};
+
+function parseRefs(raw: unknown): ContextRefs | null {
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const v = JSON.parse(raw) as Partial<ContextRefs>;
+    return Array.isArray(v.memories) && Array.isArray(v.reviews) ? { memories: v.memories, reviews: v.reviews } : null;
+  } catch {
+    return null;
+  }
+}
 
 export interface MessageView {
   id: number;
@@ -85,6 +126,7 @@ export interface MessageView {
   version_n: number | null;
   status: 'running' | 'done' | 'error';
   error: string | null;
+  context_refs: ContextRefs | null;
 }
 
 export interface VersionMeta {
@@ -142,12 +184,14 @@ export class PmAdvisor {
   private byName: Map<string, PmSkill>;
   private running = 0;
   private log: (s: string) => void;
+  private hooks: AdvisorHooks;
 
-  constructor(db: DB, llm: Llm, skills: PmSkill[], log: (s: string) => void = (s) => console.log(s)) {
+  constructor(db: DB, llm: Llm, skills: PmSkill[], log: (s: string) => void = (s) => console.log(s), hooks: AdvisorHooks = {}) {
     this.db = db;
     this.llm = llm;
     this.skills = skills;
     this.log = log;
+    this.hooks = hooks;
     this.byName = new Map(skills.map((s) => [s.name, s]));
     // 进程重启时中断的任务不会再完成
     const now = Date.now();
@@ -231,11 +275,14 @@ export class PmAdvisor {
     }
     if (!chosen.length) chosen = ['value-proposition', 'identify-assumptions-new', 'pre-mortem'].filter((s) => this.byName.has(s));
     const refs = useRadar ? this.radarRefs(keywords) : [];
-    this.db.prepare('UPDATE pm_reviews SET skills=?, item_ids=? WHERE id=?').run(JSON.stringify(chosen), JSON.stringify(refs.map((r) => r.id)), id);
+    const ctx = this.userContext({ query: input });
+    this.db
+      .prepare('UPDATE pm_reviews SET skills=?, item_ids=?, context_refs=? WHERE id=?')
+      .run(JSON.stringify(chosen), JSON.stringify(refs.map((r) => r.id)), ctx ? JSON.stringify(ctx.refs) : null, id);
 
     const content = await this.llm.chat(
       [
-        { role: 'system', content: this.systemPrompt(chosen) },
+        { role: 'system', content: this.systemPrompt(chosen, SKILLS_TOTAL_CHARS, false, ctx?.text) },
         { role: 'user', content: this.userPrompt(input, refs, p.prd ? 'prd' : undefined, chosen.length > 3 ? 4500 : 3000) },
       ],
       { maxTokens: chosen.length > 3 ? 8000 : 6000, temperature: 0.5, timeoutMs: 300000 },
@@ -247,6 +294,33 @@ export class PmAdvisor {
       this.db.prepare("UPDATE pm_reviews SET status='done', content=?, finished_at=?, updated_at=? WHERE id=?").run(clean, now, now, id);
       this.db.prepare("INSERT INTO pm_versions(review_id, n, created_at, source, content) VALUES (?, 1, ?, 'ai_initial', ?)").run(id, now, clean);
     });
+    this.emit({
+      kind: 'review_create',
+      refId: id,
+      summary: `评审：${clip(input.replace(/\s+/g, ' '), 80)}（${modeLabel(p.mode)}）`,
+      payload: { input: clip(input, 800), conclusion: conclusionOf(clean, 400) },
+    });
+  }
+
+  /** 取用户上下文；出错或为空时返回 null，不影响评审 */
+  private userContext(opts: { query: string; excludeReview?: number }): { text: string; refs: ContextRefs } | null {
+    if (!this.hooks.context) return null;
+    try {
+      const c = this.hooks.context('pm', opts);
+      if (!c.text) return null;
+      return { text: c.text, refs: { memories: c.memoryIds, reviews: c.reviewIds } };
+    } catch (e) {
+      this.log(`[pm] 读取用户上下文失败，按无上下文继续：${e instanceof Error ? e.message : e}`);
+      return null;
+    }
+  }
+
+  private emit(e: AdvisorEvent): void {
+    try {
+      this.hooks.onEvent?.(e);
+    } catch (err) {
+      this.log(`[pm] 记录交互事件失败：${err instanceof Error ? err.message : err}`);
+    }
   }
 
   /** 第一步：选框架（auto 时）并提取检索关键词 */
@@ -290,7 +364,7 @@ ${input}
       .map((x, i) => ({ n: i + 1, id: x.id, title: x.title, url: x.url, source: x.source }));
   }
 
-  private systemPrompt(chosen: string[], total = SKILLS_TOTAL_CHARS, turn = false): string {
+  private systemPrompt(chosen: string[], total = SKILLS_TOTAL_CHARS, turn = false, ctx = ''): string {
     const perSkill = Math.min(SKILL_MAX_CHARS, Math.floor(total / Math.max(1, chosen.length)));
     const blocks = chosen
       .map((n) => this.byName.get(n))
@@ -300,8 +374,9 @@ ${input}
         return `<skill name="${s.name}">\n${body}\n</skill>`;
       })
       .join('\n\n');
+    const about = ctx ? `## 关于你服务的用户\n${ctx}\n结合用户背景与偏好；如与其过去的决定矛盾，明确指出。\n\n` : '';
     return `你是一位资深的商业化产品经理顾问，有 10 年以上 B2B、B2C 与 AI 产品从 0 到 1 和商业化经验，判断直接、务实。
-下面 <skill> 中是你本次要运用的专业方法框架（来自开源 pm-skills 技能库）。把它们当作方法论使用，而不是逐字照做：
+${about}下面 <skill> 中是你本次要运用的专业方法框架（来自开源 pm-skills 技能库）。把它们当作方法论使用，而不是逐字照做：
 ${turn ? '- 这是多轮对话中的后续一轮：基于「当前文档」和对话历史回应用户；信息不足时写明合理假设，或直接请用户补充。' : '- 这是一次性书面评审，无法向用户追问。信息不足时写明你的合理假设后继续分析，并在结尾列出最需要用户补充的信息。'}
 - 框架中“询问用户 / 等待确认 / 保存或生成文件 / 联网搜索”之类的步骤一律跳过，直接给出结论。
 - 结论要具体、敢下判断、可执行，避免正确的废话；所有数字须标注“估算”并说明依据。
@@ -379,6 +454,7 @@ ${structure}
       version_n: m.version_n == null ? null : Number(m.version_n),
       status: String(m.status) as MessageView['status'],
       error: (m.error as string) ?? null,
+      context_refs: parseRefs(m.context_refs),
     }));
     const latest = versions.length ? versions[versions.length - 1].n : 0;
     return {
@@ -388,6 +464,7 @@ ${structure}
       latest,
       versions,
       messages,
+      context_refs: parseRefs(r.context_refs),
     };
   }
 
@@ -483,8 +560,9 @@ ${structure}
     const hist = (this.db.prepare('SELECT role, kind, content, status FROM pm_messages WHERE review_id=? AND id<? ORDER BY id').all(id, userId) as Row[]).map(
       (m): TurnMsg => ({ role: String(m.role) as TurnMsg['role'], kind: String(m.kind) as TurnMsg['kind'], content: String(m.content ?? ''), status: String(m.status) as TurnMsg['status'] }),
     );
+    const ctx = this.userContext({ query: `${text}\n${clip(String(r.input), 200)}`, excludeReview: id });
     const messages = buildTurnMessages({
-      system: `${this.systemPrompt(skills, TURN_SKILLS_CHARS, true)}\n\n${TURN_PROTOCOL}`,
+      system: `${this.systemPrompt(skills, TURN_SKILLS_CHARS, true, ctx?.text)}\n\n${TURN_PROTOCOL}`,
       input: `<request>\n${String(r.input)}\n</request>`,
       refsText: this.refs(id).map((x) => this.refLine(x)).join('\n'),
       latestN: latest.n,
@@ -497,18 +575,25 @@ ${structure}
     const res = parseTurn(raw, mode);
     const now = Date.now();
     this.tx(() => {
+      const refs = ctx ? JSON.stringify(ctx.refs) : null;
       if (res.kind === 'revise') {
         const n = (this.latestVersion(id)?.n ?? 0) + 1;
         this.db.prepare("INSERT INTO pm_versions(review_id, n, created_at, source, content, message_id, note) VALUES (?, ?, ?, 'ai_revise', ?, ?, ?)").run(id, n, now, res.doc.slice(0, DOC_MAX), mid, res.note);
-        this.db.prepare("UPDATE pm_messages SET kind='revise', content=?, version_n=?, status='done', finished_at=? WHERE id=?").run(res.note, n, now, mid);
+        this.db.prepare("UPDATE pm_messages SET kind='revise', content=?, version_n=?, context_refs=?, status='done', finished_at=? WHERE id=?").run(res.note, n, refs, now, mid);
       } else {
-        this.db.prepare("UPDATE pm_messages SET kind='ask', content=?, status='done', finished_at=? WHERE id=?").run(res.answer, now, mid);
+        this.db.prepare("UPDATE pm_messages SET kind='ask', content=?, context_refs=?, status='done', finished_at=? WHERE id=?").run(res.answer, refs, now, mid);
       }
       this.db.prepare('UPDATE pm_reviews SET updated_at=? WHERE id=?').run(now, id);
     });
+    const brief = clip(text.replace(/\s+/g, ' '), 80);
+    this.emit(
+      res.kind === 'revise'
+        ? { kind: 'turn_revise', refId: id, summary: `要求改写：${brief}`, payload: { text: clip(text, 800), note: res.note } }
+        : { kind: 'turn_ask', refId: id, summary: `追问：${brief}`, payload: { text: clip(text, 800), answer: clip(res.answer, 400) } },
+    );
   }
 
-  private base(r: Row): Omit<ReviewView, 'content' | 'refs' | 'latest' | 'versions' | 'messages'> {
+  private base(r: Row): Omit<ReviewView, 'content' | 'refs' | 'latest' | 'versions' | 'messages' | 'context_refs'> {
     const mode = String(r.mode);
     return {
       id: Number(r.id),
