@@ -3,6 +3,10 @@ import { LoginLimiter, createSession, deleteSession, getSession, safeEqualStr, v
 import { loadConfig } from '../../packages/core/config.ts';
 import { openDb } from '../../packages/core/db.ts';
 import { allowHost } from '../../packages/core/net.ts';
+import { MemoryKeeper } from '../../packs/memory/consolidate.ts';
+import { resolveRefs, userContext } from '../../packs/memory/context.ts';
+import { paragraphDiff, recordEvent } from '../../packs/memory/events.ts';
+import type { EventInput } from '../../packs/memory/events.ts';
 import { analyzeItem, generateBrief, latestBrief, translateItem } from '../../packs/radar/analyze.ts';
 import { GROUPS, collectOnce } from '../../packs/radar/collect.ts';
 import { enrichItem } from '../../packs/radar/enrich.ts';
@@ -13,12 +17,17 @@ import { getInterests, setInterests } from '../../packs/radar/prefs.ts';
 import { getItem, listItems, stats } from '../../packs/radar/query.ts';
 import { Radar } from '../../packs/radar/service.ts';
 import { HttpError, clientIp, parseCookies, readJson, sameOrigin, securityHeaders, sendJson, staticFor } from './http.ts';
+import { handleMemoryApi } from './memory-api.ts';
 
 const cfg = loadConfig({ requireAuth: true });
 const db = openDb(cfg.dbPath);
-const radar = new Radar(db, cfg);
+const radar = new Radar(db, cfg, undefined, { analyzeContext: () => userContext(db, 'analyze').text });
+const keeper = new MemoryKeeper(db, radar.llm);
 const pmSkillsDir = defaultSkillsDir();
-const pm = new PmAdvisor(db, radar.llm, loadPmSkills(pmSkillsDir));
+const pm = new PmAdvisor(db, radar.llm, loadPmSkills(pmSkillsDir), undefined, {
+  context: (_, o) => userContext(db, 'pm', o),
+  onEvent: (e) => record({ ...e, refType: 'review' }),
+});
 const limiter = new LoginLimiter();
 const isHttps = cfg.publicOrigin.startsWith('https://');
 const COOKIE = 'opc_sid';
@@ -57,6 +66,34 @@ function versionNo(s: string): number {
 }
 
 let briefRunning = false;
+
+/** 操作成功后记录交互事件；失败只记日志，不影响原操作的响应 */
+function record(e: EventInput): void {
+  try {
+    if (recordEvent(db, e) !== null) keeper.notify(e.kind);
+  } catch (err) {
+    console.error('[memory] 记录事件失败', err);
+  }
+}
+
+/** 上下文计算出错时按无上下文继续 */
+function safeContext(purpose: 'analyze' | 'brief'): string {
+  try {
+    return userContext(db, purpose).text;
+  } catch (err) {
+    console.error('[memory] 读取用户上下文失败', err);
+    return '';
+  }
+}
+
+function topicLabels(ids: string[]): string[] {
+  const label = Object.fromEntries(radar.topics.map((t) => [t.id, t.label]));
+  return ids.map((t) => label[t] ?? t);
+}
+
+function itemTitle(it: { title: string; title_zh: string | null }): string {
+  return it.title_zh || it.title;
+}
 
 async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL, user: { username: string } | null): Promise<void> {
   const method = req.method ?? 'GET';
@@ -120,6 +157,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       days: intParam(s.get('days'), 1, 365),
       minImportance: intParam(s.get('min'), 1, 5),
       starred: s.get('starred') === '1',
+      relevant: s.get('rel') === '1',
       before: intParam(s.get('before'), 0, Number.MAX_SAFE_INTEGER),
       limit: intParam(s.get('limit'), 1, 100) ?? 30,
     });
@@ -137,8 +175,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const id = idFrom(m);
     if (!getItem(db, id)) throw new HttpError(404, '条目不存在');
     await enrichItem(db, radar.reach, id);
-    await analyzeItem(db, radar.llm, radar.topics, id);
-    return sendJson(res, 200, { item: getItem(db, id) });
+    await analyzeItem(db, radar.llm, radar.topics, id, safeContext('analyze'));
+    const item = getItem(db, id);
+    if (item) record({ kind: 'item_analyze', refType: 'item', refId: id, summary: `手动分析：${itemTitle(item)}`, payload: { topics: item.topics } });
+    return sendJson(res, 200, { item });
   }
   m = p.match(/^\/api\/items\/(\d+)\/translate$/);
   if (m && method === 'POST') {
@@ -146,6 +186,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     if (!getItem(db, id)) throw new HttpError(404, '条目不存在');
     await enrichItem(db, radar.reach, id);
     const translation = await translateItem(db, radar.llm, id);
+    const item = getItem(db, id);
+    if (item) record({ kind: 'item_translate', refType: 'item', refId: id, summary: `翻译全文：${itemTitle(item)}`, payload: {} });
     return sendJson(res, 200, { translation });
   }
   m = p.match(/^\/api\/items\/(\d+)\/star$/);
@@ -154,6 +196,17 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const body = await readJson(req, 1024);
     const r = db.prepare('UPDATE items SET starred=? WHERE id=?').run(body.starred ? 1 : 0, id);
     if (!r.changes) throw new HttpError(404, '条目不存在');
+    const item = getItem(db, id);
+    if (item) {
+      const meta = [topicLabels(item.topics).join('/'), item.importance ? `重要度 ${item.importance}` : ''].filter(Boolean).join('，');
+      record({
+        kind: body.starred ? 'item_star' : 'item_unstar',
+        refType: 'item',
+        refId: id,
+        summary: `${body.starred ? '收藏' : '取消收藏'}：${itemTitle(item)}${meta ? `（${meta}）` : ''}`,
+        payload: { topics: item.topics, importance: item.importance },
+      });
+    }
     return sendJson(res, 200, { ok: true });
   }
 
@@ -171,7 +224,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       const body = await readJson(req, 1024);
       const focus = body.focus ? getInterests(db, radar.topics).topics : [];
       if (body.focus && !focus.length) throw new HttpError(400, '还没有设置「我的关注」');
-      const b = await generateBrief(db, radar.llm, radar.topics, 24, focus);
+      const b = await generateBrief(db, radar.llm, radar.topics, 24, focus, safeContext('brief'));
+      record({ kind: 'brief_generate', refType: 'brief', refId: b.id, summary: `生成简报${focus.length ? `（聚焦：${topicLabels(focus).join('、')}）` : ''}`, payload: { focus } });
       return sendJson(res, 200, { brief: b });
     } finally {
       briefRunning = false;
@@ -181,8 +235,17 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   if (p === '/api/prefs/interests' && method === 'GET') return sendJson(res, 200, { interests: getInterests(db, radar.topics) });
   if (p === '/api/prefs/interests' && method === 'PUT') {
     const body = await readJson(req, 4096);
-    return sendJson(res, 200, { interests: setInterests(db, radar.topics, body) });
+    const before = getInterests(db, radar.topics);
+    const after = setInterests(db, radar.topics, body);
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      const scope = after.topics.length ? topicLabels(after.topics).join('、') : '（无）';
+      const level = after.minImportance ? `重要度 ≥${after.minImportance}` : '重要度不限';
+      record({ kind: 'interests_update', refType: 'prefs', summary: `关注改为：${scope}；${level}`, payload: { before, after } });
+    }
+    return sendJson(res, 200, { interests: after });
   }
+
+  if (await handleMemoryApi({ db, keeper, llmEnabled: radar.llm.enabled }, req, res, method, p)) return;
 
   // ---------- 产品顾问（pm-skills） ----------
   if (p === '/api/pm/meta' && method === 'GET') {
@@ -215,7 +278,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   if (m && method === 'GET') {
     const r = pm.get(idFrom(m));
     if (!r) throw new HttpError(404, '评审不存在');
-    return sendJson(res, 200, { review: r });
+    const review = { ...r, context: resolveRefs(db, r.context_refs), messages: r.messages.map((x) => ({ ...x, context: resolveRefs(db, x.context_refs) })) };
+    return sendJson(res, 200, { review });
   }
   if (m && method === 'DELETE') {
     const id = idFrom(m);
@@ -235,7 +299,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const id = idFrom(m);
     // 40000 字上限：中文 3 字节/字，另留 JSON 转义余量
     const body = await readJson(req, 192 * 1024);
-    const n = pmCall(() => pm.saveManual(id, typeof body.content === 'string' ? body.content : '', body.baseN));
+    const content = typeof body.content === 'string' ? body.content : '';
+    const n = pmCall(() => pm.saveManual(id, content, body.baseN));
+    const prev = pm.version(id, n - 1);
+    record({ kind: 'version_manual', refType: 'review', refId: id, summary: `手动编辑 v${n}`, payload: paragraphDiff(prev?.content ?? '', content.trim()) });
     return sendJson(res, 201, { n });
   }
   m = p.match(/^\/api\/pm\/reviews\/(\d+)\/versions\/(\d+)(\/download)?$/);
@@ -384,10 +451,12 @@ server.listen(cfg.port, cfg.host, () => {
   console.log(`[opc] 产品顾问：${pm.skills.length ? `已加载 ${pm.skills.length} 个 pm-skills（${pmSkillsDir}）` : `未找到 pm-skills（${pmSkillsDir}），运行 scripts/setup-pm-skills.sh`}`);
   console.log(`[opc] 模型：${radar.llm.enabled ? `DeepSeek ${cfg.llm.model}` : '未配置 DEEPSEEK_API_KEY，分析/翻译不可用'}；每 ${cfg.fetchIntervalMin} 分钟采集一次`);
   radar.startSchedule();
+  keeper.start();
 });
 
 function shutdown(): void {
   radar.stop();
+  keeper.stop();
   server.close(() => {
     db.close();
     process.exit(0);
