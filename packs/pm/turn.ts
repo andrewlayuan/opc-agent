@@ -64,6 +64,8 @@ export function pickHistory(msgs: TurnMsg[], budget: number = HISTORY_BUDGET): T
   for (let i = msgs.length - 1; i >= 0; i--) {
     const x = msgs[i];
     if (x.status !== 'done') continue;
+    const next = msgs[i + 1];
+    if (x.role === 'user' && next?.role === 'assistant' && next.status !== 'done') continue;
     const len = chars(x.content).length;
     if (used + len > budget) break;
     used += len;
@@ -83,7 +85,7 @@ export function buildTurnMessages(a: {
   mode: TurnMode;
 }): { role: 'system' | 'user' | 'assistant'; content: string }[] {
   const first = `原始需求：\n${a.input}` + (a.refsText ? `\n\n雷达参考资料（引用时用 [n]）：\n${a.refsText}` : '');
-  return [
+  const list: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
     { role: 'system', content: a.system },
     { role: 'user', content: first },
     { role: 'assistant', content: `当前文档（v${a.latestN}）：\n\n${a.latestDoc}` },
@@ -93,4 +95,12 @@ export function buildTurnMessages(a: {
     })),
     { role: 'user', content: a.text + (a.mode === 'revise' ? '\n\n本轮要求：输出改写后的完整文档' : '') },
   ];
+  // 部分模型不接受相邻的同角色消息（历史被预算截断时可能出现），合并为一条
+  const out: typeof list = [];
+  for (const m of list) {
+    const prev = out[out.length - 1];
+    if (prev && prev.role === m.role && m.role !== 'system') prev.content += `\n\n${m.content}`;
+    else out.push({ ...m });
+  }
+  return out;
 }

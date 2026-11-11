@@ -49,3 +49,24 @@ test('buildTurnMessages：顺序正确，包含最新版全文，revise 时追�
   assert.equal(normMode('rm -rf'), 'auto');
   assert.equal(normMode(undefined), 'auto');
 });
+
+test('pickHistory：丢弃回答失败或仍在进行的那一轮提问', () => {
+  const u = (content: string): TurnMsg => ({ role: 'user', kind: 'ask', content, status: 'done' });
+  const a = (content: string, status: TurnMsg['status'] = 'done'): TurnMsg => ({ role: 'assistant', kind: 'ask', content, status });
+  const out = pickHistory([u('问1'), a('答1'), u('问2'), a('', 'error'), u('问3'), a('答3'), u('问4'), a('', 'running')]);
+  assert.deepEqual(out.map((x) => x.content), ['问1', '答1', '问3', '答3']);
+});
+
+test('buildTurnMessages：合并相邻的同角色消息，保证 user/assistant 交替', () => {
+  const msgs = buildTurnMessages({
+    system: 'S', input: 'i', refsText: '', latestN: 1, latestDoc: 'D', text: '本轮', mode: 'auto',
+    history: [
+      { role: 'assistant', kind: 'ask', content: '被截断后剩下的回答', status: 'done' },
+      { role: 'user', kind: 'ask', content: '上一问', status: 'done' },
+    ],
+  });
+  const roles = msgs.map((x) => x.role);
+  for (let i = 1; i < roles.length; i++) assert.notEqual(roles[i], roles[i - 1], `第 ${i} 条与前一条同为 ${roles[i]}`);
+  assert.match(msgs[2].content, /当前文档（v1）[\s\S]*被截断后剩下的回答/);
+  assert.match(msgs.at(-1)!.content, /上一问[\s\S]*本轮/);
+});

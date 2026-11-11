@@ -151,8 +151,8 @@ messages：
 |---|---|---|---|
 | GET | `/api/pm/reviews/:id` | - | `{review}`，含 messages、versions、latest、content |
 | GET | `/api/pm/reviews/:id/versions/:n` | - | `{version: {n, source, created_at, note, content}}` |
-| POST | `/api/pm/reviews/:id/messages` | `{text, mode}`，最大 16KB | 202 `{messageId}` |
-| POST | `/api/pm/reviews/:id/versions` | `{content, baseN}`，最大 96KB | 201 `{n}` |
+| POST | `/api/pm/reviews/:id/messages` | `{text, mode}`，最大 32KB | 202 `{messageId}` |
+| POST | `/api/pm/reviews/:id/versions` | `{content, baseN}`，最大 192KB | 201 `{n}` |
 | GET | `/api/pm/reviews/:id/versions/:n/download` | - | `text/markdown; charset=utf-8`，以附件形式下载 |
 | GET | `/print/pm/:id/:n` | - | `text/html`，需要登录，未登录跳转登录页 |
 

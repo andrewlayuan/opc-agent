@@ -225,14 +225,16 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   m = p.match(/^\/api\/pm\/reviews\/(\d+)\/messages$/);
   if (m && method === 'POST') {
     const id = idFrom(m);
-    const body = await readJson(req, 16 * 1024);
+    // 4000 字上限按 UTF-8 最坏 4 字节/字计
+    const body = await readJson(req, 32 * 1024);
     const messageId = pmCall(() => pm.ask(id, typeof body.text === 'string' ? body.text : '', body.mode));
     return sendJson(res, 202, { messageId });
   }
   m = p.match(/^\/api\/pm\/reviews\/(\d+)\/versions$/);
   if (m && method === 'POST') {
     const id = idFrom(m);
-    const body = await readJson(req, 96 * 1024);
+    // 40000 字上限：中文 3 字节/字，另留 JSON 转义余量
+    const body = await readJson(req, 192 * 1024);
     const n = pmCall(() => pm.saveManual(id, typeof body.content === 'string' ? body.content : '', body.baseN));
     return sendJson(res, 201, { n });
   }
