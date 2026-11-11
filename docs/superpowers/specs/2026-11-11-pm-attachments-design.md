@@ -140,7 +140,7 @@ END;
   - 本轮：user 消息 = 文字 + 本轮附件文字 + 本轮图片原图（`image_url`）。做法是 `buildTurnMessages` 先生成字符串消息（相邻同角色合并的逻辑不变），advisor 再把最后一条 user 消息换成 `ContentPart[]` 并加上图片。
 - 历史检索与记忆：
   - 附件文字由触发器写入 `history_fts`。
-  - `review_create`、`turn_ask`、`turn_revise` 事件的 payload 新增 `attachments: [{ name, excerpt }]`，excerpt 取前 200 字，经过现有的敏感信息过滤。
+  - `review_create`、`turn_ask`、`turn_revise` 事件的 payload 新增 `attachments: [{ name, excerpt }]`，excerpt 取前 200 字；由服务端在记录事件前用 `hasSensitive` 检查，命中时 excerpt 置空（现有敏感过滤只在整理器输出端，事件写入端没有）。
 
 ## 7. 接口返回
 
