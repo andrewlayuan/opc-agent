@@ -194,6 +194,9 @@ test('多轮：迁移把旧的已完成评审回填为 v1', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-pm-mig-'));
   const file = path.join(dir, 't.db');
   let db = openDb(file);
+  db.exec(`DROP TRIGGER pm_reviews_hi; DROP TRIGGER pm_reviews_hd; DROP TRIGGER pm_versions_hi; DROP TRIGGER pm_messages_hi; DROP TRIGGER pm_messages_hu;
+    DROP TABLE events; DROP TABLE memories; DROP TABLE profile; DROP TABLE memory_changes; DROP TABLE history_fts;
+    ALTER TABLE items DROP COLUMN relevance; ALTER TABLE items DROP COLUMN relevance_zh; ALTER TABLE pm_reviews DROP COLUMN context_refs;`);
   db.exec('DROP TABLE IF EXISTS pm_messages; DROP TABLE IF EXISTS pm_versions; PRAGMA user_version = 3;');
   const cols = db.prepare('PRAGMA table_info(pm_reviews)').all() as { name: string }[];
   if (cols.some((c) => c.name === 'updated_at')) db.exec('ALTER TABLE pm_reviews DROP COLUMN updated_at');

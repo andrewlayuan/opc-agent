@@ -148,6 +148,76 @@ const MIGRATIONS: string[] = [
     FROM pm_reviews WHERE status = 'done' AND content IS NOT NULL;
   UPDATE pm_reviews SET updated_at = coalesce(finished_at, created_at);
   `,
+  `
+  CREATE TABLE events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    ref_type TEXT,
+    ref_id INTEGER,
+    summary TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    consumed_at INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX events_pending ON events(consumed_at, id);
+  CREATE INDEX events_ref ON events(kind, ref_type, ref_id, at);
+  CREATE TABLE memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    content TEXT NOT NULL,
+    manual INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    hits INTEGER NOT NULL DEFAULT 0,
+    last_used_at INTEGER
+  );
+  CREATE TABLE profile (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    content TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL,
+    manual INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT INTO profile(id, content, updated_at) VALUES (1, '', 0);
+  CREATE TABLE memory_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at INTEGER NOT NULL,
+    op TEXT NOT NULL,
+    memory_id INTEGER,
+    kind TEXT,
+    before TEXT,
+    after TEXT,
+    reason TEXT,
+    source TEXT NOT NULL,
+    event_ids TEXT NOT NULL DEFAULT '[]',
+    undone_at INTEGER
+  );
+  CREATE INDEX memory_changes_at ON memory_changes(at DESC);
+  CREATE VIRTUAL TABLE history_fts USING fts5(review_id UNINDEXED, kind UNINDEXED, body, tokenize='trigram');
+  CREATE TRIGGER pm_reviews_hi AFTER INSERT ON pm_reviews BEGIN
+    INSERT INTO history_fts(review_id, kind, body) VALUES (new.id, 'input', new.input);
+  END;
+  CREATE TRIGGER pm_versions_hi AFTER INSERT ON pm_versions BEGIN
+    INSERT INTO history_fts(review_id, kind, body) VALUES (new.review_id, 'version', new.content);
+  END;
+  CREATE TRIGGER pm_messages_hi AFTER INSERT ON pm_messages WHEN new.status = 'done' AND new.content != '' BEGIN
+    INSERT INTO history_fts(review_id, kind, body) VALUES (new.review_id, 'message', new.content);
+  END;
+  CREATE TRIGGER pm_messages_hu AFTER UPDATE OF status ON pm_messages
+    WHEN new.status = 'done' AND old.status != 'done' AND new.content != '' BEGIN
+    INSERT INTO history_fts(review_id, kind, body) VALUES (new.review_id, 'message', new.content);
+  END;
+  CREATE TRIGGER pm_reviews_hd AFTER DELETE ON pm_reviews BEGIN
+    DELETE FROM history_fts WHERE review_id = old.id;
+  END;
+  INSERT INTO history_fts(review_id, kind, body) SELECT id, 'input', input FROM pm_reviews;
+  INSERT INTO history_fts(review_id, kind, body) SELECT review_id, 'version', content FROM pm_versions ORDER BY id;
+  INSERT INTO history_fts(review_id, kind, body) SELECT review_id, 'message', content FROM pm_messages WHERE status = 'done' AND content != '' ORDER BY id;
+  ALTER TABLE items ADD COLUMN relevance INTEGER;
+  ALTER TABLE items ADD COLUMN relevance_zh TEXT;
+  ALTER TABLE pm_reviews ADD COLUMN context_refs TEXT;
+  ALTER TABLE pm_messages ADD COLUMN context_refs TEXT;
+  `,
 ];
 
 export type DB = DatabaseSync;
