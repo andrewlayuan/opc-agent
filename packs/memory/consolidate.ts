@@ -1,7 +1,7 @@
 // 记忆整理：把交互事件提炼成长期记忆与画像
 import type { DB } from '../../packages/core/db.ts';
 import type { ChatMessage, Llm } from '../../packages/core/llm.ts';
-import { PM_EVENT_KINDS, cut } from './events.ts';
+import { PM_EVENT_KINDS, cut, pendingCount } from './events.ts';
 import type { EventKind } from './events.ts';
 import { hasSensitive } from './sensitive.ts';
 import { CONTENT_MAX, PROFILE_MAX, evictOverflow, getProfile, isKind, len, listMemories, logChange, tx } from './store.ts';
@@ -248,4 +248,118 @@ export function validateOps(out: unknown, state: OpsState): { ops: ValidOp[]; pr
     if (p && p !== state.profile.trim() && !hasSensitive(p)) profile = p;
   }
   return { ops, profile };
+}
+
+export interface Clock {
+  now(): number;
+  setTimeout(fn: () => void, ms: number): unknown;
+  clearTimeout(h: unknown): void;
+  setInterval(fn: () => void, ms: number): unknown;
+  clearInterval(h: unknown): void;
+}
+
+const realClock: Clock = {
+  now: () => Date.now(),
+  setTimeout: (fn, ms) => setTimeout(fn, ms).unref(),
+  clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout),
+  setInterval: (fn, ms) => setInterval(fn, ms).unref(),
+  clearInterval: (h) => clearInterval(h as NodeJS.Timeout),
+};
+
+const PM_DELAY = 60_000;
+const RADAR_THRESHOLD = 10;
+const RADAR_MAX_AGE = 30 * 60_000;
+const CHECK_EVERY = 5 * 60_000;
+const START_DELAY = 30_000;
+const PM_KIND_SQL = [...PM_EVENT_KINDS].map((k) => `'${k}'`).join(',');
+
+/** 调度整理：同一时间只跑一个；产品顾问事件 60 秒后整理，雷达事件攒够 10 条或最早一条满 30 分钟时整理 */
+export class MemoryKeeper {
+  private readonly db: DB;
+  private readonly llm: Llm;
+  private readonly log: (s: string) => void;
+  private readonly clock: Clock;
+  private readonly run: () => Promise<ConsolidateResult>;
+  private busy: Promise<ConsolidateResult> | null = null;
+  private again = false;
+  private pmTimer: unknown = null;
+  private startTimer: unknown = null;
+  private checkTimer: unknown = null;
+
+  constructor(db: DB, llm: Llm, opts: { log?: (s: string) => void; clock?: Clock; run?: () => Promise<ConsolidateResult> } = {}) {
+    this.db = db;
+    this.llm = llm;
+    this.log = opts.log ?? ((s) => console.log(s));
+    this.clock = opts.clock ?? realClock;
+    this.run = opts.run ?? (() => consolidateOnce(this.db, this.llm, this.log, this.clock.now()));
+  }
+
+  get running(): boolean {
+    return this.busy !== null;
+  }
+
+  notify(kind: EventKind): void {
+    if (!this.llm.enabled) return;
+    if (PM_EVENT_KINDS.has(kind)) {
+      if (this.pmTimer) return;
+      this.pmTimer = this.clock.setTimeout(() => {
+        this.pmTimer = null;
+        this.trigger();
+      }, PM_DELAY);
+      return;
+    }
+    if (this.radarPending().n >= RADAR_THRESHOLD) this.trigger();
+  }
+
+  start(): void {
+    if (!this.llm.enabled) return;
+    this.startTimer = this.clock.setTimeout(() => {
+      this.startTimer = null;
+      if (pendingCount(this.db) > 0) this.trigger();
+    }, START_DELAY);
+    this.checkTimer = this.clock.setInterval(() => {
+      const r = this.radarPending();
+      if (r.n >= RADAR_THRESHOLD || (r.n > 0 && r.oldest != null && this.clock.now() - r.oldest >= RADAR_MAX_AGE)) this.trigger();
+    }, CHECK_EVERY);
+  }
+
+  stop(): void {
+    if (this.pmTimer) this.clock.clearTimeout(this.pmTimer);
+    if (this.startTimer) this.clock.clearTimeout(this.startTimer);
+    if (this.checkTimer) this.clock.clearInterval(this.checkTimer);
+    this.pmTimer = this.startTimer = this.checkTimer = null;
+  }
+
+  /** 立即整理；正在运行时只标记「跑完再来一次」，返回当前这次的结果 */
+  runNow(): Promise<ConsolidateResult> {
+    if (this.busy) {
+      this.again = true;
+      return this.busy;
+    }
+    this.busy = (async () => {
+      try {
+        let r: ConsolidateResult;
+        do {
+          this.again = false;
+          r = await this.run();
+        } while (this.again || (!r.error && r.events >= BATCH && pendingCount(this.db) > 0));
+        return r;
+      } finally {
+        this.busy = null;
+      }
+    })();
+    return this.busy;
+  }
+
+  private trigger(): void {
+    this.runNow().catch((e) => this.log(`[memory] 整理出错：${errMsg(e)}`));
+  }
+
+  private radarPending(): { n: number; oldest: number | null } {
+    const r = this.db.prepare(`SELECT count(*) AS n, min(at) AS oldest FROM events WHERE consumed_at IS NULL AND kind NOT IN (${PM_KIND_SQL})`).get() as {
+      n: number;
+      oldest: number | null;
+    };
+    return { n: Number(r.n), oldest: r.oldest == null ? null : Number(r.oldest) };
+  }
 }
