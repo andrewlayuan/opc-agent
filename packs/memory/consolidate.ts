@@ -72,14 +72,19 @@ function payloadText(raw: string): string {
 function rejectedContents(db: DB, now: number): string[] {
   const rows = db
     .prepare(
-      `SELECT after FROM memory_changes WHERE source = 'auto' AND op IN ('add', 'update') AND undone_at IS NOT NULL AND at >= ?
+      // 被撤销的自动新增/修改，以及用户手动删除的自动条目（删除未被撤销）
+      `SELECT CASE WHEN op = 'delete' THEN before ELSE after END AS snap FROM memory_changes
+       WHERE at >= ? AND (
+         (source = 'auto' AND op IN ('add', 'update') AND undone_at IS NOT NULL)
+         OR (source = 'manual' AND op = 'delete' AND undone_at IS NULL AND json_extract(before, '$.manual') = 0)
+       )
        ORDER BY id DESC LIMIT ?`,
     )
-    .all(now - REJECT_DAYS * DAY, REJECT_MAX) as { after: string | null }[];
+    .all(now - REJECT_DAYS * DAY, REJECT_MAX) as { snap: string | null }[];
   const out: string[] = [];
   for (const r of rows) {
     try {
-      const c = (JSON.parse(r.after ?? 'null') as { content?: unknown } | null)?.content;
+      const c = (JSON.parse(r.snap ?? 'null') as { content?: unknown } | null)?.content;
       if (typeof c === 'string' && c) out.push(c);
     } catch {
       /* 跳过损坏的记录 */

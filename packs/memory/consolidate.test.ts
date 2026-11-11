@@ -358,3 +358,26 @@ test('consolidateOnce：落库事务失败时 attempts+1 并返回 error，不�
   assert.equal(listMemories(db).length, 0);
   done();
 });
+
+test('consolidateOnce：用户手动删除的自动记忆进 <rejected> 且不会被原样写回；手动条目被删、删除已撤销、超过 30 天的不算', async () => {
+  const { db, done } = tmp();
+  const rejectedOf = (u: string) => u.slice(u.indexOf('<rejected>'), u.indexOf('</rejected>'));
+  const a = autoMem(db, 'interest', '关注端侧模型');
+  deleteMemory(db, a, T - 1000);
+  const b = Number(db.prepare("INSERT INTO memories(kind, content, manual, created_at, updated_at) VALUES ('fact', '手写的事实', 1, ?, ?)").run(T, T).lastInsertRowid);
+  deleteMemory(db, b, T - 900);
+  const c = autoMem(db, 'fact', '删了又恢复的');
+  deleteMemory(db, c, T - 800);
+  undoChange(db, Number((db.prepare('SELECT max(id) AS id FROM memory_changes').get() as { id: number }).id), T - 700);
+  const d = autoMem(db, 'fact', '很久以前删的');
+  deleteMemory(db, d, T - 31 * DAY);
+  recordEvent(db, { kind: 'item_star', refType: 'item', refId: 1, summary: '收藏：端侧模型新进展' }, T);
+  const calls: Msg[][] = [];
+  const r = await consolidateOnce(db, fakeLlm(() => ({ ops: [{ op: 'add', kind: 'interest', content: '关注端侧模型' }], profile: null }), calls), noop, T);
+  const rej = rejectedOf(calls[0][1].content);
+  assert.match(rej, /- 关注端侧模型/);
+  for (const s of ['手写的事实', '删了又恢复的', '很久以前删的']) assert.doesNotMatch(rej, new RegExp(s));
+  assert.equal(r.applied, 0);
+  assert.equal(listMemories(db).some((m) => m.content === '关注端侧模型'), false);
+  done();
+});
