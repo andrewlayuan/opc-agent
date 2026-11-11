@@ -307,3 +307,25 @@ export function recentChanges(db: DB, limit = 50, now = Date.now()): ChangeView[
 export function exportMemory(db: DB, now = Date.now()): { exported_at: number; profile: Profile; memories: Memory[]; changes: ChangeView[] } {
   return { exported_at: now, profile: getProfile(db), memories: listMemories(db), changes: recentChanges(db, 500, now) };
 }
+
+/** 给 MCP 的只读视图：画像 + 按类分组的记忆，按码点截到 maxChars；无数据（含旧库缺表）返回「暂无记忆」 */
+export function profileMarkdown(db: DB, maxChars = 6000): string {
+  let profile = '';
+  let mems: Memory[] = [];
+  try {
+    profile = getProfile(db).content.trim();
+    mems = listMemories(db);
+  } catch {
+    return '暂无记忆';
+  }
+  if (!profile && !mems.length) return '暂无记忆';
+  const parts: string[] = [];
+  if (profile) parts.push(`## 画像\n${profile}`);
+  for (const k of MEMORY_KINDS) {
+    const ms = mems.filter((m) => m.kind === k);
+    if (ms.length) parts.push(`## ${KIND_LABELS[k]}\n${ms.map((m) => `- ${m.content.replace(/\s+/g, ' ')}`).join('\n')}`);
+  }
+  const text = parts.join('\n\n');
+  const cps = [...text];
+  return cps.length <= maxChars ? text : cps.slice(0, maxChars - 1).join('') + '…';
+}

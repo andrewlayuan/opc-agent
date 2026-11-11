@@ -4,6 +4,8 @@ import readline from 'node:readline';
 import { loadConfig } from '../../packages/core/config.ts';
 import { openDb } from '../../packages/core/db.ts';
 import type { DB } from '../../packages/core/db.ts';
+import { recallHistory } from '../../packs/memory/context.ts';
+import { profileMarkdown } from '../../packs/memory/store.ts';
 import { latestBrief } from '../../packs/radar/analyze.ts';
 import { getItem, listItems } from '../../packs/radar/query.ts';
 import type { ItemView } from '../../packs/radar/query.ts';
@@ -61,6 +63,24 @@ export const TOOLS = [
     description: '读取最近一次生成的每日 AI 简报（含编号来源）。',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  {
+    name: 'memory_profile',
+    description: '读取用户画像与记忆（事实、偏好、决定、关注），用于了解用户背景。只读。',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'history_search',
+    description: '检索用户过去的产品评审与讨论，返回 #id 日期 需求摘要｜命中片段｜最新结论。只读。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', minLength: 2, maxLength: 200 },
+        limit: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 function num(v: unknown, def: number, min: number, max: number): number {
@@ -86,8 +106,10 @@ function fmt(items: ItemView[]): string {
     .join('\n\n');
 }
 
-export function callTool(name: string, args: Record<string, unknown>): string {
-  const d = database();
+const day = (t: number) => new Date(t).toISOString().slice(0, 10);
+
+/** d 仅供测试注入；默认打开配置中的只读库 */
+export function callTool(name: string, args: Record<string, unknown>, d: DB = database()): string {
   switch (name) {
     case 'radar_latest': {
       const topic = typeof args.topic === 'string' && TOPIC_IDS.includes(args.topic) ? args.topic : undefined;
@@ -115,6 +137,16 @@ export function callTool(name: string, args: Record<string, unknown>): string {
       if (!b) return '还没有生成过简报。';
       return `${b.content}\n\n来源：\n${b.items.map((x) => `[${x.n}] ${x.title} — ${x.url}`).join('\n')}`;
     }
+    case 'memory_profile':
+      return profileMarkdown(d, 6000);
+    case 'history_search': {
+      const q = typeof args.query === 'string' ? args.query.trim() : '';
+      const n = [...q].length;
+      if (n < 2 || n > 200) throw new Error('query 需为 2–200 字');
+      const hits = recallHistory(d, q, { limit: num(args.limit, 5, 1, 10) });
+      if (!hits.length) return '没有找到相关的历史讨论。';
+      return hits.map((h) => `#${h.review_id} ${day(h.created_at)} ${h.input}｜${h.snippet}｜${h.conclusion}`).join('\n');
+    }
     default:
       throw new Error(`未知工具：${name}`);
   }
@@ -137,7 +169,7 @@ function handle(req: Req): void {
           protocolVersion: typeof params?.protocolVersion === 'string' ? params.protocolVersion : '2025-06-18',
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: 'opc-radar', version: '0.1.0' },
-          instructions: 'OPC Radar：本地 AI 技术情报库。回答 AI 新闻/模型发布/Agent/RAG/记忆/语音等问题时，先用 radar_latest 或 radar_search 查询，引用时附上条目 URL。',
+          instructions: 'OPC Radar：本地 AI 技术情报库。回答 AI 新闻/模型发布/Agent/RAG/记忆/语音等问题时，先用 radar_latest 或 radar_search 查询，引用时附上条目 URL。了解用户背景用 memory_profile，查过去讨论用 history_search。',
         };
         break;
       case 'ping':
