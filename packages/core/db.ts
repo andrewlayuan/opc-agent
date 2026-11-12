@@ -241,6 +241,58 @@ const MIGRATIONS: string[] = [
     INSERT INTO history_fts(review_id, kind, body) VALUES (new.review_id, 'attachment', new.name || char(10) || new.text);
   END;
   `,
+  `
+  CREATE TABLE kb_folders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER REFERENCES kb_folders(id),
+    name TEXT NOT NULL,
+    sort INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX kb_folders_name ON kb_folders(coalesce(parent_id, 0), name);
+
+  CREATE TABLE kb_docs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    folder_id INTEGER REFERENCES kb_folders(id),
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ready',
+    error TEXT,
+    body TEXT NOT NULL DEFAULT '',
+    review_id INTEGER UNIQUE,
+    item_id INTEGER UNIQUE,
+    indexed_rev TEXT,
+    truncated INTEGER NOT NULL DEFAULT 0,
+    file_name TEXT,
+    file_mime TEXT,
+    file_size INTEGER,
+    storage TEXT UNIQUE,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX kb_docs_folder ON kb_docs(folder_id, updated_at DESC);
+
+  CREATE TABLE kb_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id INTEGER NOT NULL REFERENCES kb_docs(id) ON DELETE CASCADE,
+    ord INTEGER NOT NULL,
+    heading TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL,
+    UNIQUE (doc_id, ord)
+  );
+  -- 普通 FTS5 表，rowid = kb_chunks.id，索引标题与正文
+  CREATE VIRTUAL TABLE kb_fts USING fts5(body, tokenize='trigram');
+  CREATE TRIGGER kb_chunks_ai AFTER INSERT ON kb_chunks BEGIN
+    INSERT INTO kb_fts(rowid, body) VALUES (new.id, new.heading || char(10) || new.body);
+  END;
+  CREATE TRIGGER kb_chunks_ad AFTER DELETE ON kb_chunks BEGIN
+    DELETE FROM kb_fts WHERE rowid = old.id;
+  END;
+  CREATE TRIGGER kb_chunks_au AFTER UPDATE ON kb_chunks BEGIN
+    DELETE FROM kb_fts WHERE rowid = old.id;
+    INSERT INTO kb_fts(rowid, body) VALUES (new.id, new.heading || char(10) || new.body);
+  END;
+  `,
 ];
 
 export type DB = DatabaseSync;
