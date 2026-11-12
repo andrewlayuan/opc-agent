@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type http from 'node:http';
+import type { Readable } from 'node:stream';
 
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 
@@ -88,6 +89,56 @@ export function readJson(req: http.IncomingMessage, maxBytes = 64 * 1024): Promi
       }
     });
     req.on('error', reject);
+  });
+}
+
+/**
+ * 把请求体流式写入新文件（0600，已存在则失败）。超限 413、中断或出错 400，失败时删除已写的文件。
+ * 超限时只暂停读取、不销毁请求：销毁会连带断开 socket，413 就发不出去。
+ * 调用方应带 `connection: close` 回应，由 Node 在响应结束后关闭连接。
+ */
+export function readBodyToFile(req: Readable, file: string, maxBytes: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const ws = fs.createWriteStream(file, { mode: 0o600, flags: 'wx' });
+    let size = 0;
+    let ended = false;
+    let opened = false;
+    let failure: Error | null = null;
+    const fail = (e: Error, destroyReq = true) => {
+      if (failure) return;
+      failure = e;
+      if (destroyReq) req.destroy();
+      else req.pause();
+      ws.destroy();
+    };
+    const aborted = () => fail(new HttpError(400, '上传中断'));
+    ws.on('open', () => {
+      opened = true;
+    });
+    ws.on('error', (e) => fail(e));
+    ws.on('close', () => {
+      if (!failure) return resolve(size);
+      if (opened) fs.rmSync(file, { force: true });
+      reject(failure);
+    });
+    req.on('data', (c: Buffer) => {
+      if (failure) return;
+      size += c.length;
+      if (size > maxBytes) return fail(new HttpError(413, '单个文件最大 10MB'), false);
+      if (!ws.write(c)) {
+        req.pause();
+        ws.once('drain', () => req.resume());
+      }
+    });
+    req.on('end', () => {
+      ended = true;
+      if (!failure) ws.end();
+    });
+    req.on('error', aborted);
+    req.on('aborted', aborted);
+    req.on('close', () => {
+      if (!ended) aborted();
+    });
   });
 }
 

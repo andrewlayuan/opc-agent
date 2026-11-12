@@ -1,7 +1,66 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import type http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import { Readable } from 'node:stream';
 import { test } from 'node:test';
-import { clientIp } from './http.ts';
+import { HttpError, clientIp, readBodyToFile } from './http.ts';
+
+function tmpFile(): string {
+  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'opc-http-')), 'up');
+}
+
+function fromChunks(chunks: string[]): Readable {
+  const r = Readable.from(chunks.map((c) => Buffer.from(c)), { objectMode: false });
+  return r;
+}
+
+test('readBodyToFile：写入并返回字节数，文件 0600', async () => {
+  const f = tmpFile();
+  const n = await readBodyToFile(fromChunks(['hello ', '世界']), f, 1024);
+  assert.equal(n, Buffer.byteLength('hello 世界'));
+  assert.equal(fs.readFileSync(f, 'utf8'), 'hello 世界');
+  assert.equal(fs.statSync(f).mode & 0o777, 0o600);
+});
+
+test('readBodyToFile：超限 413 并删除文件', async () => {
+  const f = tmpFile();
+  const r = fromChunks(['aaaaa', 'bbbbb', 'ccccc']);
+  await assert.rejects(readBodyToFile(r, f, 10), (e) => e instanceof HttpError && e.status === 413 && e.message === '单个文件最大 10MB');
+  assert.equal(fs.existsSync(f), false);
+});
+
+test('readBodyToFile：超限时不销毁请求（否则 413 发不出去）', async () => {
+  const f = tmpFile();
+  const r = new Readable({ read() {} });
+  const p = readBodyToFile(r, f, 10);
+  for (const c of ['aaaaa', 'bbbbb', 'ccccc']) r.push(Buffer.from(c));
+  await assert.rejects(p, (e) => e instanceof HttpError && e.status === 413);
+  assert.equal(r.destroyed, false);
+  assert.equal(fs.existsSync(f), false);
+  r.destroy();
+});
+
+test('readBodyToFile：请求出错时 400 上传中断并删除文件', async () => {
+  const f = tmpFile();
+  const r = new Readable({ read() {} });
+  const p = readBodyToFile(r, f, 1024);
+  r.push(Buffer.from('part'));
+  setImmediate(() => r.destroy(new Error('x')));
+  await assert.rejects(p, (e) => e instanceof HttpError && e.status === 400 && e.message === '上传中断');
+  assert.equal(fs.existsSync(f), false);
+});
+
+test('readBodyToFile：未收到 end 就关闭时 400 上传中断并删除文件', async () => {
+  const f = tmpFile();
+  const r = new Readable({ read() {} });
+  const p = readBodyToFile(r, f, 1024);
+  r.push(Buffer.from('part'));
+  setImmediate(() => r.destroy());
+  await assert.rejects(p, (e) => e instanceof HttpError && e.status === 400 && e.message === '上传中断');
+  assert.equal(fs.existsSync(f), false);
+});
 
 function req(remote: string | undefined, xff?: string | string[]): http.IncomingMessage {
   return { socket: { remoteAddress: remote }, headers: xff === undefined ? {} : { 'x-forwarded-for': xff } } as unknown as http.IncomingMessage;

@@ -1,4 +1,6 @@
+import fs from 'node:fs';
 import http from 'node:http';
+import path from 'node:path';
 import { LoginLimiter, createSession, deleteSession, getSession, safeEqualStr, verifyPassword } from '../../packages/core/auth.ts';
 import { loadConfig } from '../../packages/core/config.ts';
 import { openDb } from '../../packages/core/db.ts';
@@ -7,16 +9,19 @@ import { MemoryKeeper } from '../../packs/memory/consolidate.ts';
 import { resolveRefs, touchMemories, userContext } from '../../packs/memory/context.ts';
 import { paragraphDiff, recordEvent } from '../../packs/memory/events.ts';
 import type { EventInput } from '../../packs/memory/events.ts';
+import { hasSensitive } from '../../packs/memory/sensitive.ts';
 import { analyzeItem, generateBrief, latestBrief, translateItem } from '../../packs/radar/analyze.ts';
 import { GROUPS, collectOnce } from '../../packs/radar/collect.ts';
 import { enrichItem } from '../../packs/radar/enrich.ts';
 import { MAX_SELECTED, PmAdvisor, PmError } from '../../packs/pm/advisor.ts';
+import type { AdvisorEvent } from '../../packs/pm/advisor.ts';
+import { AttachmentError, AttachmentStore, LIMITS } from '../../packs/pm/attachments.ts';
 import { exportMarkdown, renderPrintHtml } from '../../packs/pm/render.ts';
 import { defaultSkillsDir, loadPmSkills } from '../../packs/pm/skills.ts';
 import { getInterests, setInterests } from '../../packs/radar/prefs.ts';
 import { getItem, listItems, stats } from '../../packs/radar/query.ts';
 import { Radar } from '../../packs/radar/service.ts';
-import { HttpError, clientIp, parseCookies, readJson, sameOrigin, securityHeaders, sendJson, staticFor } from './http.ts';
+import { HttpError, clientIp, parseCookies, readBodyToFile, readJson, sameOrigin, securityHeaders, sendJson, staticFor } from './http.ts';
 import { handleMemoryApi } from './memory-api.ts';
 
 const cfg = loadConfig({ requireAuth: true });
@@ -24,11 +29,27 @@ const db = openDb(cfg.dbPath);
 const radar = new Radar(db, cfg, undefined, { analyzeContext: () => userContext(db, 'analyze').text });
 const keeper = new MemoryKeeper(db, radar.llm);
 const pmSkillsDir = defaultSkillsDir();
-const pm = new PmAdvisor(db, radar.llm, loadPmSkills(pmSkillsDir), undefined, {
-  context: (_, o) => userContext(db, 'pm', o),
-  onEvent: (e) => record({ ...e, refType: 'review' }),
-  used: (ids) => touchMemories(db, ids),
-});
+const files = new AttachmentStore(db, path.join(cfg.dataDir, 'uploads'), radar.llm);
+const pm = new PmAdvisor(
+  db,
+  radar.llm,
+  loadPmSkills(pmSkillsDir),
+  undefined,
+  {
+    context: (_, o) => userContext(db, 'pm', o),
+    onEvent: (e) => record({ ...scrubAttachments(e), refType: 'review' }),
+    used: (ids) => touchMemories(db, ids),
+  },
+  files,
+);
+
+/** 事件写入前过滤附件摘录中的敏感内容 */
+function scrubAttachments(e: AdvisorEvent): AdvisorEvent {
+  const list = e.payload.attachments;
+  if (!Array.isArray(list)) return e;
+  const attachments = list.map((a: { name: string; excerpt: string }) => (hasSensitive(a.excerpt) ? { ...a, excerpt: '' } : a));
+  return { ...e, payload: { ...e.payload, attachments } };
+}
 const limiter = new LoginLimiter();
 const isHttps = cfg.publicOrigin.startsWith('https://');
 const COOKIE = 'opc_sid';
@@ -55,9 +76,49 @@ function pmCall<T>(fn: () => T): T {
   try {
     return fn();
   } catch (e) {
-    if (e instanceof PmError) throw new HttpError(e.status, e.message);
+    if (e instanceof PmError || e instanceof AttachmentError) throw new HttpError(e.status, e.message);
     throw e;
   }
+}
+
+/** X-File-Name 为 encodeURIComponent 编码的原文件名 */
+function uploadName(req: http.IncomingMessage): string {
+  const raw = req.headers['x-file-name'];
+  if (typeof raw !== 'string' || !raw) throw new HttpError(400, '缺少文件名');
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    throw new HttpError(400, '文件名编码错误');
+  }
+}
+
+function sendAttachmentFile(req: http.IncomingMessage, res: http.ServerResponse, id: number): void {
+  const f = files.file(id);
+  let size: number;
+  try {
+    if (!f) throw new Error('missing');
+    size = fs.statSync(f.path).size;
+  } catch {
+    throw new HttpError(404, '附件不存在');
+  }
+  const image = f.kind === 'image';
+  res.writeHead(200, {
+    'content-type': image ? f.mime : 'application/octet-stream',
+    'content-disposition': `${image ? 'inline' : 'attachment'}; filename="file"; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+    'content-security-policy': "default-src 'none'; sandbox",
+    'cache-control': 'private, max-age=3600',
+    'content-length': size,
+  });
+  if (req.method === 'HEAD') {
+    res.end();
+    return;
+  }
+  const rs = fs.createReadStream(f.path);
+  rs.on('error', (e) => {
+    console.error('[pm] 读取附件失败', e);
+    res.destroy();
+  });
+  rs.pipe(res);
 }
 
 function versionNo(s: string): number {
@@ -274,6 +335,33 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       maxSelected: MAX_SELECTED,
     });
   }
+  if (p === '/api/pm/uploads' && method === 'POST') {
+    if (!String(req.headers['content-type'] || '').startsWith('application/octet-stream')) throw new HttpError(415, '需要 application/octet-stream');
+    const name = uploadName(req);
+    const tmp = files.tmpPath();
+    try {
+      await readBodyToFile(req, tmp, LIMITS.fileMax);
+    } catch (e) {
+      // 剩余请求体不再读取，回应后关闭连接
+      if (e instanceof HttpError && e.status === 413) res.setHeader('connection', 'close');
+      throw e;
+    }
+    const attachment = pmCall(() => files.create(tmp, name));
+    return sendJson(res, 202, { attachment });
+  }
+  m = p.match(/^\/api\/pm\/uploads\/(\d+)$/);
+  if (m && method === 'GET') {
+    const attachment = files.view(idFrom(m));
+    if (!attachment) throw new HttpError(404, '附件不存在');
+    return sendJson(res, 200, { attachment });
+  }
+  if (m && method === 'DELETE') {
+    const id = idFrom(m);
+    pmCall(() => files.remove(id));
+    return sendJson(res, 200, { ok: true });
+  }
+  m = p.match(/^\/api\/pm\/uploads\/(\d+)\/file$/);
+  if (m && (method === 'GET' || method === 'HEAD')) return sendAttachmentFile(req, res, idFrom(m));
   if (p === '/api/pm/reviews' && method === 'GET') return sendJson(res, 200, { reviews: pm.list(30) });
   if (p === '/api/pm/reviews' && method === 'POST') {
     const body = await readJson(req, 32 * 1024);
@@ -284,8 +372,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         presets: body.presets,
         skills: body.skills,
         useRadar: body.useRadar !== false,
+        attachmentIds: body.attachmentIds,
       });
     } catch (e) {
+      if (e instanceof AttachmentError) throw new HttpError(e.status, e.message);
       throw new HttpError(400, e instanceof Error ? e.message : '提交失败');
     }
     return sendJson(res, 202, { id });
@@ -307,7 +397,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const id = idFrom(m);
     // 4000 字上限按 UTF-8 最坏 4 字节/字计
     const body = await readJson(req, 32 * 1024);
-    const messageId = pmCall(() => pm.ask(id, typeof body.text === 'string' ? body.text : '', body.mode));
+    const messageId = pmCall(() => pm.ask(id, typeof body.text === 'string' ? body.text : '', body.mode, body.attachmentIds));
     return sendJson(res, 202, { messageId });
   }
   m = p.match(/^\/api\/pm\/reviews\/(\d+)\/versions$/);
@@ -467,7 +557,23 @@ server.listen(cfg.port, cfg.host, () => {
   console.log(`[opc] 模型：${radar.llm.enabled ? `DeepSeek ${cfg.llm.model}` : '未配置 DEEPSEEK_API_KEY，分析/翻译不可用'}；每 ${cfg.fetchIntervalMin} 分钟采集一次`);
   radar.startSchedule();
   keeper.start();
+  try {
+    const n = files.recover();
+    if (n) console.log(`[pm] ${n} 个附件因重启中断，已标记为失败`);
+  } catch (e) {
+    console.error('[pm] 恢复附件状态失败', e);
+  }
+  cleanupFiles();
+  setInterval(cleanupFiles, 3600000).unref();
 });
+
+function cleanupFiles(): void {
+  try {
+    files.cleanup();
+  } catch (e) {
+    console.error('[pm] 清理附件失败', e);
+  }
+}
 
 function shutdown(): void {
   radar.stop();
