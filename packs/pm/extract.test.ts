@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { buildZip } from './zip.ts';
-import { ExtractError, clampText, decodeText, decodeXml, detectType, extractDocx, extractPdf, extractPptx, extractXlsx } from './extract.ts';
+import { ExtractError, clampText, decodeText, decodeXml, detectType, extractDocx, extractOffice, extractPdf, extractPptx, extractXlsx } from './extract.ts';
 import type { ExecFn } from './extract.ts';
 
 const HEADS: Record<string, Buffer> = {
@@ -221,4 +221,17 @@ test('extractPdf：真实 pdftotext（未安装则跳过）', { skip: !hasPdftot
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('extractOffice：在 worker 中提取，结果与同步版一致', async () => {
+  const buf = buildZip({ 'word/document.xml': W(P(R('第一段')) + P(R('第二段'))) });
+  assert.equal(await extractOffice('docx', buf), extractDocx(buf));
+  await assert.rejects(extractOffice('docx', buildZip({ 'x.xml': '<x/>' })), (e) => e instanceof ExtractError && e.status === 422);
+});
+
+test('extractOffice：构造的未闭合标签（正则回溯平方级）在超时后终止，报 422', async () => {
+  const xml = W('<w:p>'.repeat(200000));
+  const t0 = Date.now();
+  await assert.rejects(extractOffice('docx', buildZip({ 'word/document.xml': xml }), 500), (e) => e instanceof ExtractError && e.status === 422 && e.message === '文件损坏或结构不支持');
+  assert.ok(Date.now() - t0 < 5000, `耗时 ${Date.now() - t0}ms`);
 });

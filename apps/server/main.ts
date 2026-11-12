@@ -21,7 +21,7 @@ import { defaultSkillsDir, loadPmSkills } from '../../packs/pm/skills.ts';
 import { getInterests, setInterests } from '../../packs/radar/prefs.ts';
 import { getItem, listItems, stats } from '../../packs/radar/query.ts';
 import { Radar } from '../../packs/radar/service.ts';
-import { HttpError, clientIp, parseCookies, readBodyToFile, readJson, sameOrigin, securityHeaders, sendJson, staticFor } from './http.ts';
+import { HttpError, clientIp, contentDisposition, parseCookies, readBodyToFile, readJson, sameOrigin, securityHeaders, sendJson, staticFor } from './http.ts';
 import { handleMemoryApi } from './memory-api.ts';
 
 const cfg = loadConfig({ requireAuth: true });
@@ -104,7 +104,7 @@ function sendAttachmentFile(req: http.IncomingMessage, res: http.ServerResponse,
   const image = f.kind === 'image';
   res.writeHead(200, {
     'content-type': image ? f.mime : 'application/octet-stream',
-    'content-disposition': `${image ? 'inline' : 'attachment'}; filename="file"; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+    'content-disposition': contentDisposition(f.name, image),
     'content-security-policy': "default-src 'none'; sandbox",
     'cache-control': 'private, max-age=3600',
     'content-length': size,

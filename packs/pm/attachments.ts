@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { DB } from '../../packages/core/db.ts';
 import type { Llm } from '../../packages/core/llm.ts';
-import { ExtractError, MIME, clampText, decodeText, detectType, extractDocx, extractPdf, extractPptx, extractXlsx, realExec } from './extract.ts';
+import { ExtractError, MIME, OFFICE_TIMEOUT_MS, clampText, decodeText, detectType, extractOffice, extractPdf, realExec } from './extract.ts';
 import type { ExecFn, Format } from './extract.ts';
 
 export const LIMITS = {
@@ -96,17 +96,19 @@ export class AttachmentStore {
   private readonly log: (s: string) => void;
   private readonly exec: ExecFn;
   private readonly concurrency: number;
+  private readonly officeTimeoutMs: number;
   private queue: number[] = [];
   private active = 0;
   private waiters: (() => void)[] = [];
 
-  constructor(db: DB, dir: string, llm: Port, opts: { log?: (s: string) => void; exec?: ExecFn; concurrency?: number } = {}) {
+  constructor(db: DB, dir: string, llm: Port, opts: { log?: (s: string) => void; exec?: ExecFn; concurrency?: number; officeTimeoutMs?: number } = {}) {
     this.db = db;
     this.dir = dir;
     this.llm = llm;
     this.log = opts.log ?? ((s) => console.error(s));
     this.exec = opts.exec ?? realExec;
     this.concurrency = opts.concurrency ?? 2;
+    this.officeTimeoutMs = opts.officeTimeoutMs ?? OFFICE_TIMEOUT_MS;
   }
 
   private ensureDir(): void {
@@ -136,7 +138,10 @@ export class AttachmentStore {
       const name = sanitizeName(rawName);
       let det;
       try {
-        det = detectType(fs.readFileSync(tmp), name);
+        const buf = fs.readFileSync(tmp);
+        det = detectType(buf, name);
+        // spec 4.2：文本须能严格按 UTF-8 解码，否则上传时就返回 415，而不是先收下再在后台失败
+        if (det.format === 'text') decodeText(buf);
       } catch (e) {
         if (e instanceof ExtractError) throw new AttachmentError(e.status, e.message);
         throw e;
@@ -317,9 +322,7 @@ export class AttachmentStore {
     else {
       const buf = fs.readFileSync(file);
       if (format === 'text') text = decodeText(buf);
-      else if (format === 'docx') text = extractDocx(buf);
-      else if (format === 'xlsx') text = extractXlsx(buf);
-      else if (format === 'pptx') text = extractPptx(buf);
+      else if (format === 'docx' || format === 'xlsx' || format === 'pptx') text = await extractOffice(format, buf, this.officeTimeoutMs);
       else throw new Error('不支持的文件类型');
     }
     return clampText(text, DOC_CHARS);

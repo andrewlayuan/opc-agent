@@ -1,6 +1,7 @@
 /** 附件类型判断与文字提取（txt / docx / xlsx / pptx / pdf）；不信任浏览器声明的类型 */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { Worker } from 'node:worker_threads';
 import { openZip } from './zip.ts';
 
 export class ExtractError extends Error {
@@ -226,6 +227,38 @@ export function extractPptx(buf: Buffer): string {
         return [`## 第 ${no} 页`, ...lines].join('\n');
       })
       .join('\n\n');
+  });
+}
+
+// ---------------- worker 隔离 ----------------
+export const OFFICE_TIMEOUT_MS = 20000;
+
+/**
+ * 在 worker 中运行 docx / xlsx / pptx 提取：超时或内存超限就终止 worker，报 422「文件损坏或结构不支持」。
+ * 正则对构造的未闭合标签是平方级，放在主线程会卡住整个服务。
+ */
+export function extractOffice(format: 'docx' | 'xlsx' | 'pptx', buf: Buffer, timeoutMs: number = OFFICE_TIMEOUT_MS): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL('./office-worker.ts', import.meta.url), {
+      workerData: { format, buf },
+      resourceLimits: { maxOldGenerationSizeMb: 512 },
+      stdout: true,
+      stderr: true,
+    });
+    let done = false;
+    const finish = (fn: () => void) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      fn();
+      void w.terminate();
+    };
+    const timer = setTimeout(() => finish(() => reject(new ExtractError(422, BROKEN))), timeoutMs);
+    w.on('message', (m: { ok: true; text: string } | { ok: false; status: number; message: string }) =>
+      finish(() => (m.ok ? resolve(m.text) : reject(new ExtractError(m.status, m.message || BROKEN)))),
+    );
+    w.on('error', () => finish(() => reject(new ExtractError(422, BROKEN))));
+    w.on('exit', () => finish(() => reject(new ExtractError(422, BROKEN))));
   });
 }
 

@@ -9,6 +9,7 @@ import type { ChatMessage, ContentPart, Llm } from '../../packages/core/llm.ts';
 import { AttachmentError, AttachmentStore, LIMITS, sanitizeName } from './attachments.ts';
 import type { AttachmentView } from './attachments.ts';
 import type { ExecFn } from './extract.ts';
+import { buildZip } from './zip.ts';
 
 function tmpDb(): { db: DB; dir: string; done: () => void } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-att-'));
@@ -36,10 +37,10 @@ const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a
 type FakeLlm = { enabled: boolean; chat: (m: ChatMessage[], o?: Record<string, unknown>) => Promise<string> };
 const describeLlm = (out = '图中写着：专业版 ¥99/月'): FakeLlm => ({ enabled: true, chat: async () => out });
 
-function setupStore(llm: FakeLlm = describeLlm(), exec?: ExecFn) {
+function setupStore(llm: FakeLlm = describeLlm(), exec?: ExecFn, officeTimeoutMs?: number) {
   const t = tmpDb();
   const dir = path.join(t.dir, 'uploads');
-  const store = new AttachmentStore(t.db, dir, llm as unknown as Llm, { log: () => {}, exec });
+  const store = new AttachmentStore(t.db, dir, llm as unknown as Llm, { log: () => {}, exec, officeTimeoutMs });
   return { ...t, store, uploads: dir };
 }
 function put(store: AttachmentStore, name: string, buf: Buffer | string, now?: number): AttachmentView {
@@ -90,6 +91,8 @@ test('create：超 10MB 413、svg 415 时删除 tmp，不入库', () => {
     ['big.txt', Buffer.alloc(LIMITS.fileMax + 1, 0x61), 413, '单个文件最大 10MB'],
     ['a.svg', Buffer.from('<svg/>'), 415, '不支持的文件类型'],
     ['a.doc', Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 1, 2]), 415, '旧版 Office 文件请另存为 docx / xlsx / pptx'],
+    ['gbk.txt', Buffer.from([0xc4, 0xe3, 0xba, 0xc3]), 415, '请另存为 UTF-8 文本'],
+    ['late-nul.txt', Buffer.concat([Buffer.alloc(9000, 0x61), Buffer.from([0])]), 415, '请另存为 UTF-8 文本'],
   ] as const) {
     const tmp = store.tmpPath();
     fs.writeFileSync(tmp, buf);
@@ -239,5 +242,19 @@ test('cleanup：删除超过 24 小时未关联的附件和无主文件，保留
   for (const r of storages()) assert.ok(fs.existsSync(path.join(uploads, r.storage)));
   assert.equal(fs.existsSync(path.join(uploads, before.find((r) => r.id === orphan)!.storage)), false);
   assert.ok(fs.existsSync(path.join(uploads, 'e'.repeat(32))));
+  done();
+});
+
+test('create：docx 在 worker 中提取；构造的未闭合标签超时后为 error，不卡主线程', async () => {
+  const { store, done } = setupStore(describeLlm(), undefined, 300);
+  const ok = put(store, '纪要.docx', buildZip({ 'word/document.xml': '<w:document><w:body><w:p><w:r><w:t>用户最在意交付速度</w:t></w:r></w:p></w:body></w:document>' }));
+  const bad = put(store, '炸弹.docx', buildZip({ 'word/document.xml': '<w:p>'.repeat(200000) }));
+  let ticks = 0;
+  const iv = setInterval(() => ticks++, 20);
+  await store.idle();
+  clearInterval(iv);
+  assert.ok(ticks >= 5, `主线程应保持响应（ticks=${ticks}）`);
+  assert.deepEqual([store.view(ok.id)!.status, store.view(ok.id)!.chars], ['ready', 9]);
+  assert.deepEqual([store.view(bad.id)!.status, store.view(bad.id)!.error], ['error', '文件损坏或结构不支持']);
   done();
 });

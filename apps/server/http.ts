@@ -142,6 +142,12 @@ export function readBodyToFile(req: Readable, file: string, maxBytes: number): P
   });
 }
 
+/** 下载头：RFC 5987 的 filename*（encodeURIComponent 不编码 ' ( ) *，需补上），ASCII 兜底名固定为 file */
+export function contentDisposition(name: string, inline: boolean): string {
+  const enc = encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${inline ? 'inline' : 'attachment'}; filename="file"; filename*=UTF-8''${enc}`;
+}
+
 export function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   const data = Buffer.from(JSON.stringify(body));
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': data.length });

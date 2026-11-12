@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { test } from 'node:test';
-import { HttpError, clientIp, readBodyToFile } from './http.ts';
+import { HttpError, clientIp, contentDisposition, readBodyToFile } from './http.ts';
 
 function tmpFile(): string {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'opc-http-')), 'up');
@@ -82,4 +82,10 @@ test('信任代理：非本机来源忽略头，伪造或空值回退到 socket'
   assert.equal(clientIp(req('8.8.8.8', '1.2.3.4'), true), '8.8.8.8');
   assert.equal(clientIp(req('127.0.0.1', ''), true), '127.0.0.1');
   assert.equal(clientIp(req('127.0.0.1', 'not-an-ip'), true), '127.0.0.1');
+});
+
+test('contentDisposition：RFC 5987 编码（含 \' ( ) *），ASCII 兜底名为 file', () => {
+  assert.equal(contentDisposition("it's (1)*.pdf", false), "attachment; filename=\"file\"; filename*=UTF-8''it%27s%20%281%29%2A.pdf");
+  assert.equal(contentDisposition('调研 😀.png', true), "inline; filename=\"file\"; filename*=UTF-8''%E8%B0%83%E7%A0%94%20%F0%9F%98%80.png");
+  assert.doesNotMatch(contentDisposition('a\r\nSet-Cookie: x', false), /[\r\n]/);
 });
