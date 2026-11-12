@@ -1,16 +1,8 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { test } from 'node:test';
-import { openDb } from '../../packages/core/db.ts';
+import { tmpKbDb } from './testutil.ts';
 import type { DB } from '../../packages/core/db.ts';
 
-export function tmpKbDb(): { db: DB; dir: string; done: () => void } {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-kb-'));
-  const db = openDb(path.join(dir, 't.db'));
-  return { db, dir, done: () => (db.close(), fs.rmSync(dir, { recursive: true, force: true })) };
-}
 
 const count = (db: DB, sql: string, ...a: (string | number)[]) => (db.prepare(sql).get(...a) as { n: number }).n;
 
