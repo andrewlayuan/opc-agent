@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 import { buildZip } from './zip.ts';
-import { ExtractError, clampText, decodeText, decodeXml, detectType, extractDocx, extractPptx, extractXlsx } from './extract.ts';
+import { ExtractError, clampText, decodeText, decodeXml, detectType, extractDocx, extractPdf, extractPptx, extractXlsx } from './extract.ts';
+import type { ExecFn } from './extract.ts';
 
 const HEADS: Record<string, Buffer> = {
   png: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]),
@@ -142,4 +147,78 @@ test('clampText：超过 2 万字截取并记录原长', () => {
   assert.deepEqual(clampText('字'.repeat(20001)), { text: '字'.repeat(20000), origChars: 20001 });
   assert.deepEqual(clampText('  短  '), { text: '短', origChars: null });
   assert.deepEqual(clampText('😀😀😀', 2), { text: '😀😀', origChars: 3 });
+});
+
+// ---------------- PDF ----------------
+type ExecCall = { file: string; args: string[]; opts: unknown };
+const fakeExec = (impl: () => Promise<{ stdout: string; stderr: string }>, calls: ExecCall[] = []): ExecFn => async (file, args, opts) => {
+  calls.push({ file, args, opts });
+  return impl();
+};
+const rejectWith = (props: Record<string, unknown>) => () => Promise.reject(Object.assign(new Error(String(props.message ?? 'x')), props));
+async function pdfMsg(exec: ExecFn): Promise<string> {
+  try {
+    await extractPdf('/x/a', exec);
+  } catch (e) {
+    assert.ok(e instanceof ExtractError);
+    assert.equal(e.status, 422);
+    return e.message;
+  }
+  return '';
+}
+
+test('extractPdf：参数固定、不经 shell', async () => {
+  const calls: ExecCall[] = [];
+  const out = await extractPdf('/x/a', fakeExec(async () => ({ stdout: '第一页的文字内容足够长了吧\f第二页的内容也要有一些文字', stderr: '' }), calls));
+  assert.deepEqual(calls, [{ file: 'pdftotext', args: ['-enc', 'UTF-8', '-l', '200', '/x/a', '-'], opts: { timeout: 20000, maxBuffer: 2097152, killSignal: 'SIGKILL' } }]);
+  assert.equal(out, '第一页的文字内容足够长了吧\n\n第二页的内容也要有一些文字');
+});
+
+test('extractPdf：ENOENT、超时、密码、扫描件分别给出 spec 文案', async () => {
+  assert.equal(await pdfMsg(fakeExec(rejectWith({ code: 'ENOENT' }))), '服务器未安装 PDF 解析工具（poppler-utils）');
+  assert.equal(await pdfMsg(fakeExec(rejectWith({ killed: true, signal: 'SIGKILL' }))), 'PDF 解析超时');
+  assert.equal(await pdfMsg(fakeExec(rejectWith({ code: 1, stderr: 'Command Line Error: Incorrect password' }))), 'PDF 有密码保护');
+  assert.equal(await pdfMsg(fakeExec(async () => ({ stdout: ' \n\f ', stderr: '' }))), '未提取到文字，可能是扫描件，请截图上传');
+  assert.equal(await pdfMsg(fakeExec(rejectWith({ code: 1, stderr: 'Syntax Error: broken' }))), '文件损坏或结构不支持');
+});
+
+test('extractPdf：maxBuffer 超限时用已读到的内容', async () => {
+  const stdout = '前面的内容……足够长的文字内容超过二十个字了吧应该是的';
+  const out = await extractPdf('/x/a', fakeExec(rejectWith({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', stdout })));
+  assert.ok(out.startsWith('前面的内容'));
+});
+
+/** 手写最小 PDF：一页、Helvetica、一行文字；xref 偏移按实际字节计算 */
+function minimalPdf(text: string): Buffer {
+  const stream = `BT /F1 24 Tf 72 720 Td (${text}) Tj ET`;
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  let body = '%PDF-1.4\n';
+  const offsets: number[] = [];
+  objs.forEach((o, i) => {
+    offsets.push(Buffer.byteLength(body));
+    body += `${i + 1} 0 obj\n${o}\nendobj\n`;
+  });
+  const xref = Buffer.byteLength(body);
+  body += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
+  body += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(body, 'latin1');
+}
+const hasPdftotext = spawnSync('pdftotext', ['-v']).error == null;
+
+test('extractPdf：真实 pdftotext（未安装则跳过）', { skip: !hasPdftotext }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-pdf-'));
+  const file = path.join(dir, 'a');
+  fs.writeFileSync(file, minimalPdf('Hello OPC attachments test'));
+  try {
+    assert.match(await extractPdf(file), /Hello OPC attachments test/);
+    assert.equal(detectType(fs.readFileSync(file), 'x').format, 'pdf');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -1,4 +1,6 @@
 /** 附件类型判断与文字提取（txt / docx / xlsx / pptx / pdf）；不信任浏览器声明的类型 */
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { openZip } from './zip.ts';
 
 export class ExtractError extends Error {
@@ -225,4 +227,35 @@ export function extractPptx(buf: Buffer): string {
       })
       .join('\n\n');
   });
+}
+
+// ---------------- pdf ----------------
+export type ExecFn = (file: string, args: string[], opts: { timeout: number; maxBuffer: number; killSignal: 'SIGKILL' }) => Promise<{ stdout: string; stderr: string }>;
+
+const execFileP = promisify(execFile);
+export const realExec: ExecFn = async (file, args, opts) => {
+  const r = await execFileP(file, args, { ...opts, encoding: 'utf8', windowsHide: true });
+  return { stdout: String(r.stdout), stderr: String(r.stderr) };
+};
+
+export const PDF_MISSING = '服务器未安装 PDF 解析工具（poppler-utils）';
+export const PDF_TIMEOUT = 'PDF 解析超时';
+export const PDF_PASSWORD = 'PDF 有密码保护';
+export const PDF_SCANNED = '未提取到文字，可能是扫描件，请截图上传';
+
+/** 调用 pdftotext（不经 shell、限时、限输出），最多读 200 页 */
+export async function extractPdf(file: string, exec: ExecFn = realExec): Promise<string> {
+  let stdout: string;
+  try {
+    stdout = (await exec('pdftotext', ['-enc', 'UTF-8', '-l', '200', file, '-'], { timeout: 20000, maxBuffer: 2 * 1024 * 1024, killSignal: 'SIGKILL' })).stdout;
+  } catch (e) {
+    const err = e as { code?: unknown; killed?: boolean; signal?: string; stderr?: unknown; stdout?: unknown; message?: string };
+    if (err.code === 'ENOENT') throw new ExtractError(422, PDF_MISSING);
+    if (err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') stdout = String(err.stdout ?? '');
+    else if (err.killed || err.signal === 'SIGKILL') throw new ExtractError(422, PDF_TIMEOUT);
+    else if (/Incorrect password/i.test(`${String(err.stderr ?? '')}\n${err.message ?? ''}`)) throw new ExtractError(422, PDF_PASSWORD);
+    else throw new ExtractError(422, BROKEN);
+  }
+  if ([...stdout.replace(/\s+/g, '')].length < 20) throw new ExtractError(422, PDF_SCANNED);
+  return stdout.replace(/\f/g, '\n\n').trim();
 }
