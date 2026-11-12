@@ -85,6 +85,15 @@ test('create：txt 处理成 ready，文件 0600、目录 0700，存储名为 32
   done();
 });
 
+test('create：文档提取不到文字时标记为 error，不当作 ready', async () => {
+  const { store, done } = setupStore();
+  const v = put(store, '空白.txt', ' \n\t ');
+  await store.idle();
+  const r = store.view(v.id)!;
+  assert.deepEqual([r.status, r.error], ['error', '未提取到文字内容']);
+  done();
+});
+
 test('create：超 10MB 413、svg 415 时删除 tmp，不入库', () => {
   const { db, store, done } = setupStore();
   for (const [name, buf, status, msg] of [

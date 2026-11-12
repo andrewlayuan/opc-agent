@@ -129,6 +129,38 @@ test('extractXlsx：按 workbook 顺序输出多个工作表，共享字符串�
   assert.ok(w.includes('（已截断）'));
 });
 
+test('extractXlsx：主命名空间带前缀（OpenXML SDK 生成的 x: 前缀）也能读出', () => {
+  const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  const buf = buildZip({
+    'xl/workbook.xml': `\uFEFF<x:workbook xmlns:x="${NS}"><x:sheets><x:sheet name="付费设备分析" sheetId="1" r:id="R1" xmlns:r="r" /></x:sheets></x:workbook>`,
+    'xl/_rels/workbook.xml.rels': '\uFEFF<Relationships><Relationship Type="ws" Target="/xl/worksheets/sheet1.xml" Id="R1" /></Relationships>',
+    'xl/sharedStrings.xml': `<x:sst xmlns:x="${NS}"><x:si><x:t>设备</x:t></x:si></x:sst>`,
+    'xl/worksheets/sheet1.xml': `<x:worksheet xmlns:x="${NS}"><x:sheetData><x:row r="1"><x:c r="A1" s="2" /><x:c r="B1" s="2" /></x:row><x:row r="2"><x:c r="A2" t="str"><x:v>23台付费设备</x:v></x:c><x:c r="B2" t="s"><x:v>0</x:v></x:c><x:c r="C2" t="n"><x:v>0.35</x:v></x:c></x:row><x:row r="3"><x:c r="B3" t="inlineStr"><x:is><x:t>行内</x:t></x:is></x:c></x:row></x:sheetData></x:worksheet>`,
+  });
+  assert.equal(extractXlsx(buf), '## 付费设备分析\n23台付费设备 | 设备 | 0.35\n | 行内');
+});
+
+test('extractXlsx：日期格式的数字单元格转成日期（自定义格式、内置格式、带时间、1904 纪年）', () => {
+  const styles = (numFmts: string, xfIds: number[]) =>
+    `<styleSheet><numFmts>${numFmts}</numFmts><cellStyleXfs><xf numFmtId="14"/></cellStyleXfs><cellXfs>${xfIds.map((id) => `<xf numFmtId="${id}" xfId="0"><alignment/></xf>`).join('')}</cellXfs></styleSheet>`;
+  const book = (wbPr: string, cells: string) =>
+    buildZip({
+      'xl/workbook.xml': `<workbook xmlns:r="r">${wbPr}<sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+      'xl/_rels/workbook.xml.rels': '<Relationships><Relationship Id="rId1" Type="ws" Target="worksheets/sheet1.xml"/></Relationships>',
+      'xl/styles.xml': styles('<numFmt numFmtId="164" formatCode="yyyy-mm-dd"/><numFmt numFmtId="165" formatCode="0.0&quot;天&quot;"/><numFmt numFmtId="166" formatCode="[h]:mm"/>', [0, 164, 14, 22, 10, 165, 166, 21]),
+      'xl/worksheets/sheet1.xml': SHEET(`<row r="1">${cells}</row>`),
+    });
+  const cells =
+    '<c r="A1" s="1"><v>46337</v></c><c r="B1" s="2"><v>46337</v></c><c r="C1" s="3"><v>46337.5</v></c><c r="D1" s="4"><v>0.35</v></c>' +
+    '<c r="E1" s="0"><v>46337</v></c><c r="F1" s="1" t="str"><v>待定</v></c><c r="G1" s="5"><v>3</v></c><c r="H1" s="6"><v>1.5</v></c><c r="I1" s="7"><v>0.75</v></c>';
+  assert.equal(extractXlsx(book('', cells)), '## S\n2026-11-11 | 2026-11-11 | 2026-11-11 12:00 | 0.35 | 46337 | 待定 | 3 | 1.5 | 18:00');
+  assert.equal(extractXlsx(book('<workbookPr date1904="1"/>', '<c r="A1" s="1"><v>0</v></c>')), '## S\n1904-01-01');
+});
+
+test('extractXlsx：所有工作表都没有内容时返回空串', () => {
+  assert.equal(extractXlsx(xlsx([{ name: '空表', target: 'worksheets/sheet1.xml', xml: SHEET('<row r="1"><c r="A1" s="1"/></row>') }], [])), '');
+});
+
 test('extractPptx：按页号数字排序（slide10 在 slide2 之后）', () => {
   const slide = (t: string) => `<p:sld><a:p><a:r><a:t>${t}</a:t></a:r><a:r><a:t>!</a:t></a:r></a:p><a:p><a:r><a:t>次行</a:t></a:r></a:p></p:sld>`;
   const out = extractPptx(

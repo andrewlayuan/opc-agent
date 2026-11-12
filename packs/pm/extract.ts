@@ -36,6 +36,7 @@ export const UNSUPPORTED = '不支持的文件类型';
 export const NOT_UTF8 = '请另存为 UTF-8 文本';
 export const LEGACY_OFFICE = '旧版 Office 文件请另存为 docx / xlsx / pptx';
 export const BROKEN = '文件损坏或结构不支持';
+export const NO_TEXT = '未提取到文字内容';
 const TEXT_EXT = new Set(['txt', 'md', 'markdown', 'csv', 'json']);
 
 const det = (format: Format): Detected => ({ format, mime: MIME[format], kind: ['png', 'jpeg', 'gif', 'webp'].includes(format) ? 'image' : 'doc' });
@@ -159,11 +160,56 @@ function colIndex(ref: string | undefined): number | null {
   return n - 1;
 }
 
+const SML_NS = /xmlns:([A-Za-z_][\w.-]*)="(?:http:\/\/schemas\.openxmlformats\.org\/spreadsheetml\/2006\/main|http:\/\/purl\.oclc\.org\/ooxml\/spreadsheetml\/main)"/;
+
+/** 主命名空间可能带前缀（如 OpenXML SDK 写成 <x:row>），去掉该前缀后再按元素名匹配 */
+function smlXml(buf: Buffer): string {
+  const xml = buf.toString('utf8');
+  const p = SML_NS.exec(xml)?.[1];
+  return p ? xml.replace(new RegExp(`<(/?)${p.replace(/\./g, '\\.')}:`, 'g'), '<$1') : xml;
+}
+
+// 内置日期/时间格式（46 为 [h]:mm:ss 时长，不算日期）
+const DATE_FMT_IDS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 45, 47, 50, 51, 52, 53, 54, 55, 56, 57, 58]);
+
+function isDateCode(code: string): boolean {
+  if (/\[[hms]+\]/i.test(code)) return false;
+  return /[ymdhs]/i.test(code.replace(/"[^"]*"|\\.|\[[^\]]*\]/g, ''));
+}
+
+/** 读 styles.xml，返回数字格式为日期/时间的单元格样式下标 */
+function dateStyles(zip: ReturnType<typeof openZip>): Set<number> {
+  const out = new Set<number>();
+  if (!zip.has('xl/styles.xml')) return out;
+  const xml = smlXml(zip.read('xl/styles.xml'));
+  const custom = new Map<number, string>();
+  for (const m of xml.matchAll(/<numFmt\b[^>]*>/g)) {
+    const a = attrs(m[0]);
+    custom.set(Number(a.numFmtId), a.formatCode ?? '');
+  }
+  const xfs = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/.exec(xml)?.[1] ?? '';
+  [...xfs.matchAll(/<xf\b[^>]*>/g)].forEach((m, i) => {
+    const id = Number(attrs(m[0]).numFmtId ?? 0);
+    const code = custom.get(id);
+    if (code !== undefined ? isDateCode(code) : DATE_FMT_IDS.has(id)) out.add(i);
+  });
+  return out;
+}
+
+/** Excel 序列号转日期：1900 纪年以 1899-12-30 为 0；1904 纪年再加 1462 天 */
+function serialDate(v: string, base1904: boolean): string {
+  const n = Number(v);
+  if (!v.trim() || !Number.isFinite(n) || n < 0 || n > 2958465) return v;
+  const iso = new Date(Date.UTC(1899, 11, 30) + Math.round((n + (base1904 ? 1462 : 0)) * 86400000)).toISOString();
+  if (n < 1 && !base1904) return iso.slice(11, 16);
+  return n % 1 ? `${iso.slice(0, 10)} ${iso.slice(11, 16)}` : iso.slice(0, 10);
+}
+
 export function extractXlsx(buf: Buffer): string {
   return office(() => {
     const zip = openZip(buf);
     if (!zip.has('xl/workbook.xml')) throw new ExtractError(422, BROKEN);
-    const wb = zip.read('xl/workbook.xml').toString('utf8');
+    const wb = smlXml(zip.read('xl/workbook.xml'));
     const rels = new Map<string, string>();
     if (zip.has('xl/_rels/workbook.xml.rels')) {
       for (const m of zip.read('xl/_rels/workbook.xml.rels').toString('utf8').matchAll(/<Relationship\b[^>]*>/g)) {
@@ -172,15 +218,18 @@ export function extractXlsx(buf: Buffer): string {
       }
     }
     const shared = zip.has('xl/sharedStrings.xml')
-      ? [...zip.read('xl/sharedStrings.xml').toString('utf8').replace(/<rPh\b[\s\S]*?<\/rPh>/g, '').matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map((m) => texts(m[1], 't'))
+      ? [...smlXml(zip.read('xl/sharedStrings.xml')).replace(/<rPh\b[\s\S]*?<\/rPh>/g, '').matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map((m) => texts(m[1], 't'))
       : [];
+    const dates = dateStyles(zip);
+    const base1904 = /<workbookPr\b[^>]*\bdate1904="(?:1|true)"/.test(wb);
     const out: string[] = [];
+    let total = 0;
     for (const m of wb.matchAll(/<sheet\b[^>]*>/g)) {
       const a = attrs(m[0]);
       const rid = Object.entries(a).find(([k]) => /^\w+:id$/.test(k))?.[1];
       const file = rid ? rels.get(rid) : undefined;
       if (!file || !zip.has(file)) continue;
-      const xml = zip.read(file).toString('utf8');
+      const xml = smlXml(zip.read(file));
       const lines: string[] = [];
       let truncated = false;
       for (const row of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
@@ -198,16 +247,18 @@ export function extractXlsx(buf: Buffer): string {
           }
           const inner = c[2] ?? '';
           const v = texts(inner, 'v');
-          const val = ca.t === 's' ? (shared[Number(v)] ?? '') : ca.t === 'inlineStr' ? texts(inner, 't') : v;
+          const val =
+            ca.t === 's' ? (shared[Number(v)] ?? '') : ca.t === 'inlineStr' ? texts(inner, 't') : (!ca.t || ca.t === 'n') && ca.s && dates.has(Number(ca.s)) ? serialDate(v, base1904) : v;
           while (cells.length < idx) cells.push('');
           cells[idx] = val.replace(/\s*\n\s*/g, ' ');
         }
         while (cells.length && !cells[cells.length - 1]) cells.pop();
         if (cells.length) lines.push(cells.join(' | '));
       }
+      total += lines.length;
       out.push(`## ${a.name ?? '工作表'}\n${lines.join('\n')}${truncated ? '\n（已截断）' : ''}`);
     }
-    return out.join('\n\n');
+    return total ? out.join('\n\n') : '';
   });
 }
 

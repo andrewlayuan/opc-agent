@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { DB } from '../../packages/core/db.ts';
 import type { Llm } from '../../packages/core/llm.ts';
-import { ExtractError, MIME, OFFICE_TIMEOUT_MS, clampText, decodeText, detectType, extractOffice, extractPdf, realExec } from './extract.ts';
+import { ExtractError, MIME, NO_TEXT, OFFICE_TIMEOUT_MS, clampText, decodeText, detectType, extractOffice, extractPdf, realExec } from './extract.ts';
 import type { ExecFn, Format } from './extract.ts';
 
 export const LIMITS = {
@@ -325,6 +325,7 @@ export class AttachmentStore {
       else if (format === 'docx' || format === 'xlsx' || format === 'pptx') text = await extractOffice(format, buf, this.officeTimeoutMs);
       else throw new Error('不支持的文件类型');
     }
+    if (!text.trim()) throw new ExtractError(422, NO_TEXT);
     return clampText(text, DOC_CHARS);
   }
 }
