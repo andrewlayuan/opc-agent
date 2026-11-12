@@ -80,6 +80,7 @@
       <form class="pm-form" id="pm-form" autocomplete="off">
         <p class="pm-intro muted">资深商业化产品经理视角的专业反馈。方法框架来自 <a href="https://github.com/phuryn/pm-skills" target="_blank" rel="noopener noreferrer">pm-skills</a>，可结合雷达里的行业动态。</p>
         <textarea id="pm-input" rows="6" maxlength="4000" placeholder="描述你的需求或点子，越具体反馈越准：&#10;· 目标用户是谁，他们现在怎么解决这个问题&#10;· 你设想的方案、想怎么赚钱&#10;· 已知的约束（团队、预算、时间、渠道）"></textarea>
+        <div class="att-row"><button type="button" class="link" id="pm-att-add">添加附件</button><input type="file" id="pm-att-file" multiple hidden accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.docx,.xlsx,.pptx,.txt,.md,.markdown,.csv,.json"><div class="att-bar" id="pm-att"></div></div>
         <div class="pm-label">评审方案 <span class="muted">可多选，组合后自动去重</span></div>
         <div class="chips wrap-chips" id="pm-presets" role="group" aria-label="评审方案"></div>
         <details class="pm-custom" id="pm-custom">

@@ -472,7 +472,190 @@ async function loadSources() {
 }
 
 // ---------------- 产品顾问 ----------------
-const pm = { meta: null, current: null, pollTimer: null, sel: { presets: [], skills: [] }, openSeq: 0, review: null, view: { id: 0, n: 0 }, verCache: new Map(), edit: null };
+const pm = {
+  meta: null,
+  current: null,
+  pollTimer: null,
+  sel: { presets: [], skills: [] },
+  openSeq: 0,
+  review: null,
+  view: { id: 0, n: 0 },
+  verCache: new Map(),
+  edit: null,
+  att: { form: [], reply: [], replyFor: 0, replyEl: null, replySync: null },
+};
+
+// ---------- 附件 ----------
+const ATT_MAX = 8;
+const ATT_FILE_MAX = 10 * 1024 * 1024;
+const ATT_POLL_MS = 1500;
+const ATT_ACCEPT = '.png,.jpg,.jpeg,.gif,.webp,.pdf,.docx,.xlsx,.pptx,.txt,.md,.markdown,.csv,.json';
+const IMG_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+let attSeq = 0;
+
+function fmtSize(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function attGate(list) {
+  if (list.some((a) => a.status === 'uploading' || a.status === 'processing')) return '附件处理中';
+  if (list.some((a) => a.status === 'error')) return '请先移除失败的附件';
+  return '';
+}
+
+const attIds = (list) => list.filter((a) => a.status === 'ready' && a.id).map((a) => a.id);
+
+function attStatusText(a) {
+  if (a.status === 'uploading') return '上传中';
+  if (a.status === 'processing') return '处理中';
+  if (a.status === 'error') return `失败：${a.error || '未知错误'}`;
+  return a.truncated ? `已截取前 ${a.chars} 字` : '就绪';
+}
+
+function renderAttBar(list) {
+  return list.map((a) =>
+    h(
+      'span',
+      { class: `att-chip${a.status === 'error' ? ' err' : ''}` },
+      h('span', { text: `${a.name} · ${fmtSize(a.size)} · ${attStatusText(a)}` }),
+      h('button', { type: 'button', class: 'link', 'aria-label': `移除 ${a.name}`, title: '移除', text: '×', onclick: () => removeAtt(list, a.key) }),
+    ),
+  );
+}
+
+/** 附件状态变化后只重绘对应的附件栏与发送按钮 */
+function refreshAtt(list) {
+  if (list === pm.att.form) {
+    $('pm-att').replaceChildren(...renderAttBar(list));
+    syncPmSubmit();
+  } else if (list === pm.att.reply) {
+    pm.att.replySync?.();
+  }
+}
+
+function syncPmSubmit() {
+  const gate = attGate(pm.att.form);
+  const btn = $('pm-submit');
+  btn.disabled = !pm.meta?.enabled || !!gate;
+  btn.title = gate;
+}
+
+function applyAtt(a, v) {
+  Object.assign(a, { id: v.id, name: v.name, size: v.size, status: v.status, error: v.error || '', truncated: !!v.truncated, chars: v.chars || 0 });
+}
+
+async function uploadAtt(list, a, file) {
+  let res;
+  try {
+    res = await fetch('/api/pm/uploads', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/octet-stream', 'x-file-name': encodeURIComponent(a.name) },
+      body: file,
+    });
+  } catch {
+    Object.assign(a, { status: 'error', error: '上传失败，请检查网络' });
+    return refreshAtt(list);
+  }
+  if (res.status === 401) {
+    location.replace('/login');
+    return;
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.attachment) {
+    Object.assign(a, { status: 'error', error: data.error || `上传失败（${res.status}）` });
+    return refreshAtt(list);
+  }
+  // 上传期间已被移除：服务端的记录也删掉
+  if (!list.includes(a)) {
+    api(`/api/pm/uploads/${data.attachment.id}`, { method: 'DELETE' }).catch(() => {});
+    return;
+  }
+  applyAtt(a, data.attachment);
+  refreshAtt(list);
+  pollAtt(list, a);
+}
+
+async function pollAtt(list, a) {
+  while (a.status === 'processing' && list.includes(a)) {
+    try {
+      const { attachment } = await api(`/api/pm/uploads/${a.id}`);
+      if (!list.includes(a)) return;
+      applyAtt(a, attachment);
+      refreshAtt(list);
+    } catch (e) {
+      if (!list.includes(a)) return;
+      if (e.status === 404) {
+        Object.assign(a, { status: 'error', error: '附件不存在' });
+        return refreshAtt(list);
+      }
+    }
+    if (a.status !== 'processing') return;
+    await new Promise((r) => setTimeout(r, ATT_POLL_MS));
+  }
+}
+
+async function addFiles(list, files) {
+  files = [...files];
+  if (!files.length) return;
+  if (list.length + files.length > ATT_MAX) return toast(`一次最多 ${ATT_MAX} 个附件`);
+  const todo = [];
+  for (const f of files) {
+    if (f.size > ATT_FILE_MAX) {
+      toast(`${f.name} 超过 10MB`);
+      continue;
+    }
+    const a = { key: ++attSeq, name: f.name, size: f.size, status: 'uploading', id: 0, error: '', truncated: false, chars: 0 };
+    list.push(a);
+    todo.push([a, f]);
+  }
+  refreshAtt(list);
+  for (const [a, f] of todo) if (list.includes(a)) await uploadAtt(list, a, f);
+}
+
+async function removeAtt(list, key) {
+  const i = list.findIndex((a) => a.key === key);
+  if (i < 0) return;
+  const a = list[i];
+  if (a.id) await api(`/api/pm/uploads/${a.id}`, { method: 'DELETE' }).catch(() => {});
+  const j = list.indexOf(a);
+  if (j >= 0) list.splice(j, 1);
+  refreshAtt(list);
+}
+
+/** 剪贴板里的图片：改名为「粘贴的图片-HHMMSS.ext」；没有图片时按普通粘贴处理 */
+function onPasteFiles(e, list) {
+  const imgs = [...(e.clipboardData?.files ?? [])].filter((f) => IMG_EXT[f.type]);
+  if (!imgs.length) return;
+  e.preventDefault();
+  const d = new Date();
+  const hms = [d.getHours(), d.getMinutes(), d.getSeconds()].map((x) => String(x).padStart(2, '0')).join('');
+  addFiles(list, imgs.map((f) => new File([f], `粘贴的图片-${hms}.${IMG_EXT[f.type]}`, { type: f.type })));
+}
+
+function bindDrop(el, list) {
+  el.addEventListener('dragover', (e) => e.preventDefault());
+  el.addEventListener('drop', (e) => {
+    e.preventDefault();
+    addFiles(list(), e.dataTransfer?.files ?? []);
+  });
+}
+
+/** 已发送的附件：图片缩略图在新标签打开，文档点击下载 */
+function attList(atts) {
+  if (!atts?.length) return null;
+  return h(
+    'div',
+    { class: 'att-list' },
+    atts.map((a) => {
+      const href = `/api/pm/uploads/${a.id}/file`;
+      if (a.kind === 'image') return h('a', { href, target: '_blank', rel: 'noopener', title: a.name }, h('img', { class: 'att-thumb', loading: 'lazy', alt: a.name, src: href }));
+      return h('a', { class: 'att-file', href, download: true, text: `${a.name} · ${fmtSize(a.size)}` });
+    }),
+  );
+}
 
 async function initPm() {
   if (pm.meta) return;
@@ -589,6 +772,7 @@ function renderReview(r) {
     { class: 'pm-head' },
     h('div', { class: 'meta' }, h('span', { text: r.mode_label }), h('span', { text: '·' }), h('span', { text: new Date(r.created_at).toLocaleString('zh-CN') })),
     h('details', { class: 'pm-input' }, h('summary', { text: r.input.length > 60 ? `${r.input.slice(0, 60)}…` : r.input }), h('div', { text: r.input })),
+    attList(r.attachments),
     r.skills.length ? h('div', { class: 'tags' }, r.skills.map((s) => h('span', { class: 'tag', text: s }))) : null,
   );
   const parts = [head];
@@ -797,7 +981,9 @@ function renderThread(r) {
     { class: 'pm-thread' },
     h('div', { class: 'grp-title', text: '对话' }),
     msgs.map((m, i) => {
-      if (m.role === 'user') return h('div', { class: 'pm-msg user' }, h('div', { class: 'bubble', text: m.content }), m.kind === 'revise' ? h('small', { class: 'muted', text: '要求改写文档' }) : null);
+      if (m.role === 'user') {
+        return h('div', { class: 'pm-msg user' }, h('div', { class: 'bubble', text: m.content }), attList(m.attachments), m.kind === 'revise' ? h('small', { class: 'muted', text: '要求改写文档' }) : null);
+      }
       if (m.status === 'running') return h('div', { class: 'pm-msg assistant' }, h('p', { class: 'muted', text: '思考中…改写文档一般需要 1-2 分钟' }));
       if (m.status === 'error') {
         const prev = msgs.slice(0, i).reverse().find((x) => x.role === 'user');
@@ -806,7 +992,12 @@ function renderThread(r) {
           'div',
           { class: 'pm-msg assistant' },
           h('span', { class: 'err', text: `这一轮失败：${m.error || '未知错误'}` }),
-          prev && last && !busy ? h('button', { type: 'button', class: 'link', text: '重试', onclick: () => sendTurn(r.id, prev.content, prev.kind === 'revise' ? 'revise' : 'auto') }) : null,
+          // 附件已随那一轮关联，不能重复使用，只能重新上传
+          prev && last && !busy
+            ? prev.attachments?.length
+              ? h('small', { class: 'muted', text: '请重新上传附件后再发送' })
+              : h('button', { type: 'button', class: 'link', text: '重试', onclick: () => sendTurn(r.id, prev.content, prev.kind === 'revise' ? 'revise' : 'auto') })
+            : null,
         );
       }
       if (m.kind === 'revise' && m.version_n) {
@@ -824,15 +1015,38 @@ function renderReply(r) {
   const count = h('span', { class: 'muted', text: '0/4000' });
   const btn = h('button', { type: 'submit', text: busy ? '进行中…' : '发送' });
   const blocked = busy || pm.edit != null;
+  if (pm.att.replyFor !== r.id) {
+    pm.att.reply = [];
+    pm.att.replyFor = r.id;
+  }
+  let sending = false;
+  const bar = h('div', { class: 'att-bar' });
+  const sync = () => {
+    const list = pm.att.reply;
+    bar.replaceChildren(...renderAttBar(list));
+    const gate = attGate(list);
+    btn.disabled = blocked || sending || !!gate;
+    btn.title = gate;
+  };
+  pm.att.replyEl = bar;
+  pm.att.replySync = sync;
   ta.disabled = blocked;
-  btn.disabled = blocked;
+  sync();
   ta.addEventListener('input', () => (count.textContent = `${[...ta.value].length}/4000`));
+  ta.addEventListener('paste', (e) => onPasteFiles(e, pm.att.reply));
   const send = async () => {
-    if (btn.disabled) return;
+    if (blocked || sending) return;
+    const list = pm.att.reply;
     const text = ta.value.trim();
-    if ([...text].length < 2) return toast('请至少输入 2 个字');
+    if (!list.length && [...text].length < 2) return toast('请至少输入 2 个字');
+    const gate = attGate(list);
+    if (gate) return toast(gate);
+    if (btn.disabled) return;
+    sending = true;
     btn.disabled = true;
-    if (!(await sendTurn(r.id, text, chk.checked ? 'revise' : 'auto'))) btn.disabled = false;
+    const ok = await sendTurn(r.id, text, chk.checked ? 'revise' : 'auto', attIds(list));
+    sending = false;
+    if (!ok) sync();
   };
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -840,17 +1054,30 @@ function renderReply(r) {
       send();
     }
   });
-  const form = h('form', { class: 'pm-reply', autocomplete: 'off' }, ta, h('div', { class: 'row' }, h('label', { class: 'check', title: '不勾选时由顾问判断：提问就回答，提出修改就出新版' }, chk, ' 改写文档'), count, btn));
+  const file = h('input', {
+    type: 'file',
+    multiple: true,
+    hidden: true,
+    accept: ATT_ACCEPT,
+    onchange: (e) => {
+      addFiles(pm.att.reply, e.target.files ?? []);
+      e.target.value = '';
+    },
+  });
+  const attRow = h('div', { class: 'att-row' }, h('button', { type: 'button', class: 'link', text: '添加附件', disabled: blocked, onclick: () => file.click() }), file, bar);
+  const form = h('form', { class: 'pm-reply', autocomplete: 'off' }, ta, attRow, h('div', { class: 'row' }, h('label', { class: 'check', title: '不勾选时由顾问判断：提问就回答，提出修改就出新版' }, chk, ' 改写文档'), count, btn));
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     send();
   });
+  if (!blocked) bindDrop(form, () => pm.att.reply);
   return form;
 }
 
-async function sendTurn(id, text, mode) {
+async function sendTurn(id, text, mode, attachmentIds = []) {
   try {
-    await api(`/api/pm/reviews/${id}/messages`, { method: 'POST', body: { text, mode } });
+    await api(`/api/pm/reviews/${id}/messages`, { method: 'POST', body: attachmentIds.length ? { text, mode, attachmentIds } : { text, mode } });
+    if (attachmentIds.length) pm.att.reply = [];
     await openReview(id);
     return true;
   } catch (e) {
@@ -936,19 +1163,25 @@ function updatePmCount() {
 
 async function submitPm(e) {
   e.preventDefault();
+  const gate = attGate(pm.att.form);
+  if (gate) return toast(gate);
   const btn = $('pm-submit');
   btn.disabled = true;
   try {
-    const { id } = await api('/api/pm/reviews', {
-      method: 'POST',
-      body: { input: $('pm-input').value, presets: pm.sel.presets, skills: pm.sel.skills, useRadar: $('pm-radar').checked },
-    });
+    const ids = attIds(pm.att.form);
+    const body = { input: $('pm-input').value, presets: pm.sel.presets, skills: pm.sel.skills, useRadar: $('pm-radar').checked };
+    const { id } = await api('/api/pm/reviews', { method: 'POST', body: ids.length ? { ...body, attachmentIds: ids } : body });
+    // 原地清空，保持数组引用不变（refreshAtt 按引用区分表单与追问区）
+    pm.att.form.length = 0;
+    refreshAtt(pm.att.form);
+    $('pm-input').value = '';
+    updatePmCount();
     await openReview(id);
     loadPmHistory();
   } catch (err) {
     toast(err.message);
   } finally {
-    btn.disabled = !pm.meta?.enabled;
+    syncPmSubmit();
   }
 }
 
@@ -1162,6 +1395,13 @@ async function init() {
   $('focus-cancel').addEventListener('click', () => ($('focus-edit').hidden = true));
   $('pm-form').addEventListener('submit', submitPm);
   $('pm-input').addEventListener('input', updatePmCount);
+  $('pm-input').addEventListener('paste', (e) => onPasteFiles(e, pm.att.form));
+  $('pm-att-add').addEventListener('click', () => $('pm-att-file').click());
+  $('pm-att-file').addEventListener('change', (e) => {
+    addFiles(pm.att.form, e.target.files ?? []);
+    e.target.value = '';
+  });
+  bindDrop($('pm-form'), () => pm.att.form);
   for (const b of document.querySelectorAll('.tabs button')) b.addEventListener('click', () => show(b.dataset.view));
   for (const id of ['grp', 'days', 'important', 'starred', 'rel']) $(id).addEventListener('change', () => loadItems());
   $('mem-run').addEventListener('click', runMemory);
