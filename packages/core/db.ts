@@ -218,6 +218,29 @@ const MIGRATIONS: string[] = [
   ALTER TABLE pm_reviews ADD COLUMN context_refs TEXT;
   ALTER TABLE pm_messages ADD COLUMN context_refs TEXT;
   `,
+  `
+  CREATE TABLE pm_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at INTEGER NOT NULL,
+    review_id INTEGER REFERENCES pm_reviews(id) ON DELETE CASCADE,
+    message_id INTEGER REFERENCES pm_messages(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    storage TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'processing',
+    text TEXT NOT NULL DEFAULT '',
+    orig_chars INTEGER,
+    error TEXT
+  );
+  CREATE INDEX pm_attachments_review ON pm_attachments(review_id, message_id, id);
+  CREATE INDEX pm_attachments_orphan ON pm_attachments(created_at) WHERE review_id IS NULL;
+  CREATE TRIGGER pm_attachments_hl AFTER UPDATE OF review_id ON pm_attachments
+    WHEN old.review_id IS NULL AND new.review_id IS NOT NULL AND new.text != '' BEGIN
+    INSERT INTO history_fts(review_id, kind, body) VALUES (new.review_id, 'attachment', new.name || char(10) || new.text);
+  END;
+  `,
 ];
 
 export type DB = DatabaseSync;

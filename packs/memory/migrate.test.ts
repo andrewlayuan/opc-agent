@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { openDb } from '../../packages/core/db.ts';
 
 const V5_DROP = `
+  DROP TABLE IF EXISTS pm_attachments;
   DROP TRIGGER IF EXISTS pm_reviews_hi; DROP TRIGGER IF EXISTS pm_versions_hi; DROP TRIGGER IF EXISTS pm_messages_hi;
   DROP TRIGGER IF EXISTS pm_messages_hu; DROP TRIGGER IF EXISTS pm_reviews_hd;
   DROP TABLE IF EXISTS events; DROP TABLE IF EXISTS memories; DROP TABLE IF EXISTS profile;
@@ -34,7 +35,7 @@ test('迁移 5：新表、profile 单行、history_fts 触发器与回填', () =
   const count = (where: string) => Number(get(`SELECT count(*) AS n FROM ${where}`).n);
   const run = (sql: string) => db.prepare(sql).run();
 
-  assert.equal(get('PRAGMA user_version').user_version, 5);
+  assert.equal(get('PRAGMA user_version').user_version, 6);
   assert.deepEqual({ ...get('SELECT id, content, manual FROM profile') }, { id: 1, content: '', manual: 0 });
   for (const t of ['events', 'memories', 'memory_changes']) assert.equal(count(t), 0);
   assert.equal(count('history_fts WHERE review_id = 1'), 3);

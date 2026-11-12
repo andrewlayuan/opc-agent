@@ -1,8 +1,11 @@
 import { allowHost, apiPost } from './net.ts';
 
+/** 多模态内容块；图片只能出现在 user 消息里 */
+export type ContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
-  content: string;
+  content: string | ContentPart[];
 }
 
 export interface LlmOptions {
