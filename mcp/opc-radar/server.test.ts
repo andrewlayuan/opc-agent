@@ -5,6 +5,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { after, test } from 'node:test';
 import { openDb } from '../../packages/core/db.ts';
+import { createDoc, refreshStale } from '../../packs/kb/docs.ts';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-mcp-'));
 process.env.OPC_DATA_DIR = dir;
@@ -97,4 +98,69 @@ test('旧库（缺少记忆表与 history_fts）：两个工具都不抛错', ()
   assert.equal(callTool('memory_profile', {}, old), '暂无记忆');
   assert.equal(callTool('history_search', { query: '合同审查' }, old), '没有找到相关的历史讨论。');
   old.close();
+});
+
+function kbDb(): { db: DatabaseSync; ids: Record<string, number>; close: () => void } {
+  const f = path.join(dir, `kb-${Math.random().toString(36).slice(2)}.db`);
+  const db = openDb(f);
+  const ids: Record<string, number> = {};
+  const folder = (name: string, parent: number | null) => Number(db.prepare('INSERT INTO kb_folders(parent_id, name, created_at) VALUES (?, ?, 1)').run(parent, name).lastInsertRowid);
+  const prod = folder('产品', null);
+  const comp = folder('竞品', prod);
+  ids.note = createDoc(db, { kind: 'note', title: '竞品分析', folderId: comp, body: '## 定价策略\n竞品甲的合同审查按席位收费，每席位每月 99 元' });
+  ids.long = createDoc(db, { kind: 'note', title: '长文', body: `${'甲'.repeat(8000)}${'乙'.repeat(8000)}${'丙'.repeat(100)}` });
+  const rid = Number(db.prepare("INSERT INTO pm_reviews(created_at, updated_at, status, mode, input) VALUES (1, 1, 'done', 'idea', '律所工具')").run().lastInsertRowid);
+  db.prepare("INSERT INTO pm_versions(review_id, n, created_at, source, content) VALUES (?, 1, 1, 'ai_initial', '## 一句话结论\n值得做\n\n## 风险\n获客难')").run(rid);
+  ids.rid = rid;
+  ids.review = createDoc(db, { kind: 'review', reviewId: rid });
+  db.prepare("INSERT OR IGNORE INTO sources(id, name, url) VALUES ('s1', '源', 'https://s')").run();
+  const iid = Number(
+    db.prepare("INSERT INTO items(source_id, url, title, norm_title, published_at, fetched_at, content, title_zh) VALUES ('s1', 'https://news.example/a', 'Pricing', '', 1, 1, 'body', '定价新闻')").run().lastInsertRowid,
+  );
+  ids.iid = iid;
+  ids.item = createDoc(db, { kind: 'item', itemId: iid });
+  const rid2 = Number(db.prepare("INSERT INTO pm_reviews(created_at, updated_at, status, mode, input) VALUES (1, 1, 'done', 'idea', '待删')").run().lastInsertRowid);
+  db.prepare("INSERT INTO pm_versions(review_id, n, created_at, source, content) VALUES (?, 1, 1, 'ai_initial', '内容')").run(rid2);
+  ids.orphan = createDoc(db, { kind: 'review', reviewId: rid2 });
+  db.prepare('DELETE FROM pm_reviews WHERE id = ?').run(rid2);
+  refreshStale(db);
+  db.close();
+  const ro = new DatabaseSync(f, { readOnly: true });
+  return { db: ro, ids, close: () => ro.close() };
+}
+
+test('kb 工具：tools/list 含 kb_search、kb_doc，说明写明只读与可能不是最新版本', () => {
+  for (const n of ['kb_search', 'kb_doc']) {
+    const t = TOOLS.find((x) => x.name === n);
+    assert.ok(t, n);
+    assert.match(t!.description, /只读；评审类条目可能不是最新版本/);
+  }
+});
+
+test('kb_search：#docId 路径/标题 › heading｜片段；limit 默认 5、最大 10；无命中提示', () => {
+  const { db, ids, close } = kbDb();
+  const out = callTool('kb_search', { query: '合同审查按席位' }, db);
+  assert.match(out.split('\n')[0], new RegExp(`^#${ids.note} 产品/竞品/竞品分析 › 定价策略｜.*【.*】`));
+  assert.equal(callTool('kb_search', { query: '没有这种内容的查询' }, db), '知识库中没有找到相关内容');
+  assert.ok(callTool('kb_search', { query: '甲', limit: 50 }, db).split('\n').length <= 10);
+  assert.throws(() => callTool('kb_search', { query: ' ' }, db), /query/);
+  close();
+});
+
+test('kb_doc：标题、路径、来源、分页正文；不存在与孤儿条目', () => {
+  const { db, ids, close } = kbDb();
+  const p2 = callTool('kb_doc', { id: ids.long, page: 2 }, db);
+  assert.match(p2, /^标题：长文\n目录：未归类\n来源：笔记\n/);
+  assert.ok(p2.includes('乙'.repeat(8000)));
+  assert.ok(!p2.includes('甲'));
+  assert.ok(p2.endsWith('（第 2/3 页）'));
+  assert.ok(callTool('kb_doc', { id: ids.long }, db).endsWith('（第 1/3 页）'));
+  const rv = callTool('kb_doc', { id: ids.review }, db);
+  assert.match(rv, new RegExp(`来源：评审 #${ids.rid}\n`));
+  assert.match(rv, /## 一句话结论\n值得做\n\n## 风险\n获客难/);
+  assert.match(callTool('kb_doc', { id: ids.item }, db), new RegExp(`来源：资讯 #${ids.iid} https://news\\.example/a\n`));
+  assert.match(callTool('kb_doc', { id: ids.orphan }, db), /来源已删除/);
+  assert.throws(() => callTool('kb_doc', { id: 99999 }, db), /^Error: 条目不存在$/);
+  assert.throws(() => callTool('kb_doc', { id: ids.long, page: 9 }, db), /页码/);
+  close();
 });

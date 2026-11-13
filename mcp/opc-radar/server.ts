@@ -4,6 +4,9 @@ import readline from 'node:readline';
 import { loadConfig } from '../../packages/core/config.ts';
 import { openDb } from '../../packages/core/db.ts';
 import type { DB } from '../../packages/core/db.ts';
+import { getDoc } from '../../packs/kb/docs.ts';
+import { searchKb } from '../../packs/kb/search.ts';
+import { KB_LIMITS } from '../../packs/kb/types.ts';
 import { recallHistory } from '../../packs/memory/context.ts';
 import { profileMarkdown } from '../../packs/memory/store.ts';
 import { latestBrief } from '../../packs/radar/analyze.ts';
@@ -81,6 +84,29 @@ export const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'kb_search',
+    description: '在用户的知识库（上传资料、评审、资讯、笔记）中全文搜索，每行返回 #docId 目录路径/标题 › 小节｜命中片段。只读；评审类条目可能不是最新版本。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', minLength: 1, maxLength: 200 },
+        limit: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'kb_doc',
+    description: `读取知识库条目的标题、目录、来源与正文（每页 ${KB_LIMITS.mcpPage} 字，用 page 翻页）。只读；评审类条目可能不是最新版本。`,
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'integer', minimum: 1 }, page: { type: 'integer', minimum: 1, default: 1 } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 function num(v: unknown, def: number, min: number, max: number): number {
@@ -107,6 +133,57 @@ function fmt(items: ItemView[]): string {
 }
 
 const day = (t: number) => new Date(t).toISOString().slice(0, 10);
+
+function kbSearch(d: DB, args: Record<string, unknown>): string {
+  const q = typeof args.query === 'string' ? args.query.trim().slice(0, 200) : '';
+  if (!q) throw new Error('query 不能为空');
+  let hits: ReturnType<typeof searchKb>;
+  try {
+    hits = searchKb(d, q, num(args.limit, 5, 1, 10));
+  } catch {
+    hits = [];
+  }
+  if (!hits.length) return '知识库中没有找到相关内容';
+  return hits.map((h) => `#${h.doc.id} ${h.doc.path}/${h.doc.title}${h.heading ? ` › ${h.heading}` : ''}｜${h.snippet}`).join('\n');
+}
+
+function kbDoc(d: DB, args: Record<string, unknown>): string {
+  let r;
+  try {
+    r = getDoc(d, num(args.id, 0, 0, Number.MAX_SAFE_INTEGER));
+  } catch {
+    r = null;
+  }
+  if (!r) throw new Error('条目不存在');
+  const { doc } = r;
+  let source = doc.kind === 'note' ? '笔记' : `上传文件 ${doc.file_name ?? ''}`.trim();
+  if (doc.kind === 'review') source = `评审 #${doc.review_id}`;
+  if (doc.kind === 'item') {
+    const it = d.prepare('SELECT url FROM items WHERE id = ?').get(doc.item_id) as { url: string } | undefined;
+    source = `资讯 #${doc.item_id}${it ? ` ${it.url}` : ''}`;
+  }
+  const head = [`标题：${doc.title}`, `目录：${doc.path}`, `来源：${source}`];
+  if (doc.status === 'orphan') return [...head, '', '来源已删除，正文已清空。'].join('\n');
+  if (doc.status === 'processing') return [...head, '', '文件仍在处理中。'].join('\n');
+  if (doc.status === 'error') return [...head, '', `处理失败：${doc.error ?? ''}`].join('\n');
+  let text = r.body;
+  if (text == null) {
+    let last = '';
+    text = r.chunks
+      .map((c) => {
+        const h = c.heading && c.heading !== last ? `## ${c.heading}\n` : '';
+        last = c.heading;
+        return h + c.body;
+      })
+      .join('\n\n');
+  }
+  const cps = [...text];
+  const pages = Math.max(1, Math.ceil(cps.length / KB_LIMITS.mcpPage));
+  const page = num(args.page, 1, 1, Number.MAX_SAFE_INTEGER);
+  if (page > pages) throw new Error(`页码超出范围（共 ${pages} 页）`);
+  const body = cps.slice((page - 1) * KB_LIMITS.mcpPage, page * KB_LIMITS.mcpPage).join('');
+  return [...head, ...(doc.truncated ? ['（条目过长，只索引了前面部分）'] : []), '', body || '（无正文）', '', `（第 ${page}/${pages} 页）`].join('\n');
+}
 
 /** d 仅供测试注入；默认打开配置中的只读库 */
 export function callTool(name: string, args: Record<string, unknown>, d: DB = database()): string {
@@ -147,6 +224,10 @@ export function callTool(name: string, args: Record<string, unknown>, d: DB = da
       if (!hits.length) return '没有找到相关的历史讨论。';
       return hits.map((h) => `#${h.review_id} ${day(h.created_at)} ${h.input}｜${h.snippet}｜${h.conclusion}`).join('\n');
     }
+    case 'kb_search':
+      return kbSearch(d, args);
+    case 'kb_doc':
+      return kbDoc(d, args);
     default:
       throw new Error(`未知工具：${name}`);
   }
@@ -169,7 +250,7 @@ function handle(req: Req): void {
           protocolVersion: typeof params?.protocolVersion === 'string' ? params.protocolVersion : '2025-06-18',
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: 'opc-radar', version: '0.1.0' },
-          instructions: 'OPC Radar：本地 AI 技术情报库。回答 AI 新闻/模型发布/Agent/RAG/记忆/语音等问题时，先用 radar_latest 或 radar_search 查询，引用时附上条目 URL。了解用户背景用 memory_profile，查过去讨论用 history_search。',
+          instructions: 'OPC Radar：本地 AI 技术情报库。回答 AI 新闻/模型发布/Agent/RAG/记忆/语音等问题时，先用 radar_latest 或 radar_search 查询，引用时附上条目 URL。了解用户背景用 memory_profile，查过去讨论用 history_search，查用户自己的资料与笔记用 kb_search / kb_doc。',
         };
         break;
       case 'ping':
