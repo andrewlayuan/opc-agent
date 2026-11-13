@@ -57,6 +57,27 @@ function likeSnippet(text: string, q: string): string {
   return `${head.length > 20 ? '…' : ''}${pre}【${hit}】${post}`.replace(/\s+/g, ' ');
 }
 
+/** 页面搜索的回退：整段词匹配不到时，按三字片段任意命中，再按命中的三字、两字片段数和 bm25 排序 */
+function fuzzyHits(db: DB, query: string): ChunkHit[] {
+  const terms = recallTerms(query);
+  if (!terms.length) return [];
+  const pairs = new Set<string>();
+  for (const seg of clipCp(query, 400).toLowerCase().split(/[\s\p{P}\p{S}]+/u)) {
+    const cps = [...seg];
+    for (let i = 0; i + 2 <= cps.length && pairs.size < 64; i++) pairs.add(cps.slice(i, i + 2).join(''));
+  }
+  return ftsHits(db, terms.map((t) => `"${t.replace(/"/g, '""')}"`).join(' OR '))
+    .map((r, rank) => {
+      const hay = `${r.title}\n${r.heading}\n${r.body}`.toLowerCase();
+      let score = 0;
+      for (const t of terms) if (hay.includes(t)) score += 10;
+      for (const p of pairs) if (hay.includes(p)) score += 1;
+      return { r, rank, score };
+    })
+    .sort((a, b) => b.score - a.score || a.rank - b.rank)
+    .map((x) => x.r);
+}
+
 /** 页面搜索：每个条目只取最相关的一段；不刷新来源 */
 export function searchKb(db: DB, q: string, limit = 50): SearchHit[] {
   const query = q.trim();
@@ -76,6 +97,7 @@ export function searchKb(db: DB, q: string, limit = 50): SearchHit[] {
   } else {
     const m = matchExpr(query);
     rows = m ? ftsHits(db, m) : [];
+    if (!rows.length) rows = fuzzyHits(db, query);
   }
   const best = new Map<number, ChunkHit>();
   for (const r of rows) {

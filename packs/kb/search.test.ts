@@ -89,3 +89,14 @@ test('recallKb：自然语句也能召回；只共享 1 个三元组的段落不
   assert.deepEqual(r.refs.map((x) => [x.doc, x.heading]), [[a, '定价策略']]);
   done();
 });
+
+test('searchKb：整段词对不上时退回三字片段匹配，命中多的排前面', () => {
+  const { db, done } = tmpKbDb();
+  const a = note(db, '竞品', '## 竞品「律审通」定价\n专业版每席位每月 399 元');
+  const b = note(db, '提到律审通', '律审通是一家公司');
+  note(db, '无关', '今天天气不错');
+  assert.deepEqual(searchKb(db, '律审通定价').map((h) => h.doc.id), [a, b]);
+  assert.deepEqual(searchKb(db, '律审通定价')[0].snippet.includes('【'), true);
+  assert.deepEqual(searchKb(db, '完全不相干的查询词'), []);
+  done();
+});
