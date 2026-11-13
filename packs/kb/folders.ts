@@ -14,7 +14,7 @@ const BAD_NAME = '目录名需为 1–40 字，且不能包含 / \\ 或控制字
 const NOT_FOUND = '目录不存在';
 export const UNFILED = '未归类';
 
-function cleanName(raw: unknown): string {
+export function cleanName(raw: unknown): string {
   if (typeof raw !== 'string') throw new KbError(400, BAD_NAME);
   const n = raw.trim();
   // eslint-disable-next-line no-control-regex
