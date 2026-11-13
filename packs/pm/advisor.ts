@@ -1,5 +1,6 @@
 import type { DB } from '../../packages/core/db.ts';
 import type { ChatMessage, ContentPart, Llm } from '../../packages/core/llm.ts';
+import type { KbRef } from '../kb/types.ts';
 import { listItems } from '../radar/query.ts';
 import { placeholderInput, renderAttachments } from './attach-prompt.ts';
 import type { AttText } from './attach-prompt.ts';
@@ -97,6 +98,8 @@ export type ReviewSummary = Omit<ReviewView, 'content' | 'refs' | 'versions' | '
 export interface ContextRefs {
   memories: number[];
   reviews: number[];
+  /** 召回的知识库段落；没有召回时不出现该键 */
+  kb?: KbRef[];
 }
 
 /** 由外部（记忆模块）提供的用户上下文；advisor 本身不依赖记忆模块 */
@@ -118,6 +121,8 @@ export interface AdvisorHooks {
   onEvent?: (e: AdvisorEvent) => void;
   /** 本轮成功完成后，回报实际注入提示词的记忆 id */
   used?: (memoryIds: number[]) => void;
+  /** 知识库召回；advisor 本身不依赖知识库模块 */
+  kb?: (query: string) => { text: string; refs: KbRef[] };
 }
 
 const clip = (s: string, n: number): string => {
@@ -128,11 +133,20 @@ const clip = (s: string, n: number): string => {
 const attText = (r: AttachmentRow): AttText => ({ name: r.name, kind: r.kind, text: r.text, orig_chars: r.orig_chars });
 const attPayload = (rows: AttachmentRow[]) => (rows.length ? { attachments: rows.map((r) => ({ name: r.name, excerpt: clip(r.text, ATT_EXCERPT) })) } : {});
 
+const isKbRef = (x: unknown): x is KbRef => {
+  if (!x || typeof x !== 'object') return false;
+  const r = x as Record<string, unknown>;
+  return Number.isSafeInteger(r.doc) && Number.isSafeInteger(r.ord) && typeof r.title === 'string' && typeof r.heading === 'string';
+};
+
 function parseRefs(raw: unknown): ContextRefs | null {
   if (typeof raw !== 'string' || !raw) return null;
   try {
     const v = JSON.parse(raw) as Partial<ContextRefs>;
-    return Array.isArray(v.memories) && Array.isArray(v.reviews) ? { memories: v.memories, reviews: v.reviews } : null;
+    if (!Array.isArray(v.memories) || !Array.isArray(v.reviews)) return null;
+    const out: ContextRefs = { memories: v.memories, reviews: v.reviews };
+    if (Array.isArray(v.kb)) out.kb = v.kb.filter(isKbRef).map((r) => ({ doc: r.doc, ord: r.ord, title: r.title, heading: r.heading }));
+    return out;
   } catch {
     return null;
   }
@@ -337,8 +351,17 @@ export class PmAdvisor {
     });
   }
 
-  /** 取用户上下文；出错或为空时返回 null，不影响评审 */
+  /** 取用户上下文（记忆在前、知识库在后，中间空一行）；都为空或出错时返回 null，不影响评审 */
   private userContext(opts: { query: string; excludeReview?: number }): { text: string; refs: ContextRefs } | null {
+    const mem = this.memoryContext(opts);
+    const kb = this.kbContext(opts.query);
+    if (!mem && !kb) return null;
+    const refs: ContextRefs = mem ? mem.refs : { memories: [], reviews: [] };
+    if (kb) refs.kb = kb.refs;
+    return { text: [mem?.text, kb?.text].filter(Boolean).join('\n\n'), refs };
+  }
+
+  private memoryContext(opts: { query: string; excludeReview?: number }): { text: string; refs: ContextRefs } | null {
     if (!this.hooks.context) return null;
     try {
       const c = this.hooks.context('pm', opts);
@@ -346,6 +369,17 @@ export class PmAdvisor {
       return { text: c.text, refs: { memories: c.memoryIds, reviews: c.reviewIds } };
     } catch (e) {
       this.log(`[pm] 读取用户上下文失败，按无上下文继续：${e instanceof Error ? e.message : e}`);
+      return null;
+    }
+  }
+
+  private kbContext(query: string): { text: string; refs: KbRef[] } | null {
+    if (!this.hooks.kb) return null;
+    try {
+      const k = this.hooks.kb(query);
+      return k.text && k.refs.length ? k : null;
+    } catch (e) {
+      this.log(`[pm] 读取知识库失败，按无知识库继续：${e instanceof Error ? e.message : e}`);
       return null;
     }
   }

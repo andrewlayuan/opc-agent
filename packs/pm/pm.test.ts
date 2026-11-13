@@ -49,7 +49,11 @@ test('加载技能目录：固定层级、排除无关插件、拒绝符号链�
   fs.rmSync(outside, { recursive: true, force: true });
 });
 
-function setup(llmImpl: { json?: (m: { content: string }[]) => unknown; chat?: (m: { content: string }[]) => string | Promise<string> }, hooks: AdvisorHooks = {}) {
+function setup(
+  llmImpl: { json?: (m: { content: string }[]) => unknown; chat?: (m: { content: string }[]) => string | Promise<string> },
+  hooks: AdvisorHooks = {},
+  log: (s: string) => void = () => {},
+) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-pm-db-'));
   const db = openDb(path.join(dir, 't.db'));
   syncSources(db);
@@ -64,7 +68,7 @@ function setup(llmImpl: { json?: (m: { content: string }[]) => unknown; chat?: (
     json: async (m: { content: string }[]) => llmImpl.json?.(m) ?? {},
     chat: async (m: { content: string }[]) => llmImpl.chat?.(m) ?? '',
   } as unknown as Llm;
-  const advisor = new PmAdvisor(db, llm, skills, () => {}, hooks);
+  const advisor = new PmAdvisor(db, llm, skills, log, hooks);
   return { db, advisor, done: () => (db.close(), fs.rmSync(dir, { recursive: true, force: true })) };
 }
 
@@ -448,6 +452,69 @@ test('产品顾问：used 只在首版与追问成功后以实际注入的记忆
   const id2 = await doneReview(bad.advisor);
   assert.equal(bad.advisor.get(id2)!.status, 'done');
   bad.done();
+});
+
+const KB = '<kb_excerpts>\n[1] 竞品 › 定价\n按席位\n</kb_excerpts>';
+const KB_REFS = [{ doc: 1, ord: 0, title: '竞品', heading: '定价' }];
+
+test('知识库：只配 hooks.kb 时首版与追问都召回，context_refs 记录 kb', async () => {
+  const systems: string[] = [];
+  const queries: string[] = [];
+  const { db, advisor, done } = setup({ chat: (m) => (systems.push(m[0].content), fakeTurn(m)) }, { kb: (q) => (queries.push(q), { text: KB, refs: KB_REFS }) });
+  const id = await doneReview(advisor);
+  assert.ok(systems[0].includes(KB));
+  const raw = (db.prepare('SELECT context_refs FROM pm_reviews WHERE id = ?').get(id) as { context_refs: string }).context_refs;
+  assert.deepEqual(JSON.parse(raw), { memories: [], reviews: [], kb: KB_REFS });
+  assert.deepEqual(advisor.get(id)!.context_refs, { memories: [], reviews: [], kb: KB_REFS });
+  advisor.ask(id, '把定价改成年费', 'auto');
+  await waitTurn(advisor, id);
+  assert.deepEqual(queries, ['给团队做一个周报自动生成工具', '把定价改成年费\n给团队做一个周报自动生成工具']);
+  assert.ok(systems[1].includes(KB));
+  assert.deepEqual(advisor.get(id)!.messages[1].context_refs, { memories: [], reviews: [], kb: KB_REFS });
+  done();
+});
+
+test('知识库：hooks.kb 返回空或未配置时提示词不变，context_refs 不含 kb', async () => {
+  const run = async (hooks: AdvisorHooks) => {
+    const systems: string[] = [];
+    const { db, advisor, done } = setup({ chat: (m) => (systems.push(m[0].content), fakeTurn(m)) }, hooks);
+    const id = await doneReview(advisor);
+    const raw = (db.prepare('SELECT context_refs FROM pm_reviews WHERE id = ?').get(id) as { context_refs: string | null }).context_refs;
+    done();
+    return { system: systems[0], raw };
+  };
+  const context = () => ({ text: CTX, memoryIds: [3], reviewIds: [] });
+  const base = await run({ context });
+  const empty = await run({ context, kb: () => ({ text: '', refs: [] }) });
+  assert.equal(empty.system, base.system);
+  assert.equal(empty.raw, '{"memories":[3],"reviews":[]}');
+  assert.equal(base.raw, empty.raw);
+  const none = await run({ kb: () => ({ text: '', refs: [] }) });
+  assert.equal(none.raw, null);
+  assert.doesNotMatch(none.system, /关于你服务的用户/);
+});
+
+test('知识库：hooks.kb 抛错时评审照常完成并记日志；与记忆同时存在时记忆在前、空一行接知识库', async () => {
+  const logs: string[] = [];
+  const bad = setup({ chat: fakeTurn }, { kb: () => {
+    throw new Error('boom');
+  } }, (s) => logs.push(s));
+  const id = await doneReview(bad.advisor);
+  assert.equal(bad.advisor.get(id)!.context_refs, null);
+  assert.ok(logs.some((l) => l.startsWith('[pm] 读取知识库失败')), logs.join('\n'));
+  bad.done();
+
+  const systems: string[] = [];
+  const used: number[][] = [];
+  const both = setup(
+    { chat: (m) => (systems.push(m[0].content), fakeTurn(m)) },
+    { context: () => ({ text: CTX, memoryIds: [3], reviewIds: [] }), kb: () => ({ text: KB, refs: KB_REFS }), used: (ids) => used.push(ids) },
+  );
+  const id2 = await doneReview(both.advisor);
+  assert.ok(systems[0].includes(`${CTX}\n\n${KB}`));
+  assert.deepEqual(both.advisor.get(id2)!.context_refs, { memories: [3], reviews: [], kb: KB_REFS });
+  assert.deepEqual(used, [[3]]);
+  both.done();
 });
 
 test('产品顾问：onEvent 在首版与每轮完成后各调用一次；onEvent 抛错不影响结果', async () => {

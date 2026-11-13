@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { openDb } from '../../packages/core/db.ts';
 import type { DB } from '../../packages/core/db.ts';
 import { conclusionOf } from '../pm/advisor.ts';
+import { createDoc } from '../kb/docs.ts';
 import { recallHistory, resolveRefs, touchMemories, trigramOverlap, userContext } from './context.ts';
 
 const T = 1_800_000_000_000;
@@ -191,8 +192,22 @@ test('resolveRefs：已删除条目与会话显示「（已删除）」，非法
       { id: r, input: '律所合同审查' },
       { id: 888, input: '（已删除）' },
     ],
+    kb: [],
   });
   for (const bad of [null, '', '{', '[]', JSON.stringify({ memories: 'x' }), JSON.stringify({ memories: [], reviews: [] })]) assert.equal(resolveRefs(db, bad), null);
+  done();
+});
+
+test('resolveRefs：kb 引用保留快照标题并标注条目是否存在，过滤不合法元素', () => {
+  const { db, done } = tmp();
+  const doc = createDoc(db, { kind: 'note', title: '竞品', body: '## 定价\n按席位' });
+  const ref = { doc, ord: 0, title: '竞品（旧名）', heading: '定价' };
+  const raw = JSON.stringify({ memories: [], reviews: [], kb: [ref, { doc: 'x', ord: 0, title: 't', heading: '' }, null, { doc: 2, ord: 1.5, title: 't', heading: '' }] });
+  assert.deepEqual(resolveRefs(db, raw), { memories: [], reviews: [], kb: [{ ...ref, exists: true }] });
+  db.prepare('DELETE FROM kb_docs WHERE id = ?').run(doc);
+  assert.deepEqual(resolveRefs(db, raw)!.kb, [{ ...ref, exists: false }]);
+  assert.equal(resolveRefs(db, JSON.stringify({ memories: [], reviews: [], kb: [] })), null);
+  assert.equal(resolveRefs(db, JSON.stringify({ memories: [], reviews: [], kb: 'x' })), null);
   done();
 });
 

@@ -1,5 +1,6 @@
 // 调用模型前拼装用户上下文：画像 + 相关记忆 + 过去的讨论（FTS5 trigram 召回）
 import type { DB } from '../../packages/core/db.ts';
+import type { KbRef } from '../kb/types.ts';
 import { conclusionOf } from '../pm/advisor.ts';
 import { cut, fence } from './events.ts';
 import { KIND_LABELS, getProfile, len, listMemories } from './store.ts';
@@ -25,6 +26,8 @@ export interface HistoryHit {
 export interface ContextView {
   memories: { id: number; kind: string; content: string }[];
   reviews: { id: number; input: string }[];
+  /** 知识库引用：标题为召回时的快照，exists 表示条目当前是否还在 */
+  kb: (KbRef & { exists: boolean })[];
 }
 
 const BUDGET: Record<Purpose, number> = { pm: 3000, brief: 1500, analyze: 600 };
@@ -217,9 +220,11 @@ export function resolveRefs(db: DB, raw: unknown): ContextView | null {
   const ids = (x: unknown) => (Array.isArray(x) ? x.filter((i): i is number => Number.isSafeInteger(i)) : null);
   const mIds = o.memories === undefined ? [] : ids(o.memories);
   const rIds = o.reviews === undefined ? [] : ids(o.reviews);
-  if (!mIds || !rIds || (!mIds.length && !rIds.length)) return null;
+  const kbs = o.kb === undefined ? [] : Array.isArray(o.kb) ? o.kb.filter(isKbRef) : null;
+  if (!mIds || !rIds || !kbs || (!mIds.length && !rIds.length && !kbs.length)) return null;
   const mq = db.prepare('SELECT kind, content FROM memories WHERE id = ?');
   const rq = db.prepare('SELECT input FROM pm_reviews WHERE id = ?');
+  const dq = db.prepare('SELECT 1 FROM kb_docs WHERE id = ?');
   return {
     memories: mIds.map((id) => {
       const m = mq.get(id) as { kind: string; content: string } | undefined;
@@ -229,5 +234,12 @@ export function resolveRefs(db: DB, raw: unknown): ContextView | null {
       const r = rq.get(id) as { input: string } | undefined;
       return { id, input: r ? cut(String(r.input).replace(/\s+/g, ' ').trim(), 100) : '（已删除）' };
     }),
+    kb: kbs.map((k) => ({ doc: k.doc, ord: k.ord, title: k.title, heading: k.heading, exists: Boolean(dq.get(k.doc)) })),
   };
+}
+
+function isKbRef(x: unknown): x is KbRef {
+  if (!x || typeof x !== 'object') return false;
+  const r = x as Record<string, unknown>;
+  return Number.isSafeInteger(r.doc) && Number.isSafeInteger(r.ord) && typeof r.title === 'string' && typeof r.heading === 'string';
 }
