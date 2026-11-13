@@ -264,3 +264,59 @@ button.link:disabled { opacity: .4; cursor: not-allowed; }
 .mem-note { font-size: 12.5px; margin-top: 2px; }
 .mem-actions { padding: 18px 0 60px; align-items: center; }
 .mem-actions a.link { color: var(--muted); }
+
+/* ---------- 知识库 ---------- */
+.kb { display: grid; grid-template-columns: 240px 1fr; gap: 28px; margin-top: 14px; }
+.kb-side { border-right: 1px solid var(--line); padding-right: 16px; min-width: 0; }
+.kb-side-head { display: flex; align-items: center; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+.kb-side-title { color: var(--muted); letter-spacing: .05em; }
+.kb-tree, .kb-tree ul { list-style: none; margin: 0; padding: 0; }
+.kb-tree ul { padding-left: 14px; }
+.kb-row { display: flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 6px; font-size: 14px; }
+.kb-row:hover { background: var(--soft); }
+.kb-row.on { background: var(--soft); font-weight: 600; }
+.kb-row.drop { outline: 1px dashed var(--accent); }
+.kb-tog { width: 14px; flex: none; font-size: 11px; color: var(--muted); }
+.kb-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-count { font-size: 12px; color: var(--muted); }
+.kb-ops { display: none; gap: 6px; font-size: 12px; }
+.kb-row:hover .kb-ops, .kb-row:focus-within .kb-ops { display: inline-flex; }
+.kb-row:hover .kb-count { display: none; }
+.kb-main { min-width: 0; }
+.kb-bar { display: flex; gap: 8px; align-items: center; }
+.kb-bar input[type=search] { flex: 1; min-width: 0; padding: 5px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
+.kb-crumb { font-size: 13px; margin: 14px 0 4px; }
+.kb-list { list-style: none; margin: 0; padding: 0; }
+.kb-doc-row { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.kb-doc-row[draggable] { cursor: grab; }
+.kb-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.kb-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12.5px; margin-top: 2px; }
+.kb-snip { margin: 4px 0 0; font-size: 13.5px; color: var(--muted); }
+.kb-kind, .kb-status { font-size: 11.5px; border-radius: 4px; padding: 0 6px; background: var(--soft); color: var(--muted); flex: none; }
+.kb-status.s-error, .kb-status.s-orphan { color: var(--err); }
+.kb-back { font-size: 13px; margin-top: 14px; }
+.kb-doc-title { font-size: 20px; margin: 8px 0 4px; }
+.kb-note { font-size: 13px; background: var(--soft); border-radius: var(--radius); padding: 6px 10px; margin: 10px 0 0; }
+.kb-note.warn, .kb-note.err { color: var(--err); }
+.kb-doc { margin-top: 14px; }
+.kb-chunk { padding: 4px 8px; margin: 0 -8px; border-radius: 6px; scroll-margin-top: 70px; }
+.kb-chunk.hit { background: var(--soft); box-shadow: inset 3px 0 0 var(--accent); }
+.kb-h { font-size: 14px; margin: 14px 0 4px; }
+.kb-text { white-space: pre-wrap; word-break: break-word; font-size: 14.5px; }
+.kb-edit { margin-top: 14px; }
+.kb-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); margin: 10px 0; }
+.kb-input, .kb-select, .kb-editor { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; }
+.kb-editor { width: 100%; min-height: 320px; resize: vertical; font-size: 14px; line-height: 1.6; }
+.kb-modal { position: fixed; inset: 0; background: rgba(0, 0, 0, .35); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 50; }
+.kb-modal[hidden] { display: none; }
+.kb-dlg { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; width: min(440px, calc(100vw - 32px)); box-shadow: 0 10px 40px rgba(0, 0, 0, .18); }
+.kb-dlg h3 { margin: 0 0 6px; font-size: 16px; }
+.kb-sugg { font-size: 13px; margin: 8px 0 0; }
+.kb-dlg .actions { align-items: center; margin-top: 14px; }
+@media (max-width: 640px) {
+  .kb { grid-template-columns: 1fr; gap: 12px; }
+  .kb-side { border-right: 0; border-bottom: 1px solid var(--line); padding: 0 0 10px; }
+  .kb-ops { display: inline-flex; }
+  .kb-row:hover .kb-count { display: inline; }
+}

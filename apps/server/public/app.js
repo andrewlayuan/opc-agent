@@ -1,3 +1,4 @@
+import { initKb } from './kb.js';
 // 所有外部数据只通过 textContent 写入 DOM，链接只接受 http(s)
 const $ = (id) => document.getElementById(id);
 
@@ -43,6 +44,7 @@ async function api(path, opts = {}) {
   if (!res.ok) {
     const err = new Error(data.error || data.message || `请求失败（${res.status}）`);
     err.status = res.status;
+    err.data = data;
     throw err;
   }
   return data;
@@ -198,6 +200,7 @@ function detailChildren(item, box, li) {
         }
       },
     }),
+    kb.button({ itemId: item.id }),
   );
   out.push(actions);
   return out;
@@ -207,6 +210,21 @@ function replaceItem(fresh, li) {
   const i = state.items.findIndex((x) => x.id === fresh.id);
   if (i >= 0) state.items[i] = { ...state.items[i], ...fresh };
   li.replaceWith(renderItem(state.items[i] ?? fresh));
+}
+
+/** 从知识库跳回动态：展开指定资讯（不在当前列表里时放到最前面） */
+async function openItem(id) {
+  show('feed');
+  try {
+    const { item } = await api(`/api/items/${id}`);
+    if (!state.items.some((x) => x.id === id)) state.items.unshift(item);
+    state.open.add(id);
+    $('list').replaceChildren(...state.items.map(renderItem));
+    $('empty').hidden = true;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  } catch (e) {
+    toast(e.message);
+  }
 }
 
 function toggleOpen(id, li) {
@@ -804,21 +822,24 @@ function renderReview(r) {
             window.scrollTo({ top: 0, behavior: 'smooth' });
           },
         }),
+        kb.button({ reviewId: r.id }),
       ),
     );
   }
   box.replaceChildren(...parts.filter(Boolean));
 }
 
-/** 「参考了 N 条记忆、M 次历史讨论」：展开后列出记忆内容与可跳转的历史会话 */
+/** 「参考了 N 条记忆、M 次历史讨论、K 段知识库」：展开后列出记忆内容、可跳转的历史会话与知识库段落 */
 function contextNote(c, inline = false) {
   const ms = c?.memories ?? [];
   const rs = c?.reviews ?? [];
-  if (!ms.length && !rs.length) return null;
+  const ks = c?.kb ?? [];
+  if (!ms.length && !rs.length && !ks.length) return null;
+  const kbLabel = (k) => `知识库：${k.title}${k.heading ? ` › ${k.heading}` : ''}`;
   return h(
     'details',
     { class: `pm-ctx${inline ? ' inline' : ''}` },
-    h('summary', { text: `参考了 ${ms.length} 条记忆、${rs.length} 次历史讨论` }),
+    h('summary', { text: `参考了 ${ms.length} 条记忆、${rs.length} 次历史讨论${ks.length ? `、${ks.length} 段知识库` : ''}` }),
     ms.length ? h('ul', {}, ms.map((m) => h('li', { text: `${MEM_LABEL[m.kind] ? `[${MEM_LABEL[m.kind]}] ` : ''}${m.content}` }))) : null,
     rs.length
       ? h(
@@ -837,6 +858,21 @@ function contextNote(c, inline = false) {
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 },
               }),
+            ),
+          ),
+        )
+      : null,
+    ks.length
+      ? h(
+          'ul',
+          {},
+          ks.map((k) =>
+            h(
+              'li',
+              {},
+              k.exists
+                ? h('button', { type: 'button', class: 'link', text: kbLabel(k), onclick: () => kb.open(k.doc, k.ord) })
+                : h('span', { text: `${kbLabel(k)}（已删除）` }),
             ),
           ),
         )
@@ -1370,10 +1406,11 @@ async function clearAllMemory(e) {
 }
 
 // ---------------- 视图切换与事件 ----------------
-function show(view) {
+function show(view, opts = {}) {
   for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('on', b.dataset.view === view);
-  for (const v of ['feed', 'brief', 'pm', 'memory', 'sources']) $(`view-${v}`).hidden = v !== view;
+  for (const v of ['feed', 'brief', 'pm', 'kb', 'memory', 'sources']) $(`view-${v}`).hidden = v !== view;
   $('q').hidden = view !== 'feed';
+  if (view === 'kb' && !opts.skipLoad) kb.load();
   if (view === 'brief') loadBrief();
   if (view === 'sources') loadSources();
   if (view === 'memory') loadMemory();
@@ -1464,5 +1501,7 @@ async function init() {
   refreshStatus();
   setInterval(refreshStatus, 30000);
 }
+
+const kb = initKb({ h, api, toast, show, openReview, openItem });
 
 init().catch((e) => toast(e.message));
