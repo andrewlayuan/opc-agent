@@ -145,7 +145,7 @@ export function userContext(db: DB, purpose: Purpose, opts: { query?: string; ex
 }
 
 /** 把查询切成 FTS5 trigram 片段：按空白和标点切分，保留 ≥3 字的片段，长片段 6 字一段，最多 12 段 */
-function ftsSegments(query: string): string[] {
+export function ftsSegments(query: string): string[] {
   const out: string[] = [];
   for (const seg of cut(query, 200).split(/[\s\p{P}\p{S}]+/u)) {
     const cps = [...seg];
