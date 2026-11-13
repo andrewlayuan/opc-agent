@@ -127,6 +127,19 @@ function reindex(db: DB, id: number, text: string, now: number): void {
 
 const ITEM_REV = 'CAST(max(coalesce(i.translated_at, 0), coalesce(i.analyzed_at, 0), i.fetched_at) AS TEXT)';
 
+/** items.analysis_zh 存的是 JSON 字符串数组，转成 Markdown 列表；不是数组时原样使用 */
+function analysisText(raw: string | null): string {
+  const s = raw?.trim() ?? '';
+  if (!s) return '';
+  try {
+    const v = JSON.parse(s) as unknown;
+    if (Array.isArray(v)) return v.filter((x): x is string => typeof x === 'string' && x.trim() !== '').map((x) => `- ${x.trim()}`).join('\n');
+  } catch {
+    // 旧数据可能是纯文本
+  }
+  return s;
+}
+
 export function sourceText(db: DB, kind: 'review' | 'item', id: number): { title: string; text: string; rev: string } | null {
   if (kind === 'review') {
     const r = db
@@ -142,7 +155,8 @@ export function sourceText(db: DB, kind: 'review' | 'item', id: number): { title
   const title = clipCp((it.title_zh || it.title || `资讯 #${id}`).replace(/\s+/g, ' ').trim(), KB_LIMITS.title);
   const parts = [`# ${title}`, `来源：${it.url}`];
   if (it.summary_zh?.trim()) parts.push(`## 摘要\n${it.summary_zh.trim()}`);
-  if (it.analysis_zh?.trim()) parts.push(`## 分析\n${it.analysis_zh.trim()}`);
+  const analysis = analysisText(it.analysis_zh);
+  if (analysis) parts.push(`## 分析\n${analysis}`);
   const body = (it.translation_zh || it.content || '').trim();
   if (body) parts.push(`## 正文\n${body}`);
   return { title, text: parts.join('\n\n'), rev: String(it.rev) };

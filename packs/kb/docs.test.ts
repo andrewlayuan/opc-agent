@@ -56,7 +56,7 @@ test('item：正文含标题、摘要、分析；有译文用译文；译文更�
   const s = sourceText(db, 'item', seedItem(db))!;
   assert.equal(s.title, '定价新闻');
   assert.ok(s.text.startsWith('# 定价新闻'), s.text);
-  for (const part of ['## 摘要\n摘要内容', '## 分析\n分析内容', 'original english body']) assert.ok(s.text.includes(part), part);
+  for (const part of ['## 摘要\n摘要内容', '## 分析\n- 要点一\n- 要点二', 'original english body']) assert.ok(s.text.includes(part), part);
   const tr = seedItem(db, '中文译文全文');
   const id = createDoc(db, { kind: 'item', itemId: tr });
   const t = sourceText(db, 'item', tr)!.text;

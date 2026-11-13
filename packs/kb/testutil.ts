@@ -29,6 +29,6 @@ export function seedReview(db: DB, input = '给中小律所的合同审查工具
 export function seedItem(db: DB, translation?: string): number {
   db.prepare("INSERT OR IGNORE INTO sources(id, name, url) VALUES ('s1', '源', 'https://s')").run();
   const sql =
-    "INSERT INTO items(source_id, url, title, norm_title, published_at, fetched_at, content, title_zh, summary_zh, analysis_zh, translation_zh, translated_at) VALUES ('s1', ?, 'Pricing', '', 1, 1, 'original english body', '定价新闻', '摘要内容', '分析内容', ?, ?)";
+    "INSERT INTO items(source_id, url, title, norm_title, published_at, fetched_at, content, title_zh, summary_zh, analysis_zh, translation_zh, translated_at) VALUES ('s1', ?, 'Pricing', '', 1, 1, 'original english body', '定价新闻', '摘要内容', '[\"要点一\",\"要点二\"]', ?, ?)";
   return Number(db.prepare(sql).run(`https://a.com/${Math.random()}`, translation ?? null, translation ? 2 : null).lastInsertRowid);
 }
