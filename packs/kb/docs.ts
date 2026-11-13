@@ -85,6 +85,7 @@ function cleanTitle(raw: unknown): string {
 }
 
 function cleanBody(raw: unknown, kind: 'note' | 'upload'): string {
+  if (raw !== undefined && typeof raw !== 'string') throw new KbError(400, '正文格式不正确');
   const b = typeof raw === 'string' ? raw.replace(/\r\n?/g, '\n') : '';
   if (kind === 'note' && !b.trim()) throw new KbError(400, '笔记内容不能为空');
   if (len(b) > KB_LIMITS.bodyChars) throw new KbError(400, '正文最多 20 万字');

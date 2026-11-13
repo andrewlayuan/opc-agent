@@ -145,3 +145,12 @@ test('listDocs：按目录、未归类、最近更新', () => {
   assert.equal(listDocs(db, 'none')[0].path, '未归类');
   done();
 });
+
+test('updateDoc：正文不是字符串时返回 400，不会清空已有正文', () => {
+  const { db, done } = tmpKbDb();
+  const id = insertUpload(db, { title: '资料', folderId: null, fileName: 'a.txt', mime: 'text/plain', size: 1, storage: 'a'.repeat(32) });
+  setBody(db, id, '原有正文');
+  for (const b of [null, 123, ['x']]) assert.equal(err(() => updateDoc(db, id, { body: b }))?.status, 400, JSON.stringify(b));
+  assert.equal(getDoc(db, id)!.body, '原有正文');
+  done();
+});
