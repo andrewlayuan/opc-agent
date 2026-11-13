@@ -11,6 +11,7 @@ const STATIC: Record<string, { file: string; type: string }> = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/login': { file: 'login.html', type: 'text/html; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
+  '/kb.js': { file: 'kb.js', type: 'text/javascript; charset=utf-8' },
   '/login.js': { file: 'login.js', type: 'text/javascript; charset=utf-8' },
   '/style.css': { file: 'style.css', type: 'text/css; charset=utf-8' },
   '/print.css': { file: 'print.css', type: 'text/css; charset=utf-8' },

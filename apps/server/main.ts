@@ -5,6 +5,8 @@ import { LoginLimiter, createSession, deleteSession, getSession, safeEqualStr, v
 import { loadConfig } from '../../packages/core/config.ts';
 import { openDb } from '../../packages/core/db.ts';
 import { allowHost } from '../../packages/core/net.ts';
+import { recallKb } from '../../packs/kb/search.ts';
+import { KbFiles } from '../../packs/kb/uploads.ts';
 import { MemoryKeeper } from '../../packs/memory/consolidate.ts';
 import { resolveRefs, touchMemories, userContext } from '../../packs/memory/context.ts';
 import { paragraphDiff, recordEvent } from '../../packs/memory/events.ts';
@@ -23,6 +25,7 @@ import { getItem, listItems, stats } from '../../packs/radar/query.ts';
 import { Radar } from '../../packs/radar/service.ts';
 import { HttpError, clientIp, contentDisposition, parseCookies, readBodyToFile, readJson, sameOrigin, securityHeaders, sendJson, staticFor } from './http.ts';
 import { handleMemoryApi } from './memory-api.ts';
+import { handleKbApi } from './kb-api.ts';
 
 const cfg = loadConfig({ requireAuth: true });
 const db = openDb(cfg.dbPath);
@@ -30,6 +33,7 @@ const radar = new Radar(db, cfg, undefined, { analyzeContext: () => userContext(
 const keeper = new MemoryKeeper(db, radar.llm);
 const pmSkillsDir = defaultSkillsDir();
 const files = new AttachmentStore(db, path.join(cfg.dataDir, 'uploads'), radar.llm);
+const kbFiles = new KbFiles(db, path.join(cfg.dataDir, 'kb'), radar.llm);
 const pm = new PmAdvisor(
   db,
   radar.llm,
@@ -39,6 +43,7 @@ const pm = new PmAdvisor(
     context: (_, o) => userContext(db, 'pm', o),
     onEvent: (e) => record({ ...scrubAttachments(e), refType: 'review' }),
     used: (ids) => touchMemories(db, ids),
+    kb: (q) => recallKb(db, q),
   },
   files,
 );
@@ -323,6 +328,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   }
 
   if (await handleMemoryApi({ db, keeper, llmEnabled: radar.llm.enabled }, req, res, method, p)) return;
+  if (await handleKbApi({ db, files: kbFiles, llm: radar.llm }, req, res, method, url)) return;
 
   // ---------- 产品顾问（pm-skills） ----------
   if (p === '/api/pm/meta' && method === 'GET') {
@@ -562,6 +568,12 @@ server.listen(cfg.port, cfg.host, () => {
     if (n) console.log(`[pm] ${n} 个附件因重启中断，已标记为失败`);
   } catch (e) {
     console.error('[pm] 恢复附件状态失败', e);
+  }
+  try {
+    const n = kbFiles.recover();
+    if (n) console.log(`[kb] ${n} 个上传因重启中断，已标记为失败`);
+  } catch (e) {
+    console.error('[kb] 恢复上传状态失败', e);
   }
   cleanupFiles();
   setInterval(cleanupFiles, 3600000).unref();
