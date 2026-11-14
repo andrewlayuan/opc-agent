@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import zlib from 'node:zlib';
 import { buildZip } from './zip.ts';
 import { ExtractError, clampText, decodeText, decodeXml, detectType, extractDocx, extractOffice, extractPdf, extractPptx, extractXlsx } from './extract.ts';
 import type { ExecFn } from './extract.ts';
@@ -206,12 +207,66 @@ test('extractPdf：参数固定、不经 shell', async () => {
   assert.equal(out, '第一页的文字内容足够长了吧\n\n第二页的内容也要有一些文字');
 });
 
-test('extractPdf：ENOENT、超时、密码、扫描件分别给出 spec 文案', async () => {
+test('extractPdf：ENOENT、超时、密码、损坏分别给出 spec 文案', async () => {
   assert.equal(await pdfMsg(fakeExec(rejectWith({ code: 'ENOENT' }))), '服务器未安装 PDF 解析工具（poppler-utils）');
   assert.equal(await pdfMsg(fakeExec(rejectWith({ killed: true, signal: 'SIGKILL' }))), 'PDF 解析超时');
   assert.equal(await pdfMsg(fakeExec(rejectWith({ code: 1, stderr: 'Command Line Error: Incorrect password' }))), 'PDF 有密码保护');
-  assert.equal(await pdfMsg(fakeExec(async () => ({ stdout: ' \n\f ', stderr: '' }))), '未提取到文字，可能是扫描件，请截图上传');
   assert.equal(await pdfMsg(fakeExec(rejectWith({ code: 1, stderr: 'Syntax Error: broken' }))), '文件损坏或结构不支持');
+});
+
+/** 按命令分派的假 exec：pdftotext 返回空文字层；pdftoppm 在输出前缀处写出 pages 个页面图；tesseract 按图片名返回 ocr(页码) */
+function scanExec(pages: number, ocr: (page: number) => Promise<string> | string, calls: ExecCall[] = []): ExecFn {
+  return async (file, args, opts) => {
+    calls.push({ file, args, opts });
+    if (file === 'pdftotext') return { stdout: ' \n\f ', stderr: '' };
+    if (file === 'pdftoppm') {
+      const prefix = args.at(-1)!;
+      const width = String(pages).length;
+      for (let i = 1; i <= pages; i++) fs.writeFileSync(`${prefix}-${String(i).padStart(width, '0')}.png`, 'x');
+      return { stdout: '', stderr: '' };
+    }
+    if (file === 'tesseract') {
+      const page = Number(/-(\d+)\.png$/.exec(args[0])![1]);
+      return { stdout: await ocr(page), stderr: '' };
+    }
+    throw new Error(`unexpected ${file}`);
+  };
+}
+
+test('extractPdf：文字层为空时渲染前 20 页做 OCR，按页码顺序拼接并标注来源', async () => {
+  const calls: ExecCall[] = [];
+  const out = await extractPdf('/x/a', scanExec(12, (p) => `第 ${p} 页 识别 出来 的 文字 内容\n`, calls));
+  const ppm = calls.find((c) => c.file === 'pdftoppm')!;
+  assert.deepEqual(ppm.args.slice(0, -2), ['-r', '200', '-gray', '-png', '-l', '20']);
+  assert.equal(ppm.args.at(-2), '/x/a');
+  const tess = calls.filter((c) => c.file === 'tesseract');
+  assert.equal(tess.length, 12);
+  assert.deepEqual(tess[0].args.slice(1), ['-', '-l', 'chi_sim+eng', '--psm', '4']);
+  assert.ok(out.startsWith('（以下内容由 OCR 从扫描页识别，可能有错字）\n\n第 1 页识别出来的文字内容'), out);
+  assert.ok(out.indexOf('第 2 页') < out.indexOf('第 10 页'), '按页码数字排序，不按字符串');
+  assert.ok(!fs.existsSync(path.dirname(ppm.args.at(-1)!)), '临时目录已删除');
+});
+
+test('extractPdf：OCR 也没有文字、未安装 tesseract、渲染超时分别给出文案', async () => {
+  assert.equal(await pdfMsg(scanExec(2, () => '  \n')), '未识别到文字，可能是扫描件不清晰或页面没有文字');
+  assert.equal(await pdfMsg(scanExec(1, () => Promise.reject(Object.assign(new Error('x'), { code: 'ENOENT' })))), '未提取到文字，可能是扫描件；服务器未安装 OCR 工具（tesseract）');
+  const slow: ExecFn = async (file) => {
+    if (file === 'pdftotext') return { stdout: '', stderr: '' };
+    throw Object.assign(new Error('killed'), { killed: true, signal: 'SIGKILL' });
+  };
+  assert.equal(await pdfMsg(slow), 'PDF 解析超时');
+});
+
+test('extractPdf：单页 OCR 失败跳过该页，总时长超出预算时停止并注明', async () => {
+  const out = await extractPdf('/x/a', scanExec(3, (p) => (p === 2 ? Promise.reject(Object.assign(new Error('x'), { killed: true })) : `第${p}页的文字内容足够长足够长`)));
+  assert.match(out, /第1页/);
+  assert.match(out, /第3页/);
+  assert.doesNotMatch(out, /第2页/);
+  let t = 0;
+  const budgeted = await extractPdf('/x/a', scanExec(5, (p) => ((t += 70_000), `第${p}页的文字内容足够长足够长`)), { now: () => t });
+  assert.match(budgeted, /第2页/);
+  assert.doesNotMatch(budgeted, /第3页/);
+  assert.match(budgeted, /OCR 超时，只识别了前 2 页/);
 });
 
 test('extractPdf：maxBuffer 超限时用已读到的内容', async () => {
@@ -250,6 +305,53 @@ test('extractPdf：真实 pdftotext（未安装则跳过）', { skip: !hasPdftot
   try {
     assert.match(await extractPdf(file), /Hello OPC attachments test/);
     assert.equal(detectType(fs.readFileSync(file), 'x').format, 'pdf');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** 用 pdftoppm 把文字 PDF 渲染成灰度图，再包成只有图片的 PDF，模拟扫描件 */
+function scannedPdf(dir: string, text: string): string {
+  const src = path.join(dir, 'src.pdf');
+  fs.writeFileSync(src, minimalPdf(text));
+  spawnSync('pdftoppm', ['-r', '150', '-gray', '-singlefile', src, path.join(dir, 'img')]);
+  const pgm = fs.readFileSync(path.join(dir, 'img.pgm'));
+  const [, size, , ] = pgm.subarray(0, 64).toString('latin1').split('\n');
+  const [w, h] = size.split(' ').map(Number);
+  const px = pgm.subarray(pgm.length - w * h);
+  const img = zlib.deflateSync(px);
+  const content = 'q 612 0 0 792 0 0 cm /Im1 Do Q';
+  const objs: Buffer[] = [
+    Buffer.from('<< /Type /Catalog /Pages 2 0 R >>'),
+    Buffer.from('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'),
+    Buffer.from('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >>'),
+    Buffer.from(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`),
+    Buffer.concat([Buffer.from(`<< /Type /XObject /Subtype /Image /Width ${w} /Height ${h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length ${img.length} >>\nstream\n`), img, Buffer.from('\nendstream')]),
+  ];
+  const parts: Buffer[] = [Buffer.from('%PDF-1.4\n')];
+  let len = parts[0].length;
+  const offsets: number[] = [];
+  objs.forEach((o, i) => {
+    offsets.push(len);
+    const b = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), o, Buffer.from('\nendobj\n')]);
+    parts.push(b);
+    len += b.length;
+  });
+  parts.push(Buffer.from(`xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${len}\n%%EOF\n`));
+  const out = path.join(dir, 'scan.pdf');
+  fs.writeFileSync(out, Buffer.concat(parts));
+  return out;
+}
+const hasTesseract = spawnSync('tesseract', ['--version']).error == null;
+
+test('extractPdf：真实扫描件走 OCR（未安装 tesseract 则跳过）', { skip: !hasPdftotext || !hasTesseract }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-pdf-'));
+  try {
+    const file = scannedPdf(dir, 'Scanned pricing memo for OCR test');
+    assert.equal(spawnSync('pdftotext', [file, '-']).stdout.toString().trim(), '', '模拟扫描件没有文字层');
+    const out = await extractPdf(file);
+    assert.match(out, /^（以下内容由 OCR/);
+    assert.match(out, /pricing memo for OCR/i);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

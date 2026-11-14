@@ -1,5 +1,8 @@
 /** 附件类型判断与文字提取（txt / docx / xlsx / pptx / pdf）；不信任浏览器声明的类型 */
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { promisify } from 'node:util';
 import { Worker } from 'node:worker_threads';
 import { openZip } from './zip.ts';
@@ -325,21 +328,87 @@ export const realExec: ExecFn = async (file, args, opts) => {
 export const PDF_MISSING = '服务器未安装 PDF 解析工具（poppler-utils）';
 export const PDF_TIMEOUT = 'PDF 解析超时';
 export const PDF_PASSWORD = 'PDF 有密码保护';
-export const PDF_SCANNED = '未提取到文字，可能是扫描件，请截图上传';
+export const PDF_SCANNED = '未识别到文字，可能是扫描件不清晰或页面没有文字';
+export const OCR_MISSING = '未提取到文字，可能是扫描件；服务器未安装 OCR 工具（tesseract）';
+export const OCR_NOTE = '（以下内容由 OCR 从扫描页识别，可能有错字）';
+export const OCR_PAGES = 20;
+const OCR_BUDGET_MS = 120_000;
+const MIN_CHARS = 20;
 
-/** 调用 pdftotext（不经 shell、限时、限输出），最多读 200 页 */
-export async function extractPdf(file: string, exec: ExecFn = realExec): Promise<string> {
+type ExecErr = { code?: unknown; killed?: boolean; signal?: string; stderr?: unknown; stdout?: unknown; message?: string };
+const killed = (e: ExecErr) => e.killed === true || e.signal === 'SIGKILL';
+const cpLen = (s: string) => [...s.replace(/\s+/g, '')].length;
+const CJK = '\\u2e80-\\u9fff\\uf900-\\ufaff\\uff00-\\uffef';
+/** tesseract 中文结果常在汉字之间插空格，只去掉两侧都是中日韩字符或全角标点的空格 */
+const joinCjk = (s: string) => s.replace(new RegExp(`(?<=[${CJK}])[ \\t]+(?=[${CJK}])`, 'g'), '');
+
+export interface PdfOpts {
+  /** 测试用：时钟与 OCR 总预算 */
+  now?: () => number;
+  ocrBudgetMs?: number;
+}
+
+/** 调用 pdftotext（不经 shell、限时、限输出），最多读 200 页；文字层为空时退回 OCR */
+export async function extractPdf(file: string, exec: ExecFn = realExec, opts: PdfOpts = {}): Promise<string> {
   let stdout: string;
   try {
     stdout = (await exec('pdftotext', ['-enc', 'UTF-8', '-l', '200', file, '-'], { timeout: 20000, maxBuffer: 2 * 1024 * 1024, killSignal: 'SIGKILL' })).stdout;
   } catch (e) {
-    const err = e as { code?: unknown; killed?: boolean; signal?: string; stderr?: unknown; stdout?: unknown; message?: string };
+    const err = e as ExecErr;
     if (err.code === 'ENOENT') throw new ExtractError(422, PDF_MISSING);
     if (err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') stdout = String(err.stdout ?? '');
-    else if (err.killed || err.signal === 'SIGKILL') throw new ExtractError(422, PDF_TIMEOUT);
+    else if (killed(err)) throw new ExtractError(422, PDF_TIMEOUT);
     else if (/Incorrect password/i.test(`${String(err.stderr ?? '')}\n${err.message ?? ''}`)) throw new ExtractError(422, PDF_PASSWORD);
     else throw new ExtractError(422, BROKEN);
   }
-  if ([...stdout.replace(/\s+/g, '')].length < 20) throw new ExtractError(422, PDF_SCANNED);
-  return stdout.replace(/\f/g, '\n\n').trim();
+  if (cpLen(stdout) >= MIN_CHARS) return stdout.replace(/\f/g, '\n\n').trim();
+  const ocr = await ocrPdf(file, exec, opts);
+  if (cpLen(ocr) < MIN_CHARS) throw new ExtractError(422, PDF_SCANNED);
+  return `${OCR_NOTE}\n\n${ocr}`;
+}
+
+/**
+ * 扫描件：pdftoppm 把前 20 页渲染成 200dpi 灰度 PNG（放在临时目录），再逐页交给 tesseract（简体中文 + 英文）。
+ * 单页失败或超时跳过该页；总时长超出预算时停止并在末尾注明；临时目录总会删除
+ */
+async function ocrPdf(file: string, exec: ExecFn, opts: PdfOpts): Promise<string> {
+  const now = opts.now ?? Date.now;
+  const budget = opts.ocrBudgetMs ?? OCR_BUDGET_MS;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-ocr-'));
+  try {
+    try {
+      await exec('pdftoppm', ['-r', '200', '-gray', '-png', '-l', String(OCR_PAGES), file, path.join(dir, 'p')], { timeout: 60000, maxBuffer: 64 * 1024, killSignal: 'SIGKILL' });
+    } catch (e) {
+      const err = e as ExecErr;
+      if (err.code === 'ENOENT') throw new ExtractError(422, PDF_MISSING);
+      if (killed(err)) throw new ExtractError(422, PDF_TIMEOUT);
+      throw new ExtractError(422, BROKEN);
+    }
+    const pages = fs
+      .readdirSync(dir)
+      .map((n) => ({ n, page: Number(/^p-(\d+)\.png$/.exec(n)?.[1]) }))
+      .filter((p) => Number.isInteger(p.page))
+      .sort((a, b) => a.page - b.page);
+    const start = now();
+    const texts: string[] = [];
+    let done = 0;
+    for (const p of pages) {
+      if (now() - start >= budget) break;
+      const img = path.join(dir, p.n);
+      try {
+        const out = (await exec('tesseract', [img, '-', '-l', 'chi_sim+eng', '--psm', '4'], { timeout: 30000, maxBuffer: 1024 * 1024, killSignal: 'SIGKILL' })).stdout;
+        const t = joinCjk(out).replace(/\f/g, '').trim();
+        if (t) texts.push(t);
+      } catch (e) {
+        if ((e as ExecErr).code === 'ENOENT') throw new ExtractError(422, OCR_MISSING);
+      } finally {
+        fs.rmSync(img, { force: true });
+      }
+      done++;
+    }
+    if (done < pages.length && texts.length) texts.push(`（OCR 超时，只识别了前 ${done} 页）`);
+    return texts.join('\n\n');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
