@@ -201,7 +201,7 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
     dropTarget(all, null, 'all');
     const none = row('none', '未归类', t.unfiled);
     dropTarget(none, null, 'unfiled');
-    $('kb-tree').replaceChildren(h('li', {}, all), h('li', {}, none), ...(kids.get(0) ?? []).map(node));
+    $('kb-tree').replaceChildren(h('li', {}, all), h('li', { class: 'kb-sep' }, none), ...(kids.get(0) ?? []).map(node));
   }
 
   // ---------- 列表与搜索 ----------
@@ -220,11 +220,27 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
     renderList(data);
   }
 
+  /** 搜索摘录里【】包住的是命中词，渲染成高亮 */
+  const snip = (s) =>
+    h(
+      'p',
+      { class: 'kb-snip' },
+      String(s ?? '')
+        .split(/【([^【】]*)】/)
+        .map((part, i) => (i % 2 ? h('mark', { text: part }) : part)),
+    );
+
   function renderList({ docs, hits }) {
     const body = $('kb-body');
-    const crumb = h('div', { class: 'kb-crumb muted', text: st.q ? `在「${folderLabel()}」中搜索「${st.q}」` : folderLabel() });
+    const n = hits ? hits.length : docs.length;
+    const crumb = h(
+      'div',
+      { class: 'kb-crumb' },
+      h('span', { class: 'kb-crumb-title', text: st.q ? `在「${folderLabel()}」中搜索「${st.q}」` : folderLabel() }),
+      n ? h('span', { class: 'kb-crumb-count', text: hits ? `${n} 条结果` : `${n} 个条目` }) : null,
+    );
     if (hits) {
-      if (!hits.length) return body.replaceChildren(crumb, h('p', { class: 'empty', text: '没有找到相关内容' }));
+      if (!hits.length) return body.replaceChildren(crumb, h('p', { class: 'empty kb-empty', text: '没有找到相关内容' }));
       return body.replaceChildren(
         crumb,
         h(
@@ -236,7 +252,7 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
               { class: 'kb-doc-row' },
               h('div', { class: 'kb-line' }, kindTag(x.doc), titleLink(x.doc, x.ord), statusTag(x.doc)),
               h('div', { class: 'kb-meta muted', text: [x.doc.path, x.heading].filter(Boolean).join(' › ') }),
-              h('p', { class: 'kb-snip', text: x.snippet }),
+              snip(x.snippet),
             ),
           ),
         ),
@@ -244,7 +260,7 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
     }
     if (!docs.length) {
       const empty = st.folder == null ? '知识库还是空的。可以上传资料、新建笔记，或者在评审和资讯里点「存入知识库」。' : '这里还没有条目';
-      return body.replaceChildren(crumb, h('p', { class: 'empty', text: empty }));
+      return body.replaceChildren(crumb, h('p', { class: 'empty kb-empty', text: empty }));
     }
     body.replaceChildren(
       crumb,
@@ -324,10 +340,14 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
     });
     $('kb-body').replaceChildren(
       h('button', { type: 'button', class: 'link kb-back', text: '← 返回列表', onclick: backToList }),
-      h('h2', { class: 'kb-doc-title', text: doc.title }),
-      h('div', { class: 'kb-meta muted' }, kindTag(doc), statusTag(doc), h('span', { text: doc.path }), h('span', { text: `更新于 ${when(doc.updated_at)}` }), sourceLink(doc)),
-      ...notes,
-      actions,
+      h(
+        'div',
+        { class: 'kb-doc-head' },
+        h('h2', { class: 'kb-doc-title', text: doc.title }),
+        h('div', { class: 'kb-meta muted' }, kindTag(doc), statusTag(doc), h('span', { text: doc.path }), h('span', { text: `更新于 ${when(doc.updated_at)}` }), sourceLink(doc)),
+        ...notes,
+        actions,
+      ),
       blocks.length ? h('div', { class: 'kb-doc' }, blocks) : doc.status === 'ready' ? h('p', { class: 'muted', text: '（没有正文）' }) : null,
     );
     if (ord != null) document.getElementById(`kb-c-${ord}`)?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
