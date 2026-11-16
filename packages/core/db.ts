@@ -293,6 +293,27 @@ const MIGRATIONS: string[] = [
     INSERT INTO kb_fts(rowid, body) VALUES (new.id, new.heading || char(10) || new.body);
   END;
   `,
+  // 8：PRD 原型版本。每版一份完整快照（大纲 + 各页清理后的 HTML），随评审删除
+  `
+  CREATE TABLE pm_prototypes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_id INTEGER NOT NULL REFERENCES pm_reviews(id) ON DELETE CASCADE,
+    n INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    status TEXT NOT NULL DEFAULT 'running',
+    base_version_n INTEGER NOT NULL,
+    from_n INTEGER,
+    request TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    progress TEXT NOT NULL DEFAULT '{"stage":"queued","done":0,"total":0}',
+    outline TEXT NOT NULL DEFAULT 'null',
+    pages TEXT NOT NULL DEFAULT '[]',
+    error TEXT,
+    UNIQUE (review_id, n)
+  );
+  CREATE INDEX pm_prototypes_review ON pm_prototypes(review_id, n);
+  `,
 ];
 
 export type DB = DatabaseSync;
