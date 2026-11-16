@@ -16,6 +16,7 @@ class El {
   checked = false;
   listeners = new Map<string, Listener[]>();
   constructor(tag: string) { this.tag = tag; }
+  get tagName(): string { return this.tag.toUpperCase(); }
   setAttribute(name: string, value: string) { this.attrs.set(name.toLowerCase(), String(value)); }
   getAttribute(name: string): string | null {
     const v = this.attrs.get(name.toLowerCase());

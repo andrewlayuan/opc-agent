@@ -212,9 +212,9 @@
     var noteBtn = t.closest('[id="proto-notes-toggle"]');
     if (noteBtn) { setNotes(!body.classList.contains('notes'), false); return; }
     var toastEl = t.closest('[data-toast]');
-    if (toastEl && toastEl.tag !== 'form') toast(toastEl.getAttribute('data-toast'));
+    if (toastEl && (!toastEl.tagName || toastEl.tagName.toLowerCase() !== 'form')) toast(toastEl.getAttribute('data-toast'));
     var gotoEl = t.closest('[data-goto]');
-    if (gotoEl && gotoEl.tag === 'form') return;
+    if (gotoEl && gotoEl.tagName && gotoEl.tagName.toLowerCase() === 'form') return;
     if (gotoEl) { go(gotoEl.getAttribute('data-goto'), true); return; }
     var backEl = t.closest('[data-back]');
     if (backEl) { goBack(); return; }
