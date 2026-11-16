@@ -115,6 +115,24 @@
     title.setAttribute('id', 'proto-title');
     title.setAttribute('class', 'title');
     h.appendChild(title);
+    if (body.classList.contains('desktop')) {
+      var brand = document.createElement('span');
+      brand.setAttribute('class', 'muted small');
+      brand.textContent = outline.product || '原型';
+      h.appendChild(brand);
+      var search = document.createElement('div');
+      search.setAttribute('class', 'searchbar');
+      var input = document.createElement('input');
+      input.setAttribute('class', 'input');
+      input.setAttribute('type', 'search');
+      input.setAttribute('placeholder', '搜索');
+      search.appendChild(input);
+      h.appendChild(search);
+      var avatar = document.createElement('span');
+      avatar.setAttribute('class', 'avatar');
+      avatar.textContent = (outline.product || '原').slice(0, 1);
+      h.appendChild(avatar);
+    }
   }
 
   function buildNav() {
@@ -184,6 +202,7 @@
     if (device !== 'phone' && device !== 'desktop') return;
     if (device === 'phone') { body.classList.add('phone'); body.classList.remove('desktop'); }
     else { body.classList.add('desktop'); body.classList.remove('phone'); }
+    buildHeader();
     buildNav();
   }
 
@@ -193,8 +212,9 @@
     var noteBtn = t.closest('[id="proto-notes-toggle"]');
     if (noteBtn) { setNotes(!body.classList.contains('notes'), false); return; }
     var toastEl = t.closest('[data-toast]');
-    if (toastEl) toast(toastEl.getAttribute('data-toast'));
+    if (toastEl && toastEl.tag !== 'form') toast(toastEl.getAttribute('data-toast'));
     var gotoEl = t.closest('[data-goto]');
+    if (gotoEl && gotoEl.tag === 'form') return;
     if (gotoEl) { go(gotoEl.getAttribute('data-goto'), true); return; }
     var backEl = t.closest('[data-back]');
     if (backEl) { goBack(); return; }
@@ -213,7 +233,12 @@
     var tabEl = t.closest('[data-tab]');
     if (tabEl) { setTab(tabEl.getAttribute('data-tab')); return; }
     var toggleEl = t.closest('[data-toggle]');
-    if (toggleEl) toggleEl.classList.toggle('on');
+    if (toggleEl) {
+      var on = toggleEl.classList.toggle('on');
+      if (toggleEl.getAttribute('type') === 'checkbox') toggleEl.checked = on;
+      var boxes = toggleEl.querySelectorAll('[type="checkbox"]');
+      for (var bi = 0; bi < boxes.length; bi++) if (boxes[bi].getAttribute('type') === 'checkbox') boxes[bi].checked = on;
+    }
   });
 
   body.addEventListener('submit', function (e) {

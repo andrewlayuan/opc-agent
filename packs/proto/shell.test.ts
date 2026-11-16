@@ -13,6 +13,7 @@ class El {
   attrs = new Map<string, string>();
   children: any[] = [];
   parent: El | null = null;
+  checked = false;
   listeners = new Map<string, Listener[]>();
   constructor(tag: string) { this.tag = tag; }
   setAttribute(name: string, value: string) { this.attrs.set(name.toLowerCase(), String(value)); }
@@ -92,6 +93,7 @@ function buildTree(html: string): El {
     else if (t.t === 'open') {
       const el = new El(t.tag);
       for (const [k, v] of t.attrs) el.setAttribute(k, v);
+      if (t.tag === 'input' && el.attrs.has('checked')) el.checked = true;
       top.appendChild(el);
       if (!t.self && !VOID.has(t.tag)) stack.push(el);
     } else {
@@ -126,6 +128,7 @@ const homeHtml = sanitizeHtml(`
   <div class="tab-panel" data-tab-panel="t:a">A 内容</div>
   <div class="tab-panel" data-tab-panel="t:b">B 内容</div>
   <button data-toggle>开关</button>
+  <label class="check"><input type="checkbox" data-toggle>记住我</label>
   <button data-toast="已收藏">收藏</button>
   <button data-open="filter">筛选</button>
   <div id="filter" class="sheet"><button data-close>关闭</button>筛选内容</div>
@@ -245,18 +248,41 @@ test('弹层、tab、toggle 与 toast', () => {
   const toggle = home.querySelectorAll('[data-toggle]')[0];
   e.fire(toggle, 'click');
   assert.ok(toggle.classList.contains('on'));
+  const box = home.querySelectorAll('[type="checkbox"]')[0];
+  e.fire(box, 'click');
+  assert.ok(box.classList.contains('on'));
+  assert.equal(box.checked, true);
+  e.fire(box, 'click');
+  assert.equal(box.classList.contains('on'), false);
+  assert.equal(box.checked, false);
   e.fire(home.querySelectorAll('[data-toast="已收藏"]')[0], 'click');
   const toast = e.document.getElementById('proto-toast') as El;
   assert.equal(toast.textContent, '已收藏');
   assert.ok(toast.classList.contains('on'));
 });
 
-test('表单提交：阻止默认提交，先提示再跳转', () => {
+test('表单提交：click+submit 只跳转一次，先提示再跳转', () => {
   const e = make();
-  e.fire(e.q('section.pg')[0].querySelectorAll('form')[0], 'submit');
+  const form = e.q('section.pg')[0].querySelectorAll('form')[0];
+  e.fire(form.querySelectorAll('button')[0], 'click');
+  e.fire(form, 'submit');
   assert.equal(e.q('section.pg')[2].classList.contains('hidden'), false);
   assert.equal((e.document.getElementById('proto-toast') as El).textContent, '已提交');
   assert.equal(e.location.hash, '#/me');
+  assert.equal(e.sent.filter((m) => m.type === 'proto:page' && m.slug === 'me').length, 1);
+  e.fire(e.q('.back')[0], 'click');
+  assert.equal(e.q('section.pg')[0].classList.contains('hidden'), false);
+});
+
+test('桌面顶栏：proto:device 消息带来产品名、搜索与头像', () => {
+  const e = make();
+  e.message({ type: 'proto:device', device: 'desktop' }, e.parent);
+  assert.ok(e.body.classList.contains('desktop'));
+  assert.equal(e.body.classList.contains('phone'), false);
+  const header = e.document.getElementById('proto-header') as El;
+  assert.ok(header.querySelectorAll('.searchbar').length === 1);
+  assert.ok(header.querySelectorAll('.avatar').length === 1);
+  assert.ok(header.textContent.includes('律审通'));
 });
 
 test('消息：标注开关只接受父窗口来源，goto 由父窗口控制', () => {
