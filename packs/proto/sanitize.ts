@@ -55,7 +55,14 @@ export function tokenize(html: string): Token[] {
     const next = html[i + 1];
     if (html.startsWith('<!--', i)) {
       flush();
-      i = skipTo('-->', i + 4);
+      // 与浏览器一致：<!--> 与 <!---> 是空注释，--!> 也能结束注释
+      if (html.startsWith('<!-->', i)) i += 5;
+      else if (html.startsWith('<!--->', i)) i += 6;
+      else {
+        const a = html.indexOf('-->', i + 4);
+        const b = html.indexOf('--!>', i + 4);
+        i = a < 0 && b < 0 ? n : b < 0 || (a >= 0 && a < b) ? a + 3 : b + 4;
+      }
       continue;
     }
     if (html.startsWith('<![CDATA[', i)) {
@@ -144,9 +151,11 @@ export function tokenize(html: string): Token[] {
       i = n;
       break;
     }
-    out.push({ t: 'open', tag, attrs, self });
+    // 浏览器忽略 HTML 元素上的自闭合斜杠：<script/> 之后仍按原始文本扫描
+    const rawText = RAW_TEXT.has(tag) || RCDATA.has(tag);
+    out.push({ t: 'open', tag, attrs, self: rawText ? false : self });
     i = j;
-    if (!self && (RAW_TEXT.has(tag) || RCDATA.has(tag))) {
+    if (rawText) {
       let end = -1;
       if (tag !== 'plaintext') {
         const re = new RegExp(`</${tag}(?=[\\s/>])`, 'gi');
@@ -154,8 +163,8 @@ export function tokenize(html: string): Token[] {
         const m = re.exec(html);
         end = m ? m.index : -1;
       }
-      const raw = html.slice(i, end < 0 ? n : end);
-      if (raw) out.push({ t: 'text', v: RCDATA.has(tag) ? decodeEntities(raw) : raw });
+      const body = html.slice(i, end < 0 ? n : end);
+      if (body) out.push({ t: 'text', v: RCDATA.has(tag) ? decodeEntities(body) : body });
       if (end < 0) {
         i = n;
         break;
@@ -182,15 +191,20 @@ const DROP = new Set([
   'script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'link', 'meta', 'base', 'template', 'noscript', 'title', 'head',
   'xmp', 'plaintext', 'math', 'noembed', 'noframes', 'foreignobject', 'set', 'use', 'image',
 ]);
-/** 没有内容的删除元素：只删标签本身 */
-const DROP_VOID = new Set(['link', 'meta', 'base', 'embed', 'image', 'frame']);
+/** 没有内容的删除元素：只删标签本身（head 的子元素各自会被删，省略 </head> 时不能吞掉正文） */
+const DROP_VOID = new Set(['link', 'meta', 'base', 'embed', 'image', 'frame', 'head']);
 const dropTag = (t: string) => DROP.has(t) || t.startsWith('animate');
+/** 被删元素内部不入局部栈的空元素 */
+const INNER_VOID = new Set(['br', 'hr', 'input', 'img', 'meta', 'link', 'base', 'embed', 'image', 'wbr', 'area', 'col', 'source', 'track', 'param', 'frame']);
 
 const BLOCK = new Set([...HTML_TAGS].filter((t) => !['span', 'strong', 'em', 'b', 'i', 'u', 's', 'small', 'mark', 'code', 'label'].includes(t)));
 
 const INPUT_TYPES = new Set(['text', 'search', 'email', 'tel', 'number', 'password', 'date', 'time', 'checkbox', 'radio', 'range', 'submit', 'button']);
 const ID_RE = /^[A-Za-z0-9_:-]{1,64}$/;
-const GOTO_RE = /^[\p{L}\p{N}_:-]{1,64}$/u;
+/** 跳转目标：slug 或页面标题（允许中文），不含空格和冒号 */
+const GOTO_RE = /^[\p{L}\p{N}_-]{1,64}$/u;
+/** Tab 的「组:项」 */
+const TAB_RE = /^[\p{L}\p{N}_:-]{1,64}$/u;
 const CLASS_RE = /^[A-Za-z0-9_-]{1,40}$/;
 const ARIA_RE = /^aria-[a-z]+$/;
 const SHORT_TEXT = new Set(['data-toast', 'data-label', 'data-note', 'data-back', 'data-close', 'data-toggle']);
@@ -205,6 +219,10 @@ const STYLE_PROP =
   /^(color|background-color|margin(-(top|right|bottom|left))?|padding(-(top|right|bottom|left))?|(min-|max-)?(width|height)|text-align|vertical-align|align-(items|self|content)|justify-(content|items|self)|font-(size|weight)|display|flex(-[a-z]+)?|grid(-[a-z]+)*|gap|row-gap|column-gap|border(-[a-z]+)*|opacity)$/;
 const STYLE_BAD = /url\(|expression|javascript|@|\\|<|\/\*|["']/i;
 const STYLE_FN_OK = new Set(['var', 'rgb', 'rgba', 'hsl', 'hsla', 'calc']);
+/** 单条声明的值上限：防止超长值让函数名提取变慢 */
+const STYLE_VALUE_MAX = 200;
+/** svg 呈现属性按 CSS 解析：只允许数字、字母、空白和少量标点，不允许反斜杠（防 ur\6c( 这类转义） */
+const SVG_VALUE_RE = /^[A-Za-z0-9\s#.,%()+-]*$/;
 
 const cut = (s: string, max: number) => [...s].slice(0, max).join('');
 
@@ -215,8 +233,8 @@ function cleanStyle(v: string): string | null {
     if (k < 0) continue;
     const prop = decl.slice(0, k).trim().toLowerCase();
     const val = decl.slice(k + 1).trim();
-    if (!STYLE_PROP.test(prop) || !val || STYLE_BAD.test(val)) continue;
-    const fns = [...val.matchAll(/([A-Za-z-]*)\s*\(/g)].map((m) => m[1].toLowerCase());
+    if (!STYLE_PROP.test(prop) || !val || val.length > STYLE_VALUE_MAX || STYLE_BAD.test(val)) continue;
+    const fns = [...val.matchAll(/(?<![A-Za-z-])([A-Za-z-]*)\s*\(/g)].map((m) => m[1].toLowerCase());
     if (fns.some((f) => !STYLE_FN_OK.has(f))) continue;
     if (/var\(\s*(?!--)/i.test(val)) continue;
     keep.push(`${prop}:${val}`);
@@ -233,7 +251,8 @@ function cleanAttr(tag: string, name: string, v: string): string | null {
   if (name === 'style') return cleanStyle(v);
   if (name === 'id') return ID_RE.test(v) && !v.startsWith('proto-') ? v : null;
   if (name === 'data-open') return ID_RE.test(v) ? v : null;
-  if (name === 'data-goto' || name === 'data-tab' || name === 'data-tab-panel') return GOTO_RE.test(v) ? v : null;
+  if (name === 'data-goto') return GOTO_RE.test(v) ? v : null;
+  if (name === 'data-tab' || name === 'data-tab-panel') return TAB_RE.test(v) ? v : null;
   if (SHORT_TEXT.has(name)) return cut(v, SHORT_MAX);
   if (ARIA_RE.test(name)) return v;
   if (name === 'type') {
@@ -242,7 +261,7 @@ function cleanAttr(tag: string, name: string, v: string): string | null {
   }
   if (name === 'name' && tag === 'form') return null;
   if (PLAIN.has(name)) return v;
-  if (svg && SVG_ATTRS.has(name)) return /url\(/i.test(v) ? null : v;
+  if (svg && SVG_ATTRS.has(name)) return SVG_VALUE_RE.test(v) && !/url\(/i.test(v) ? v : null;
   return null;
 }
 
@@ -265,10 +284,20 @@ function clean(html: string): Token[] {
   const toks = tokenize(html);
   const res: Token[] = [];
   const stack: Open[] = [];
+  const counts = new Map<string, number>();
+  const push = (o: Open) => {
+    stack.push(o);
+    counts.set(o.src, (counts.get(o.src) ?? 0) + 1);
+  };
   const closeTo = (idx: number) => {
-    while (stack.length > idx) res.push({ t: 'close', tag: stack.pop()!.out });
+    while (stack.length > idx) {
+      const o = stack.pop()!;
+      counts.set(o.src, counts.get(o.src)! - 1);
+      res.push({ t: 'close', tag: o.out });
+    }
   };
   const inStack = (tag: string) => {
+    if (!counts.get(tag)) return -1;
     for (let k = stack.length - 1; k >= 0; k--) if (stack[k].src === tag) return k;
     return -1;
   };
@@ -285,13 +314,28 @@ function clean(html: string): Token[] {
     }
     if (dropTag(tk.tag)) {
       if (tk.self || DROP_VOID.has(tk.tag)) continue;
-      // 跳过直到配对的闭合标签；遇到外层已打开元素的闭合标签时停下（不消费）
-      let depth = 1;
+      // 跳过直到配对的闭合标签。被删元素内部的开标签记在局部栈里，内部的闭合标签先与它配对；
+      // 只有配不上、且属于外层已打开元素的闭合标签才让跳过提前停下（不消费，交回主循环处理）
+      const inner: string[] = [];
+      const innerCount = new Map<string, number>();
       for (i++; i < toks.length; i++) {
         const x = toks[i];
-        if (x.t === 'open' && x.tag === tk.tag && !x.self) depth++;
-        else if (x.t === 'close' && x.tag === tk.tag && --depth === 0) break;
-        else if (x.t === 'close' && inStack(x.tag) >= 0) {
+        if (x.t === 'open') {
+          if (!x.self && !INNER_VOID.has(x.tag)) {
+            inner.push(x.tag);
+            innerCount.set(x.tag, (innerCount.get(x.tag) ?? 0) + 1);
+          }
+          continue;
+        }
+        if (x.t !== 'close') continue;
+        if (innerCount.get(x.tag)) {
+          while (inner.length) {
+            const top = inner.pop()!;
+            innerCount.set(top, innerCount.get(top)! - 1);
+            if (top === x.tag) break;
+          }
+        } else if (x.tag === tk.tag) break;
+        else if (inStack(x.tag) >= 0) {
           i--;
           break;
         }
@@ -315,7 +359,7 @@ function clean(html: string): Token[] {
     res.push({ t: 'open', tag, attrs, self: false });
     if (VOID.has(tag)) continue;
     if (tk.self) res.push({ t: 'close', tag });
-    else stack.push({ src: tk.tag, out: tag });
+    else push({ src: tk.tag, out: tag });
   }
   closeTo(0);
   return res;

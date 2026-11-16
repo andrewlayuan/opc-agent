@@ -115,6 +115,69 @@ test('转义与实体', () => {
   eq('<p>&lt;script&gt;&amp;lt;&#60;&copy;&nbsp;</p>', '<p>&lt;script&gt;&amp;lt;&lt;&amp;copy;\u00a0</p>');
   eq('<p title="&#0;&#xD800;&#1114112;">x</p>', '<p title="\ufffd\ufffd\ufffd">x</p>');
   eq('<textarea>a <b>x</b> &amp;</textarea>', '<textarea>a &lt;b&gt;x&lt;/b&gt; &amp;</textarea>');
+  eq('<textarea>&lt;/textarea&gt;&lt;img onerror=1&gt;</textarea>', '<textarea>&lt;/textarea&gt;&lt;img onerror=1&gt;</textarea>');
+});
+
+test('审查补充：svg 属性里的 CSS 转义、被删元素内部的同名标签、自闭合的原始文本元素', () => {
+  eq('<svg><rect width="9" fill="ur\\6c(https://evil.example/p.svg#g)" stroke="u\\rl(x)" transform="rotate(45 12 12)"/></svg>', '<svg><rect width="9" transform="rotate(45 12 12)"></rect></svg>');
+  eq('<svg><path fill="&#x75;rl(x)" d="M0 0"/></svg>', '<svg><path d="M0 0"></path></svg>');
+  eq('<div class="card"><object><div>fallback</div>tail</object>after</div>', '<div class="card">after</div>');
+  eq('<div><svg><foreignObject><div>a</div>x</foreignObject></svg></div>', '<div><svg></svg></div>');
+  eq('<div><svg><use href="#a"></svg>z</div>', '<div><svg></svg>z</div>');
+  eq('<div><object><span>a</div>b', '<div></div>b');
+  eq('<div><script/>alert(document.cookie)</script>ok</div>', '<div>ok</div>');
+  eq('<style/>a{}</style>ok', 'ok');
+  eq('<html><head><meta charset=utf-8><title>T</title><body><div>内容</div>', '<div>内容</div>');
+});
+
+test('审查补充：注释边界、未闭合引号、怪异属性名、NUL', () => {
+  eq('<!-->你好<p>世界</p>', '你好<p>世界</p>');
+  eq('<!--->你好', '你好');
+  eq('<!-- a --!>你好', '你好');
+  eq('<div title="a>b', '');
+  eq('<div "onclick=x" =y a<b=1 data-goto"=z>t</div>', '<div>t</div>');
+  lacks('<scr\0ipt>alert(1)</scr\0ipt>', /<scr/i);
+  lacks('<div\vonclick=alert(1)>t</div>', 'onclick');
+});
+
+test('审查补充：对抗性大输入在线性时间内完成', () => {
+  const cases = [
+    `<div style="color:${'a'.repeat(40000)}">t</div>`,
+    `<div style="${'color:a(;'.repeat(4000)}">t</div>`,
+    '<div>'.repeat(20000) + '</x>'.repeat(20000),
+    '<object>' + '<div>'.repeat(20000) + '</span>'.repeat(20000) + '</object>',
+    '<a href="#/a">'.repeat(20000),
+  ];
+  for (const c of cases) {
+    const t = Date.now();
+    s(c);
+    assert.ok(Date.now() - t < 500, `${c.slice(0, 30)}… 耗时 ${Date.now() - t}ms`);
+  }
+});
+
+test('不变式：对抗性输入的输出只含白名单结构', () => {
+  const evil = [
+    '<svg><style><a id="</style><img src=1 onerror=alert(1)>"></svg>',
+    '<noscript><p title="</noscript><img src=x onerror=alert(1)>">',
+    '<math><mtext><table><mglyph><style><img src=x onerror=alert(1)>',
+    '<form><math><mtext></form><form><mglyph><style></math><img src onerror=alert(1)>',
+    '<select><template><style><!--</style><a rel="--></template></select><img src=x onerror=alert(1)>">',
+    '<div style="background-image:url(x)" data-goto="javascript:x">t</div>',
+    '<svg><a xlink:href="javascript:alert(1)"><rect width=9 height=9 /></a></svg>',
+    '<p>&lt;img src=x onerror=alert(1)&gt;</p>',
+    '<IMG """><SCRIPT>alert("XSS")</SCRIPT>">',
+    '<div id="x" onclick=\'a\'/onmouseover=b>',
+  ];
+  const allowedTag = /^(main|section|header|footer|nav|article|aside|div|span|p|h[1-6]|ul|ol|li|dl|dt|dd|strong|em|b|i|u|s|small|mark|code|pre|blockquote|br|hr|figure|figcaption|table|thead|tbody|tfoot|tr|th|td|caption|form|label|input|textarea|select|option|button|progress|svg|g|path|circle|rect|line|polyline|polygon|ellipse)$/;
+  for (const x of evil) {
+    const out = s(x);
+    for (const m of out.matchAll(/<\/?([^\s>/]+)([^>]*)>/g)) {
+      assert.match(m[1], allowedTag, `${x} → ${out}`);
+      for (const a of m[2].matchAll(/\s([^\s=]+)="/g)) assert.doesNotMatch(a[1], /^(on|href|src|xlink|xmlns|action|formaction|srcset)/i, `${x} → ${out}`);
+    }
+    assert.doesNotMatch(out, /<!|url\(|javascript:/i, `${x} → ${out}`);
+    assert.equal(s(out), out);
+  }
 });
 
 test('幂等：清理两次结果不变', () => {
