@@ -43,7 +43,7 @@ export function initProto({ h, api, toast }) {
   }
 
   function send(s, msg) {
-    if (s.frame && s.frame.contentWindow) s.frame.contentWindow.postMessage(msg, (typeof location !== 'undefined' && location.origin) || '*');
+    if (s.frame && s.frame.contentWindow) s.frame.contentWindow.postMessage(msg, '*');
   }
 
   function bind(s) {
@@ -58,7 +58,7 @@ export function initProto({ h, api, toast }) {
       s.slug = m.slug;
       if (s.select) s.select.value = m.slug;
     });
-    window.addEventListener('resize', () => updateScale(s));
+    window.addEventListener('resize', () => { if (st === s) updateScale(s); });
   }
 
   function updateScale(s) {
@@ -186,9 +186,14 @@ export function initProto({ h, api, toast }) {
       st.review = review;
       st.viewN = viewN;
       render(st);
+      schedule(st);
     }
     return st.root;
   }
 
-  return { panel, _poll: () => (st ? load(st) : Promise.resolve()) };
+  function leave() {
+    if (st && st.timer) { clearTimeout(st.timer); st.timer = null; }
+  }
+
+  return { panel, leave, _poll: () => (st ? load(st) : Promise.resolve()) };
 }

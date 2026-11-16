@@ -43,7 +43,7 @@ function url() {
 }
 
 function send(msg) {
-  if (frame && frame.contentWindow) frame.contentWindow.postMessage(msg, (typeof location !== 'undefined' && location.origin) || '*');
+  if (frame && frame.contentWindow) frame.contentWindow.postMessage(msg, '*');
 }
 
 function render() {

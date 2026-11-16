@@ -795,6 +795,7 @@ function renderReview(r) {
     r.skills.length ? h('div', { class: 'tags' }, r.skills.map((s) => h('span', { class: 'tag', text: s }))) : null,
   );
   const panel = r.status === 'done' && r.latest ? proto.panel(r, pm.view.n) : null;
+  if (!panel) proto.leave();
   const before = [head];
   const after = [];
   if (r.status === 'running') {
