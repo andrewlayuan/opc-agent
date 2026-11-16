@@ -11,10 +11,19 @@ export type EventKind =
   | 'review_create'
   | 'turn_ask'
   | 'turn_revise'
-  | 'version_manual';
+  | 'version_manual'
+  | 'proto_create'
+  | 'proto_revise';
 
 /** 产品顾问类事件：每条内容不同，不合并；整理延迟更短 */
-export const PM_EVENT_KINDS: ReadonlySet<EventKind> = new Set<EventKind>(['review_create', 'turn_ask', 'turn_revise', 'version_manual']);
+export const PM_EVENT_KINDS: ReadonlySet<EventKind> = new Set<EventKind>([
+  'review_create',
+  'turn_ask',
+  'turn_revise',
+  'version_manual',
+  'proto_create',
+  'proto_revise',
+]);
 
 export interface EventInput {
   kind: EventKind;
