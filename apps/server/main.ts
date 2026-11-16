@@ -20,12 +20,15 @@ import type { AdvisorEvent } from '../../packs/pm/advisor.ts';
 import { AttachmentError, AttachmentStore, LIMITS } from '../../packs/pm/attachments.ts';
 import { exportMarkdown, renderPrintHtml } from '../../packs/pm/render.ts';
 import { defaultSkillsDir, loadPmSkills } from '../../packs/pm/skills.ts';
+import { ProtoRunner } from '../../packs/proto/runner.ts';
+import { getVersion as getProtoVersion, recover as recoverProtos } from '../../packs/proto/store.ts';
 import { getInterests, setInterests } from '../../packs/radar/prefs.ts';
 import { getItem, listItems, stats } from '../../packs/radar/query.ts';
 import { Radar } from '../../packs/radar/service.ts';
 import { HttpError, clientIp, contentDisposition, parseCookies, readBodyToFile, readJson, sameOrigin, securityHeaders, sendJson, staticFor } from './http.ts';
 import { handleMemoryApi } from './memory-api.ts';
 import { handleKbApi } from './kb-api.ts';
+import { handleProtoApi } from './proto-api.ts';
 
 const cfg = loadConfig({ requireAuth: true });
 const db = openDb(cfg.dbPath);
@@ -47,6 +50,14 @@ const pm = new PmAdvisor(
   },
   files,
 );
+const protoRunner = new ProtoRunner(db, radar.llm, {
+  prd: (id, n) => {
+    const v = pm.version(id, n);
+    const r = v && pm.get(id);
+    return v && r ? { title: r.input, content: v.content, status: r.status } : null;
+  },
+  onEvent: (e) => record(e),
+});
 
 /** 事件写入前过滤附件摘录中的敏感内容 */
 function scrubAttachments(e: AdvisorEvent): AdvisorEvent {
@@ -329,6 +340,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
 
   if (await handleMemoryApi({ db, keeper, llmEnabled: radar.llm.enabled }, req, res, method, p)) return;
   if (await handleKbApi({ db, files: kbFiles, llm: radar.llm }, req, res, method, url)) return;
+  if (await handleProtoApi({ db, runner: protoRunner }, req, res, method, url)) return;
 
   // ---------- 产品顾问（pm-skills） ----------
   if (p === '/api/pm/meta' && method === 'GET') {
@@ -534,6 +546,18 @@ const server = http.createServer(async (req, res) => {
       res.end(req.method === 'HEAD' ? undefined : html);
       return;
     }
+    const proto = url.pathname.match(/^\/proto\/([1-9]\d*)\/([1-9]\d*)$/);
+    if (proto) {
+      if (!user) {
+        res.writeHead(302, { location: '/login' }).end();
+        return;
+      }
+      if (!getProtoVersion(db, idFrom(proto), Number(proto[2]))) throw new HttpError(404, '原型版本不存在');
+      const page = staticFor('/proto-full.html')!;
+      res.writeHead(200, { 'content-type': page.type, 'cache-control': 'no-cache', 'content-length': page.body.length });
+      res.end(req.method === 'HEAD' ? undefined : page.body);
+      return;
+    }
     const s = staticFor(url.pathname);
     if (!s) throw new HttpError(404, 'Not found');
     res.writeHead(200, { 'content-type': s.type, 'cache-control': 'no-cache', 'content-length': s.body.length });
@@ -574,6 +598,12 @@ server.listen(cfg.port, cfg.host, () => {
     if (n) console.log(`[kb] ${n} 个上传因重启中断，已标记为失败`);
   } catch (e) {
     console.error('[kb] 恢复上传状态失败', e);
+  }
+  try {
+    const n = recoverProtos(db);
+    if (n) console.log(`[proto] ${n} 个原型任务因重启中断，已标记为失败`);
+  } catch (e) {
+    console.error('[proto] 恢复原型状态失败', e);
   }
   cleanupFiles();
   setInterval(cleanupFiles, 3600000).unref();
