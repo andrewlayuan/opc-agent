@@ -2,6 +2,96 @@ import { initKb } from './kb.js';
 import { initProto } from './proto-panel.js';
 // 所有外部数据只通过 textContent 写入 DOM，链接只接受 http(s)
 const $ = (id) => document.getElementById(id);
+const TAB_VIEWS = ['feed', 'brief', 'pm', 'kb', 'memory', 'sources'];
+const TAB_ORDER_KEY = 'opc.tabOrder';
+
+function savedTabOrder() {
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(TAB_ORDER_KEY) || '[]'); } catch { saved = []; }
+  if (!Array.isArray(saved)) saved = [];
+  const known = new Set(TAB_VIEWS);
+  const clean = [...new Set(saved.filter((v) => known.has(v)))];
+  return [...clean, ...TAB_VIEWS.filter((v) => !clean.includes(v))];
+}
+
+function tabButtons() {
+  return Array.from(document.querySelectorAll('.tabs button'));
+}
+
+function applyTabOrder() {
+  const buttons = tabButtons();
+  const list = buttons[0]?.parentNode;
+  if (!list) return;
+  const byView = new Map(buttons.filter((b) => b?.dataset?.view).map((b) => [b.dataset.view, b]));
+  for (const view of savedTabOrder()) {
+    const b = byView.get(view);
+    if (!b) continue;
+    b.remove();
+    list.append(b);
+  }
+}
+
+let draggingTab = null;
+let suppressTabClickUntil = 0;
+
+function persistTabOrder() {
+  try { localStorage.setItem(TAB_ORDER_KEY, JSON.stringify(tabButtons().map((b) => b.dataset.view))); } catch {}
+}
+
+function moveTab(button, reference, before) {
+  if (!button || !reference || button === reference) return;
+  const list = reference.parentNode;
+  const next = list.children[Array.from(list.children).indexOf(reference) + 1] ?? null;
+  button.remove();
+  list.insertBefore(button, before ? reference : next);
+  persistTabOrder();
+}
+
+function bindTabDrag() {
+  for (const b of tabButtons()) {
+    b.setAttribute('draggable', 'true');
+    b.setAttribute('title', '拖动排序，或用 Alt+方向键调整');
+    b.addEventListener('dragstart', (e) => {
+      draggingTab = b;
+      b.classList.add('dragging');
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', b.dataset.view);
+      }
+    });
+    b.addEventListener('dragover', (e) => {
+      if (!draggingTab || draggingTab === b) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      b.classList.add('drop-target');
+    });
+    b.addEventListener('dragleave', () => b.classList.remove('drop-target'));
+    b.addEventListener('drop', (e) => {
+      if (!draggingTab) return;
+      e.preventDefault();
+      moveTab(draggingTab, b, true);
+      toast('菜单顺序已保存');
+    });
+    b.addEventListener('dragend', () => {
+      draggingTab?.classList.remove('dragging');
+      for (const x of tabButtons()) x.classList.remove('drop-target');
+      draggingTab = null;
+      suppressTabClickUntil = Date.now() + 250;
+    });
+    b.addEventListener('keydown', (e) => {
+      if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+      e.preventDefault();
+      const buttons = tabButtons();
+      const i = buttons.indexOf(b);
+      const j = e.key === 'ArrowLeft' ? i - 1 : i + 1;
+      if (j < 0 || j >= buttons.length) return;
+      moveTab(b, buttons[j], e.key === 'ArrowLeft');
+      b.focus();
+      toast('菜单顺序已保存');
+      suppressTabClickUntil = Date.now() + 250;
+    });
+  }
+}
 
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
@@ -1429,6 +1519,8 @@ function show(view, opts = {}) {
 }
 
 async function init() {
+  applyTabOrder();
+  bindTabDrag();
   const [meta, prefs] = await Promise.all([api('/api/meta'), api('/api/prefs/interests')]);
   state.meta = meta;
   state.interests = prefs.interests;
@@ -1447,7 +1539,10 @@ async function init() {
     e.target.value = '';
   });
   bindDrop($('pm-form'), () => pm.att.form);
-  for (const b of document.querySelectorAll('.tabs button')) b.addEventListener('click', () => show(b.dataset.view));
+  for (const b of tabButtons()) b.addEventListener('click', () => {
+    if (Date.now() < suppressTabClickUntil) return;
+    show(b.dataset.view);
+  });
   for (const id of ['grp', 'days', 'important', 'starred', 'rel']) $(id).addEventListener('change', () => loadItems());
   $('mem-run').addEventListener('click', runMemory);
   $('mem-clear').addEventListener('click', clearAllMemory);
