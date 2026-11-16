@@ -3,10 +3,10 @@ import type { DB } from '../../packages/core/db.ts';
 import type { EventInput } from '../memory/events.ts';
 import type { LlmPort } from '../pm/ingest.ts';
 import { assemble } from './assemble.ts';
-import { extractPage, parseOutline } from './parse.ts';
-import { outlinePrompt, pagePrompt } from './prompts.ts';
-import { sanitizeHtml } from './sanitize.ts';
-import { createVersion, finish, getVersion, saveOutline, savePages, setProgress, toMeta } from './store.ts';
+import { extractPage, parseOutline, parsePlan, type Plan } from './parse.ts';
+import { outlinePrompt, pagePrompt, planPrompt } from './prompts.ts';
+import { sanitizeHtml, textOf } from './sanitize.ts';
+import { createVersion, finish, getVersion, listVersions, restart, saveOutline, savePages, setProgress, toMeta } from './store.ts';
 import {
   PROTO_LIMITS, ProtoError,
   type Outline, type OutlinePage, type ProtoMeta, type ProtoPage, type ProtoRow, type Progress,
@@ -86,7 +86,7 @@ export class ProtoRunner {
     return getVersion(this.db, row.review_id, row.n) != null;
   }
 
-  private end(row: ProtoRow, r: { status: 'done' | 'error'; error?: string | null }, event?: EventInput): void {
+  private end(row: ProtoRow, r: { status: 'done' | 'error'; error?: string | null; note?: string }, event?: EventInput): void {
     if (!finish(this.db, row.id, r)) return;
     if (r.status === 'done' && event) this.deps.onEvent?.(event);
   }
@@ -96,7 +96,8 @@ export class ProtoRunner {
     const doc = this.deps.prd(reviewId, versionN);
     if (!doc) throw new ProtoError(400, '文档版本不存在');
     if (doc.status !== 'done') throw new ProtoError(409, '评审还没完成');
-    const row = createVersion(this.db, reviewId, { baseVersionN: versionN, fromN: null, request: '' });
+    const request = listVersions(this.db, reviewId).length ? `按 PRD v${versionN} 重新生成` : '';
+    const row = createVersion(this.db, reviewId, { baseVersionN: versionN, fromN: null, request });
     this.enqueue(row, () => this.runFirst(row, reviewId, versionN));
     return toMeta(row);
   }
@@ -163,6 +164,7 @@ export class ProtoRunner {
     prd: string,
     targets: PageTarget[],
     pages: ProtoPage[],
+    note = '',
   ): Promise<void> {
     if (!setProgress(this.db, row.id, { stage: 'pages', done: 0, total: targets.length }) || !this.alive(row)) return;
     let alive = true;
@@ -211,16 +213,81 @@ export class ProtoRunner {
     const device = outline.device;
     const doc = assemble({ ...row, outline, pages }, { device });
     if (Buffer.byteLength(doc) > this.limits.docBytes) { this.end(row, { status: 'error', error: '原型过大，请减少页面' }); return; }
-    this.end(row, { status: 'done' }, {
-      kind: 'proto_create',
+    const revise = row.from_n != null;
+    this.end(row, { status: 'done', note }, {
+      kind: revise ? 'proto_revise' : 'proto_create',
       refType: 'review',
       refId: reviewId,
-      summary: `生成原型：${outline.product}，${okCount} 页`,
+      summary: revise ? `修改原型：${clip(row.request, 60)}` : `生成原型：${outline.product}，${okCount} 页`,
       payload: {
         request: row.request,
-        note: row.note,
+        note,
         pages: pages.filter((p) => p.html && !p.error).map((p) => p.title),
       },
     });
+  }
+
+  revise(reviewId: number, fromN: number, text: string): ProtoMeta {
+    if (!this.llm.enabled) throw new ProtoError(503, '未配置模型，无法生成原型');
+    const request = text.trim();
+    const count = cps(request).length;
+    if (count < 1 || count > this.limits.requestMax) throw new ProtoError(400, '修改要求需在 1–1000 字之间');
+    const base = getVersion(this.db, reviewId, fromN);
+    if (!base) throw new ProtoError(404, '原型版本不存在');
+    if (base.status === 'running') throw new ProtoError(409, '请等生成完成');
+    if (base.status === 'error') throw new ProtoError(409, '这一版生成失败，请先重试');
+    const row = createVersion(this.db, reviewId, { baseVersionN: base.base_version_n, fromN, request });
+    this.enqueue(row, () => this.runRevise(row, base, reviewId));
+    return toMeta(row);
+  }
+
+  retry(reviewId: number, n: number): ProtoMeta {
+    if (!this.llm.enabled) throw new ProtoError(503, '未配置模型，无法生成原型');
+    const row = restart(this.db, reviewId, n);
+    if (row.from_n == null) {
+      this.enqueue(row, () => this.runFirst(row, reviewId, row.base_version_n));
+    } else {
+      const base = getVersion(this.db, reviewId, row.from_n);
+      if (!base) { this.end(row, { status: 'error', error: '原型版本不存在' }); return toMeta(row); }
+      this.enqueue(row, () => this.runRevise(row, base, reviewId));
+    }
+    return toMeta(row);
+  }
+
+  private async runRevise(row: ProtoRow, base: ProtoRow, reviewId: number): Promise<void> {
+    if (!setProgress(this.db, row.id, { stage: 'plan', done: 0, total: 0 }) || !this.alive(row)) return;
+    const outline = base.outline;
+    if (!outline) { this.end(row, { status: 'error', error: '原型规划失败，请重试' }); return; }
+    const doc = this.deps.prd(reviewId, row.base_version_n);
+    if (!doc) { this.end(row, { status: 'error', error: '文档版本不存在' }); return; }
+    const summaries = base.pages.map((p) => ({ slug: p.slug, title: p.title, text: textOf(p.html, this.limits.summaryChars) }));
+    let plan: Plan | null = null;
+    let fatal: string | null = null;
+    for (let i = 0; i < 2 && !plan && !fatal; i++) {
+      try {
+        const text = await this.llm.chat(planPrompt(outline, summaries, row.request), {
+          json: true, maxTokens: this.limits.outlineTokens, temperature: 0.3, timeoutMs: this.limits.outlineTimeoutMs,
+        });
+        plan = parsePlan(parseJson(text), outline);
+      } catch (e) {
+        if (e instanceof ProtoError && e.message === '改动太大，建议按新 PRD 重新生成') fatal = e.message;
+        else this.deps.log?.(`原型改动计划失败：${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    if (fatal) { this.end(row, { status: 'error', error: fatal }); return; }
+    if (!plan) { this.end(row, { status: 'error', error: '没理解修改要求，请换个说法' }); return; }
+    if (!saveOutline(this.db, row.id, plan.outline) || !this.alive(row)) return;
+    const old = new Map(base.pages.map((p) => [p.slug, p]));
+    const change = new Map(plan.pages.map((p) => [p.slug, p.change]));
+    const pages: ProtoPage[] = plan.outline.pages.map((p) => {
+      const prev = old.get(p.slug);
+      if (prev && prev.html && !change.has(p.slug)) return { slug: p.slug, title: p.title, html: prev.html, error: prev.error };
+      return { slug: p.slug, title: p.title, html: '', error: null };
+    });
+    if (!savePages(this.db, row.id, pages) || !this.alive(row)) return;
+    const targets: PageTarget[] = plan.outline.pages
+      .filter((p) => change.has(p.slug))
+      .map((p) => ({ page: p, current: old.get(p.slug)?.html || '', change: change.get(p.slug)! }));
+    await this.runPages(row, reviewId, plan.outline, clip(doc.content, this.limits.prdPageChars), targets, pages, plan.note);
   }
 }

@@ -41,7 +41,7 @@ export function pagePrompt(
     `<page>\n${fence(JSON.stringify(page))}\n</page>`,
   ];
   if (x?.current) parts.push(`<current>\n${fence(x.current)}\n</current>`);
-  if (x?.change) parts.push(`<request>\n${fence(x.change)}\n</request>`);
+  if (x?.change) parts.push(`<change>\n${fence(x.change)}\n</change>`);
   if (x?.retry) parts.push('上次输出过长被截断，请精简内容后重新输出。');
   parts.push(COMPONENT_GUIDE);
   return [
@@ -60,7 +60,7 @@ export function planPrompt(
     { role: 'system', content: SYSTEM_PLAN },
     {
       role: 'user',
-      content: `<outline>\n${fence(JSON.stringify(o))}\n</outline>\n<pages>\n${list}\n</pages>\n<request>\n${fence(request)}\n</request>\n请输出改动计划 JSON。`,
+      content: `<outline>\n${fence(JSON.stringify(o))}\n</outline>\n<pages>\n${list}\n</pages>\n<change>\n${fence(request)}\n</change>\n请输出改动计划 JSON。`,
     },
   ];
 }
