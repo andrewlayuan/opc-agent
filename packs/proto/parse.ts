@@ -4,8 +4,6 @@ import { PROTO_LIMITS, ProtoError, THEMES, type Device, type Outline, type Outli
 const L = PROTO_LIMITS;
 const MISUNDERSTOOD = '没理解修改要求，请换个说法';
 const TOO_BIG = '改动太大，建议按新 PRD 重新生成';
-const NOTE_MAX = 200;
-const CHANGE_MAX = 400;
 
 const isObj = (v: unknown): v is Record<string, unknown> => v != null && typeof v === 'object' && !Array.isArray(v);
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
@@ -93,10 +91,10 @@ export function parsePlan(raw: unknown, current: Outline): Plan {
   for (const p of Array.isArray(raw.pages) ? raw.pages.filter(isObj) : []) {
     const slug = key(p.slug);
     if (!exists.has(slug) || pages.some((x) => x.slug === slug)) continue;
-    pages.push({ slug, change: cut(str(p.change), CHANGE_MAX) || '按修改要求调整这一页' });
+    pages.push({ slug, change: str(p.change) || '按修改要求调整这一页' });
   }
   for (const p of outline.pages) if (!had.has(p.slug) && !pages.some((x) => x.slug === p.slug)) pages.push({ slug: p.slug, change: '新页面' });
-  const note = cut(str(raw.note), NOTE_MAX);
+  const note = str(raw.note);
   if (!note || !pages.length) throw new ProtoError(400, MISUNDERSTOOD);
   if (pages.length > L.revisePagesMax) throw new ProtoError(400, TOO_BIG);
   return { note, outline, pages };
