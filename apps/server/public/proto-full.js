@@ -22,6 +22,7 @@ let device = 'phone';
 let slug = '';
 let notes = false;
 let frame = null;
+let mounted = false;
 let select = null;
 let toastTimer = null;
 
@@ -42,7 +43,7 @@ function url() {
 }
 
 function send(msg) {
-  if (frame && frame.contentWindow) frame.contentWindow.postMessage(msg, '*');
+  if (frame && frame.contentWindow) frame.contentWindow.postMessage(msg, (typeof location !== 'undefined' && location.origin) || '*');
 }
 
 function render() {
@@ -58,13 +59,14 @@ function render() {
   toolbar.append(h('button', { class: device === 'desktop' ? 'on' : '', text: '桌面', onclick: () => { device = 'desktop'; render(); } }));
   toolbar.append(h('button', {
     class: notes ? 'on' : '', text: '标注',
-    onclick: () => { notes = !notes; send({ type: 'proto:notes', on: notes }); render(); },
+    onclick: () => { notes = !notes; render(); send({ type: 'proto:notes', on: notes }); },
   }));
   toolbar.append(h('a', { href: `/api/pm/reviews/${id}/prototypes/${n}/html?download=1`, text: '下载' }));
   toolbar.append(h('a', { href: `/#pm/${id}`, text: '返回评审' }));
   if (!frame) frame = h('iframe', { class: 'proto-full-frame', sandbox: 'allow-scripts', title: '原型预览' });
-  frame.setAttribute('src', url());
-  stage.replaceChildren(frame);
+  const src = url();
+  if (frame.getAttribute('src') !== src) frame.setAttribute('src', src);
+  if (!mounted) { stage.append(frame); mounted = true; }
 }
 
 window.addEventListener('message', (e) => {

@@ -6,7 +6,7 @@ export function initProto({ h, api, toast }) {
     return {
       id: review.id, review, viewN: 1, versions: [], selected: 0,
       device: 'phone', slug: '', notes: false, root: null, frame: null, stage: null, select: null,
-      timer: null, seq: 0, bound: false,
+      timer: null, seq: 0, bound: false, content: null, frameMounted: false,
     };
   }
 
@@ -43,7 +43,7 @@ export function initProto({ h, api, toast }) {
   }
 
   function send(s, msg) {
-    if (s.frame && s.frame.contentWindow) s.frame.contentWindow.postMessage(msg, '*');
+    if (s.frame && s.frame.contentWindow) s.frame.contentWindow.postMessage(msg, (typeof location !== 'undefined' && location.origin) || '*');
   }
 
   function bind(s) {
@@ -58,16 +58,22 @@ export function initProto({ h, api, toast }) {
       s.slug = m.slug;
       if (s.select) s.select.value = m.slug;
     });
-    window.addEventListener('resize', () => scale(s));
+    window.addEventListener('resize', () => updateScale(s));
   }
 
-  function scale(s) {
-    if (!s.frame || s.device !== 'desktop') return;
-    const stage = s.stage;
-    const width = stage?.clientWidth || (typeof window.innerWidth === 'number' ? window.innerWidth - 40 : 1280);
-    const ratio = width > 0 && width < 1280 ? width / 1280 : 1;
-    if (s.frame.style) s.frame.style.transform = `scale(${ratio})`;
-    if (stage) stage.setAttribute('data-scale', String(ratio));
+  function updateScale(s) {
+    if (!s.frame) return;
+    const apply = () => {
+      let ratio = 1;
+      if (s.device === 'desktop') {
+        const width = s.stage?.clientWidth || (typeof window.innerWidth === 'number' ? window.innerWidth - 40 : 1280);
+        ratio = width > 0 && width < 1280 ? width / 1280 : 1;
+      }
+      s.frame.setAttribute('style', `transform:scale(${ratio})`);
+      if (s.stage) s.stage.setAttribute('data-scale', String(ratio));
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(apply);
+    else apply();
   }
 
   function progress(v) {
@@ -86,15 +92,16 @@ export function initProto({ h, api, toast }) {
   function render(s) {
     bind(s);
     const root = s.root;
-    root.replaceChildren();
-    root.append(h('h3', { class: 'proto-title', text: '原型' }));
+    if (!s.content) { s.content = h('div', { class: 'proto-content' }); root.append(s.content); }
+    if (!s.stage) { s.stage = h('div', { class: 'proto-stage' }); root.append(s.stage); }
+    const c = s.content;
+    c.replaceChildren();
+    c.append(h('h3', { class: 'proto-title', text: '原型' }));
     const vs = s.versions;
     if (!vs.length) {
-      root.append(h('p', { class: 'muted', text: `约 1–2 分钟，按当前查看的 PRD v${s.viewN} 生成` }));
-      root.append(h('button', {
-        text: '生成原型',
-        onclick: () => post(s, '', { versionN: s.viewN }, '原型生成中'),
-      }));
+      c.append(h('p', { class: 'muted', text: `约 1–2 分钟，按当前查看的 PRD v${s.viewN} 生成` }));
+      c.append(h('button', { text: '生成原型', onclick: () => post(s, '', { versionN: s.viewN }, '原型生成中') }));
+      s.stage.setAttribute('data-visible', '0');
       return;
     }
     const v = vs.find((x) => x.n === s.selected) || vs[vs.length - 1];
@@ -120,15 +127,15 @@ export function initProto({ h, api, toast }) {
     bar.append(h('button', {
       class: s.notes ? 'on' : '',
       text: '标注',
-      onclick: () => { s.notes = !s.notes; send(s, { type: 'proto:notes', on: s.notes }); render(s); },
+      onclick: () => { s.notes = !s.notes; render(s); send(s, { type: 'proto:notes', on: s.notes }); },
     }));
     bar.append(h('a', { href: `/proto/${s.id}/${v.n}`, text: '全屏' }));
     bar.append(h('a', { href: `/api/pm/reviews/${s.id}/prototypes/${v.n}/html?download=1`, text: '下载' }));
-    root.append(bar);
-    if (v.status === 'running') root.append(h('p', { class: 'proto-progress', text: progress(v) }));
-    if (v.status === 'error') root.append(h('p', { class: 'err', text: v.error || '生成失败' }));
+    c.append(bar);
+    if (v.status === 'running') c.append(h('p', { class: 'proto-progress', text: progress(v) }));
+    if (v.status === 'error') c.append(h('p', { class: 'err', text: v.error || '生成失败' }));
     if (v.base_version_n && s.review.latest && v.base_version_n !== s.review.latest) {
-      root.append(
+      c.append(
         h('div', { class: 'proto-notice' },
           h('span', { text: `原型基于 PRD v${v.base_version_n}，PRD 已更新到 v${s.review.latest}` }),
           h('button', { text: '按新 PRD 重新生成', onclick: () => post(s, '', { versionN: s.review.latest }, '已按新 PRD 重新生成') }),
@@ -139,12 +146,12 @@ export function initProto({ h, api, toast }) {
     if (v.request) info.append(h('div', { text: `修改要求：${v.request}` }));
     if (v.note) info.append(h('div', { text: `说明：${v.note}` }));
     info.append(h('div', { class: 'muted', text: v.from_n ? `基于原型 v${v.from_n}` : `基于 PRD v${v.base_version_n}` }));
-    root.append(info);
+    c.append(info);
     const input = h('input', {
       class: 'proto-revise-input', type: 'text', maxlength: '1000',
       placeholder: '描述要怎么改原型，比如：登录页加一个微信登录',
     });
-    root.append(
+    c.append(
       h('form', {
         class: 'proto-revise',
         onsubmit: async (e) => {
@@ -156,14 +163,15 @@ export function initProto({ h, api, toast }) {
         },
       }, input, h('button', { type: 'submit', text: '修改原型' })),
     );
-    s.stage = h('div', { class: 'proto-stage', 'data-device': s.device });
+    s.stage.setAttribute('data-device', s.device);
+    s.stage.setAttribute('data-visible', v.status === 'done' ? '1' : '0');
     if (v.status === 'done') {
       if (!s.frame) s.frame = h('iframe', { class: 'proto-frame', sandbox: 'allow-scripts', title: '原型预览' });
-      s.frame.setAttribute('src', frameUrl(s, v.n));
-      s.stage.append(s.frame);
-      scale(s);
+      if (!s.frameMounted) { s.stage.append(s.frame); s.frameMounted = true; }
+      const url = frameUrl(s, v.n);
+      if (s.frame.getAttribute('src') !== url) s.frame.setAttribute('src', url);
+      updateScale(s);
     }
-    root.append(s.stage);
   }
 
   function panel(review, viewN) {

@@ -794,16 +794,19 @@ function renderReview(r) {
     attList(r.attachments),
     r.skills.length ? h('div', { class: 'tags' }, r.skills.map((s) => h('span', { class: 'tag', text: s }))) : null,
   );
-  const parts = [head];
+  const panel = r.status === 'done' && r.latest ? proto.panel(r, pm.view.n) : null;
+  const before = [head];
+  const after = [];
   if (r.status === 'running') {
-    parts.push(h('div', { class: 'brief' }, h('p', { class: 'muted', text: '正在评审…一般需要 1-3 分钟，可以先去看看别的，回来在「历史评审」里查看。' })));
+    before.push(h('div', { class: 'brief' }, h('p', { class: 'muted', text: '正在评审…一般需要 1-3 分钟，可以先去看看别的，回来在「历史评审」里查看。' })));
   } else if (r.status === 'error' || !r.latest) {
-    parts.push(h('div', { class: 'brief' }, h('p', { class: 'err', text: `评审失败：${r.error || '没有可用的文档'}` })));
+    before.push(h('div', { class: 'brief' }, h('p', { class: 'err', text: `评审失败：${r.error || '没有可用的文档'}` })));
   } else {
-    parts.push(contextNote(r.context), renderVersions(r), renderDoc(r), proto.panel(r, pm.view.n), renderThread(r), renderReply(r));
+    before.push(contextNote(r.context), renderVersions(r), renderDoc(r));
+    after.push(renderThread(r), renderReply(r));
   }
   if (r.status === 'done') {
-    parts.push(
+    after.push(
       h(
         'div',
         { class: 'actions' },
@@ -827,7 +830,10 @@ function renderReview(r) {
       ),
     );
   }
-  box.replaceChildren(...parts.filter(Boolean));
+  for (const child of [...box.children]) if (child !== panel) child.remove();
+  if (panel && !panel.parentNode) box.append(panel);
+  for (const node of before) if (node) box.insertBefore(node, panel || null);
+  for (const node of after) if (node) box.append(node);
 }
 
 /** 「参考了 N 条记忆、M 次历史讨论、K 段知识库」：展开后列出记忆内容、可跳转的历史会话与知识库段落 */
