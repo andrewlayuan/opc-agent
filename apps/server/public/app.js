@@ -1,4 +1,5 @@
 import { initKb } from './kb.js';
+import { initProto } from './proto-panel.js';
 // 所有外部数据只通过 textContent 写入 DOM，链接只接受 http(s)
 const $ = (id) => document.getElementById(id);
 
@@ -799,7 +800,7 @@ function renderReview(r) {
   } else if (r.status === 'error' || !r.latest) {
     parts.push(h('div', { class: 'brief' }, h('p', { class: 'err', text: `评审失败：${r.error || '没有可用的文档'}` })));
   } else {
-    parts.push(contextNote(r.context), renderVersions(r), renderDoc(r), renderThread(r), renderReply(r));
+    parts.push(contextNote(r.context), renderVersions(r), renderDoc(r), proto.panel(r, pm.view.n), renderThread(r), renderReply(r));
   }
   if (r.status === 'done') {
     parts.push(
@@ -1503,5 +1504,6 @@ async function init() {
 }
 
 const kb = initKb({ h, api, toast, show, openReview, openItem });
+const proto = initProto({ h, api, toast });
 
 init().catch((e) => toast(e.message));

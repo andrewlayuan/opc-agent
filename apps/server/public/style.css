@@ -360,3 +360,28 @@ button.link:disabled { opacity: .4; cursor: not-allowed; }
   .kb-row:hover .kb-count { display: inline-block; }
   .kb-bar button { padding: 0 12px; }
 }
+
+/* 原型面板与全屏预览 */
+.proto-panel { margin: 18px 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--soft); }
+.proto-title { margin: 0 0 12px; font-size: 15px; }
+.proto-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.proto-bar button, .proto-bar a { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); padding: 5px 10px; font-size: 12px; text-decoration: none; cursor: pointer; }
+.proto-bar button.on { border-color: var(--accent); color: var(--accent); }
+.proto-ver.err { border-color: var(--err); color: var(--err); }
+.proto-bar select { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); padding: 5px 8px; }
+.proto-progress { color: var(--accent); font-size: 13px; }
+.proto-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; background: var(--soft); border: 1px dashed var(--accent); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; font-size: 12px; }
+.proto-info { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.proto-revise { display: flex; gap: 8px; margin-bottom: 12px; }
+.proto-revise input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; background: var(--bg); color: var(--fg); font: inherit; }
+.proto-stage { position: relative; overflow: auto; max-width: 100%; padding: 12px; background: var(--bg); border-radius: 10px; }
+.proto-frame { display: block; width: 390px; height: 844px; max-width: 100%; border: 1px solid var(--line); border-radius: 18px; background: #fff; }
+.proto-stage[data-device='desktop'] .proto-frame { width: 1280px; height: 720px; max-width: none; border-radius: 4px; transform: scale(var(--proto-scale, 1)); transform-origin: top left; }
+.proto-full { margin: 0; height: 100vh; overflow: hidden; }
+.proto-full-toolbar { position: fixed; inset: 0 0 auto 0; z-index: 2; display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 12px; background: var(--panel, var(--bg)); border-bottom: 1px solid var(--line); box-shadow: 0 2px 8px rgba(0, 0, 0, .06); }
+.proto-full-title { font-weight: 700; margin-right: 8px; }
+.proto-full-toolbar button, .proto-full-toolbar a, .proto-full-toolbar select { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); padding: 5px 10px; font-size: 12px; text-decoration: none; }
+.proto-full-toolbar button.on { border-color: var(--accent); color: var(--accent); }
+.proto-full #proto-stage { position: fixed; inset: 48px 0 0 0; overflow: hidden; }
+.proto-full-frame { width: 100%; height: 100%; border: 0; background: #fff; }
+.proto-full-toast { position: fixed; z-index: 5; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--fg); color: var(--bg); border-radius: 999px; padding: 8px 16px; font-size: 13px; }
