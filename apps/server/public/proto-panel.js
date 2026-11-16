@@ -5,7 +5,7 @@ export function initProto({ h, api, toast }) {
   function newState(review) {
     return {
       id: review.id, review, viewN: 1, versions: [], selected: 0,
-      device: 'phone', slug: '', notes: false, root: null, frame: null, stage: null, select: null,
+      device: 'phone', slug: '', notes: false, draft: '', root: null, frame: null, stage: null, select: null,
       timer: null, seq: 0, bound: false, content: null, frameMounted: false,
     };
   }
@@ -150,15 +150,18 @@ export function initProto({ h, api, toast }) {
     const input = h('input', {
       class: 'proto-revise-input', type: 'text', maxlength: '1000',
       placeholder: '描述要怎么改原型，比如：登录页加一个微信登录',
+      oninput: (e) => { s.draft = e.target.value; },
     });
+    if (s.draft) input.value = s.draft;
     c.append(
       h('form', {
         class: 'proto-revise',
         onsubmit: async (e) => {
           e.preventDefault();
-          const text = String(input.value || '').trim();
+          const text = String(s.draft || input.value || '').trim();
           if (!text) { toast('请先描述修改要求'); return; }
           await post(s, `/${v.n}/revise`, { text }, '原型修改中');
+          s.draft = '';
           input.value = '';
         },
       }, input, h('button', { type: 'submit', text: '修改原型' })),
@@ -166,7 +169,13 @@ export function initProto({ h, api, toast }) {
     s.stage.setAttribute('data-device', s.device);
     s.stage.setAttribute('data-visible', v.status === 'done' ? '1' : '0');
     if (v.status === 'done') {
-      if (!s.frame) s.frame = h('iframe', { class: 'proto-frame', sandbox: 'allow-scripts', title: '原型预览' });
+      if (!s.frame) s.frame = h('iframe', {
+        class: 'proto-frame', sandbox: 'allow-scripts', title: '原型预览',
+        onload: () => {
+          if (s.notes) send(s, { type: 'proto:notes', on: true });
+          if (s.slug) send(s, { type: 'proto:goto', slug: s.slug });
+        },
+      });
       if (!s.frameMounted) { s.stage.append(s.frame); s.frameMounted = true; }
       const url = frameUrl(s, v.n);
       if (s.frame.getAttribute('src') !== url) s.frame.setAttribute('src', url);

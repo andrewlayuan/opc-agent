@@ -63,7 +63,13 @@ function render() {
   }));
   toolbar.append(h('a', { href: `/api/pm/reviews/${id}/prototypes/${n}/html?download=1`, text: '下载' }));
   toolbar.append(h('a', { href: `/#pm/${id}`, text: '返回评审' }));
-  if (!frame) frame = h('iframe', { class: 'proto-full-frame', sandbox: 'allow-scripts', title: '原型预览' });
+  if (!frame) frame = h('iframe', {
+    class: 'proto-full-frame', sandbox: 'allow-scripts', title: '原型预览',
+    onload: () => {
+      if (notes) send({ type: 'proto:notes', on: true });
+      if (slug) send({ type: 'proto:goto', slug });
+    },
+  });
   const src = url();
   if (frame.getAttribute('src') !== src) frame.setAttribute('src', src);
   if (!mounted) { stage.append(frame); mounted = true; }
