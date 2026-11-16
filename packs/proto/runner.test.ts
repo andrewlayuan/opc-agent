@@ -295,6 +295,7 @@ test('修改：只重新生成计划中的页面，其他页面原样复制，�
   assert.equal(v2.from_n, 1);
   assert.equal(v2.request, '加微信登录');
   assert.equal(v2.note, '加了微信登录');
+  assert.deepEqual(v2.progress, { stage: 'pages', done: 1, total: 1 });
   assert.equal(stub.pageCalls.get('login'), 2);
   assert.equal(stub.pageCalls.get('home'), 1);
   assert.equal(stub.pageCalls.get('me'), 1);
@@ -445,4 +446,26 @@ test('按新 PRD 重新生成：v2 的 from_n 为空，request 写明 PRD 版本
   assert.equal(v2.base_version_n, 2);
   assert.equal(v2.request, '按 PRD v2 重新生成');
   assert.equal(v2.status, 'done');
+});
+
+test('修改：要重生成的页面全失败时，复制页不掩盖错误', async () => {
+  const db = setup();
+  let failPages = false;
+  const stub = makeLlm({
+    outline: () => JSON.stringify(V1_OUTLINE),
+    plan: () => planJson(V1_PAGES),
+    page: (slug) => {
+      if (failPages && slug === 'login') throw new Error('模型错误');
+      return `<main><div>${slug}</div></main>`;
+    },
+  });
+  const runner = await firstVersion(db, stub);
+  failPages = true;
+  runner.revise(1, 1, '改登录');
+  await runner.idle();
+  const v2 = getVersion(db, 1, 2)!;
+  assert.equal(v2.status, 'error');
+  assert.equal(v2.error, '页面生成失败，请重试');
+  assert.ok(v2.pages.find((p) => p.slug === 'login')!.error);
+  assert.equal(v2.pages.find((p) => p.slug === 'home')!.html, '<div>home</div>');
 });

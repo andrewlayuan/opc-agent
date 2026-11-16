@@ -180,6 +180,7 @@ export class ProtoRunner {
     };
     const free = () => { activePages--; waiters.shift()?.(); };
     const finished = new Set<number>();
+    const succeeded = new Set<number>();
     const mark = (idx: number, error: string | null, html: string) => {
       if (!alive || finished.has(idx)) return;
       const page = pages.find((p) => p.slug === targets[idx].page.slug);
@@ -187,9 +188,9 @@ export class ProtoRunner {
       page.html = html;
       page.error = error;
       finished.add(idx);
-      const done = pages.filter((p) => p.html && !p.error).length;
+      if (!error && html) succeeded.add(idx);
       const ok = savePages(this.db, row.id, pages)
-        && setProgress(this.db, row.id, { stage: 'pages', done, total: targets.length });
+        && setProgress(this.db, row.id, { stage: 'pages', done: succeeded.size, total: targets.length });
       if (!ok || !this.alive(row)) alive = false;
     };
     const workers = targets.map(async (t, idx) => {
@@ -208,7 +209,7 @@ export class ProtoRunner {
     if (timer) clearTimeout(timer);
     if (expired) targets.forEach((_, idx) => { if (!finished.has(idx)) mark(idx, '超时', ''); });
     if (!alive) return;
-    const okCount = pages.filter((p) => p.html && !p.error).length;
+    const okCount = succeeded.size;
     if (!okCount) { this.end(row, { status: 'error', error: '页面生成失败，请重试' }); return; }
     const device = outline.device;
     const doc = assemble({ ...row, outline, pages }, { device });
