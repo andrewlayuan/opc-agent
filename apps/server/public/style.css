@@ -359,6 +359,11 @@ button.link:disabled { opacity: .4; cursor: not-allowed; }
 .kb-back { font-size: 13px; margin-top: 22px; }
 .kb-doc-head { padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .kb-doc-title { font-size: 22px; line-height: 1.4; margin: 10px 0 8px; word-break: break-word; }
+.kb-tabs { position: static; margin: 12px 0 0; padding: 0; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.kb-preview { padding-top: 12px; }
+.kb-preview[hidden], .kb-pane[hidden] { display: none; }
+.kb-preview-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; font-size: 12px; }
+.kb-preview-frame { display: block; width: 100%; height: 75vh; min-height: 420px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 .kb-doc-head .actions { margin-top: 12px; }
 .kb-note { font-size: 13px; background: var(--soft); border-radius: var(--radius); padding: 8px 12px; margin: 12px 0 0; }
 .kb-note.warn, .kb-note.err { color: var(--err); background: color-mix(in srgb, var(--err) 9%, transparent); }

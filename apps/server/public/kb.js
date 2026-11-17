@@ -7,7 +7,7 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
   const FILE_MAX = 10 * 1024 * 1024;
   const SUGGEST_CHARS = 1500;
   /** folder：null 为全部，'none' 为未归类，数字为目录 id；view：list | doc | edit */
-  const st = { tree: null, folder: null, q: '', view: 'list', docId: null, seq: 0, collapsed: new Set(), dialog: Promise.resolve(), cancel: null };
+  const st = { tree: null, folder: null, q: '', view: 'list', docId: null, docTab: null, seq: 0, collapsed: new Set(), dialog: Promise.resolve(), cancel: null };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const when = (ts) => new Date(ts).toLocaleString('zh-CN', { hour12: false });
   const day = (ts) => new Date(ts).toLocaleDateString('zh-CN');
@@ -318,6 +318,39 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
     }
   }
 
+  /** 上传的网页：「网页预览」和「提取的文字」两个标签；从搜索结果跳到某一段时默认看文字。iframe 在第一次切到预览时才创建 */
+  function docContent(doc, blocks, ord) {
+    const text = blocks.length ? h('div', { class: 'kb-doc' }, blocks) : doc.status === 'ready' ? h('p', { class: 'muted', text: '（没有正文）' }) : null;
+    if (!doc.preview) return text;
+    const src = `/api/kb/docs/${doc.id}/preview`;
+    const panes = { preview: h('div', { class: 'kb-preview' }), text: h('div', { class: 'kb-pane' }, text) };
+    const tabs = h('div', { class: 'pm-tabs kb-tabs', role: 'tablist' });
+    let built = false;
+    const set = (k) => {
+      st.docTab = k;
+      if (k === 'preview' && !built) {
+        built = true;
+        panes.preview.append(
+          h(
+            'div',
+            { class: 'kb-preview-bar muted' },
+            h('span', { text: '原网页在隔离沙箱中运行：不能联网，也读不到你的登录信息。' }),
+            h('a', { href: src, target: '_blank', rel: 'noopener noreferrer', text: '新窗口打开' }),
+          ),
+          h('iframe', { class: 'kb-preview-frame', sandbox: 'allow-scripts', src, title: `网页预览：${doc.title}`, referrerpolicy: 'no-referrer' }),
+        );
+      }
+      tabs.replaceChildren(
+        ...[['preview', '网页预览'], ['text', '提取的文字']].map(([key, label]) =>
+          h('button', { type: 'button', role: 'tab', class: `pm-tab${key === k ? ' on' : ''}`, 'aria-selected': key === k ? 'true' : 'false', text: label, onclick: () => set(key) }),
+        ),
+      );
+      for (const key of Object.keys(panes)) panes[key].hidden = key !== k;
+    };
+    set(ord != null ? 'text' : st.docTab || 'preview');
+    return h('div', { class: 'kb-content' }, tabs, panes.preview, panes.text);
+  }
+
   function renderDoc({ doc, body, chunks }, ord) {
     const notes = [];
     if (doc.status === 'orphan') notes.push(h('p', { class: 'kb-note warn', text: '来源已删除，正文已清空。只能移动或删除这个条目。' }));
@@ -348,7 +381,7 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
         ...notes,
         actions,
       ),
-      blocks.length ? h('div', { class: 'kb-doc' }, blocks) : doc.status === 'ready' ? h('p', { class: 'muted', text: '（没有正文）' }) : null,
+      docContent(doc, blocks, ord),
     );
     if (ord != null) document.getElementById(`kb-c-${ord}`)?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
   }

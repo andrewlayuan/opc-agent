@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ExtractError, extractOffice } from './extract.ts';
-import { decodeEntities, decodeHtml, htmlToText } from './html.ts';
+import { decodeEntities, decodeHtml, htmlToText, renderData, scriptData } from './html.ts';
 
 test('htmlToText：标题、段落、列表、表格、pre 保留结构，标题栏、脚本、样式和注释去掉', () => {
   const html = `<!doctype html><html><head><title>标题栏</title><style>p{color:red}</style><script>var s = "</p>";</script></head>
@@ -46,4 +46,62 @@ test('htmlToText：恶意构造（未闭合引号、大量 <、未闭合 script�
 test('extractOffice(html)：在 worker 中按声明的编码解码并提取', async () => {
   const buf = Buffer.concat([Buffer.from('<html><meta charset="gbk"><body><h2>'), Buffer.from([0xc4, 0xe3, 0xba, 0xc3]), Buffer.from('</h2><script>alert(1)</script></body></html>')]);
   assert.equal(await extractOffice('html', buf), '## 你好');
+});
+
+test('scriptData：只读 JSON 类型脚本和单条赋值的纯数据；普通代码、非 JSON、其他类型返回 null', () => {
+  assert.deepEqual(scriptData('<script>', 'window.KG = {"a": 1};\n'), { name: 'KG', value: { a: 1 } });
+  assert.deepEqual(scriptData('<script type="text/javascript">', 'const DATA=[1,2]'), { name: 'DATA', value: [1, 2] });
+  assert.deepEqual(scriptData('<script type="application/ld+json">', '{"headline":"标题"}'), { name: '结构化数据', value: { headline: '标题' } });
+  assert.deepEqual(scriptData('<script id="d" type=application/json>', '[{"x":"y"}]'), { name: '页面数据', value: [{ x: 'y' }] });
+  for (const [tag, src] of [
+    ['<script>', 'window.KG = {a: 1};'],
+    ['<script>', '!function(){window.x = {}}()'],
+    ['<script>', 'window.KG = {"a": 1}; alert(1)'],
+    ['<script>', 'var s = "text"'],
+    ['<script type="text/template">', 'window.KG = {"a": 1}'],
+    ['<script data-type="application/json">', 'x()'],
+  ]) assert.equal(scriptData(tag, src), null, src);
+});
+
+test('renderData：记录按标题分节，去掉 id / 颜色 / 文件名等内部字段，只有 id 的关系数据不输出', () => {
+  const kg = {
+    meta: { built_at: '2026-11-11 11:30', node_count: 2 },
+    domains: [{ id: 'models', name: '模型', color: '#7048e8', desc: 'LLM 基础与选型' }],
+    nodes: [{ id: 'm-a', title: '注意力机制', type: 'concept', tags: ['Transformer', 'KV Cache'], summary: '核心原理', related: ['m-b'], file: '01-models.yaml', refs: [{ title: 'RoFormer（RoPE）', url: 'https://arxiv.org/abs/2104.09864' }] }],
+    links: [{ source: 'm-a', target: 'm-b', kind: 'related' }],
+  };
+  assert.equal(
+    renderData([{ name: 'KG', value: kg }]),
+    [
+      '# 页面数据：KG',
+      'meta：built_at：2026-11-11 11:30',
+      '',
+      '## domains',
+      '',
+      '### 模型',
+      'desc：LLM 基础与选型',
+      '',
+      '## nodes',
+      '',
+      '### 注意力机制',
+      'type：concept',
+      'tags：Transformer、KV Cache',
+      'summary：核心原理',
+      'refs：',
+      '- RoFormer（RoPE）；url：https://arxiv.org/abs/2104.09864',
+    ].join('\n'),
+  );
+  assert.equal(renderData([{ name: 'X', value: { links: [{ a: 'x-1' }] } }]), '');
+});
+
+test('htmlToText：交互页面的内容在脚本数据里时，页面文字之后附上整理后的数据；库代码不输出', () => {
+  const html = '<html><body><h1>知识图谱</h1><div id="app"></div><script>!function(){var d3={}}();</script><script>window.KG = {"nodes":[{"id":"n1","title":"上下文工程","summary":"窗口、压缩与隔离"}]};</script></body></html>';
+  assert.equal(htmlToText(html), '# 知识图谱\n\n# 页面数据：KG\n\n## nodes\n\n### 上下文工程\nsummary：窗口、压缩与隔离');
+});
+
+test('renderData：超过 15 万字时截断并注明', () => {
+  const nodes = Array.from({ length: 400 }, (_, i) => ({ title: `节点${i}`, body: '字'.repeat(500) }));
+  const out = renderData([{ name: 'KG', value: { nodes } }]);
+  assert.ok(out.length <= 151000, String(out.length));
+  assert.ok(out.endsWith('（内嵌数据过长，后面的部分已截断）'));
 });

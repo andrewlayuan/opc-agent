@@ -1,4 +1,4 @@
-/** HTML 转纯文字：线性扫描、不执行任何内容；保留标题、列表、表格和段落结构。提取在 worker 中进行 */
+/** HTML 转纯文字：线性扫描、不执行任何内容；保留标题、列表、表格和段落结构，并读出脚本里内嵌的 JSON 数据。提取在 worker 中进行 */
 import { ExtractError, NOT_UTF8, decodeText } from './extract.ts';
 
 const CHARSETS = new Map([
@@ -121,11 +121,172 @@ class Out {
   }
 }
 
+// ---------------- 内嵌数据 ----------------
+// 单文件交互页面（图谱、看板等）常把内容放在脚本里的数据中，由脚本渲染；这里只用 JSON.parse 读取纯数据，不执行任何代码
+const DATA_SRC_MAX = 8 * 1024 * 1024;
+const DATA_CHARS = 150000;
+const DATA_DEPTH = 8;
+const ASSIGN = /^(?:(?:window|globalThis|self)\.([A-Za-z_$][\w$]*)|(?:var|let|const)\s+([A-Za-z_$][\w$]*))\s*=\s*/;
+const TYPE_ATTR = /\stype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
+const JS_TYPES = new Set(['', 'text/javascript', 'application/javascript', 'module']);
+
+export interface ScriptData {
+  name: string;
+  value: unknown;
+}
+
+/** 脚本里的纯数据：type 为 JSON 的 script，或整段只是 `window.X = {...}` / `const X = [...]` 一条赋值；其余返回 null */
+export function scriptData(tag: string, src: string): ScriptData | null {
+  if (src.length > DATA_SRC_MAX) return null;
+  const tm = TYPE_ATTR.exec(tag);
+  const type = (tm?.[1] ?? tm?.[2] ?? tm?.[3] ?? '').trim().toLowerCase();
+  let name: string;
+  let json: string;
+  if (type === 'application/json' || type === 'application/ld+json') {
+    name = type === 'application/json' ? '页面数据' : '结构化数据';
+    json = src;
+  } else if (JS_TYPES.has(type)) {
+    const t = src.trim();
+    const m = ASSIGN.exec(t);
+    if (!m) return null;
+    name = m[1] ?? m[2];
+    json = t.slice(m[0].length).replace(/;\s*$/, '');
+  } else return null;
+  json = json.trim();
+  if (json[0] !== '{' && json[0] !== '[') return null;
+  try {
+    return { name, value: JSON.parse(json) };
+  } catch {
+    return null;
+  }
+}
+
+const TITLE_KEYS = ['title', 'name', 'label', 'heading', 'headline', 'question', 'term', '标题', '名称'];
+const PHRASE = /[\u3000-\u303f\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]|\S\s+\S/;
+/** 内部字段：标识、颜色、图标等，不输出 */
+const NOISE_KEYS = new Set(['id', '_id', 'key', 'slug', 'uuid', 'color', 'icon', 'order']);
+const URL_RE = /^https?:\/\/\S+$/;
+const IDENT = /^[\w$.:#/@+-]+$/;
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+/** 值得保留的字符串：含中日韩文字或词组、链接，或不像内部标识（如 m-transformer、#7048e8、2026-11-11、a.yaml） */
+function keepStr(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  if (PHRASE.test(t) || URL_RE.test(t)) return true;
+  return !(IDENT.test(t) && (/[-_.:#/@]/.test(t) || /^\d/.test(t)));
+}
+
+/** 至少有一个直接字段是“文字”（含中日韩文字或词组）；只有 id 和关系的对象（如图谱的边）不输出 */
+function rich(o: Record<string, unknown>): boolean {
+  return Object.values(o).some((v) => (typeof v === 'string' && PHRASE.test(v.trim()) && !URL_RE.test(v.trim())) || (Array.isArray(v) && v.some((x) => typeof x === 'string' && PHRASE.test(x))));
+}
+
+function titleKey(o: Record<string, unknown>): string | undefined {
+  return TITLE_KEYS.find((k) => typeof o[k] === 'string' && keepStr(o[k] as string));
+}
+
+/** 一行内的紧凑写法：数组用顿号，对象用「键：值；」 */
+function inline(v: unknown, depth = 0): string {
+  if (typeof v === 'string') return keepStr(v) ? oneLine(v) : '';
+  if (depth >= DATA_DEPTH) return '';
+  if (Array.isArray(v)) return v.map((x) => inline(x, depth + 1)).filter(Boolean).join('、');
+  if (!isObj(v)) return '';
+  const tk = titleKey(v);
+  const parts = Object.entries(v).map(([k, x]) => {
+    if (NOISE_KEYS.has(k)) return '';
+    const s = inline(x, depth + 1);
+    return !s ? '' : k === tk ? s : `${k}：${s}`;
+  });
+  if (tk) parts.unshift(parts.splice(Object.keys(v).indexOf(tk), 1)[0]);
+  return parts.filter(Boolean).join('；');
+}
+
+class DataOut {
+  lines: string[] = [];
+  private chars = 0;
+  full = false;
+
+  push(s: string): void {
+    if (this.full) return;
+    if (this.chars + s.length > DATA_CHARS) {
+      this.full = true;
+      this.lines.push('（内嵌数据过长，后面的部分已截断）');
+      return;
+    }
+    this.lines.push(s);
+    this.chars += s.length + 1;
+  }
+}
+
+/** 一条记录：有标题字段时作为标题（三级以内），其余字段逐行输出；嵌套的对象数组按列表输出 */
+function section(o: Record<string, unknown>, level: number, out: DataOut): void {
+  const tk = titleKey(o);
+  if (tk) {
+    out.push('');
+    out.push(level <= 3 ? `${'#'.repeat(level)} ${oneLine(o[tk] as string)}` : oneLine(o[tk] as string));
+  }
+  for (const [k, v] of Object.entries(o)) {
+    if (k === tk || NOISE_KEYS.has(k)) continue;
+    if (typeof v === 'string') {
+      if (keepStr(v)) out.push(`${k}：${v.trim()}`);
+    } else if (Array.isArray(v) && v.length && v.every(isObj)) {
+      const items = v.filter((x) => rich(x) || titleKey(x)).map((x) => inline(x)).filter(Boolean);
+      if (!items.length) continue;
+      out.push(`${k}：`);
+      for (const s of items) out.push(`- ${s}`);
+    } else {
+      const s = inline(v);
+      if (s) out.push(`${k}：${s}`);
+    }
+  }
+}
+
+function records(list: unknown[], level: number, out: DataOut): void {
+  const objs = list.filter(isObj).filter(rich);
+  if (objs.length) for (const o of objs) section(o, level, out);
+  else {
+    const s = inline(list);
+    if (s) out.push(s);
+  }
+}
+
+export function renderData(items: ScriptData[]): string {
+  const out = new DataOut();
+  for (const { name, value } of items) {
+    const start = out.lines.length;
+    out.push('');
+    out.push(`# 页面数据：${name}`);
+    const body = out.lines.length;
+    if (Array.isArray(value)) records(value, 2, out);
+    else if (isObj(value) && rich(value)) section(value, 2, out);
+    else if (isObj(value)) {
+      // 顶层是若干集合（如 nodes / domains / links）：每个集合一节，记录作为三级标题
+      for (const [k, v] of Object.entries(value)) {
+        if (Array.isArray(v) && v.some(isObj)) {
+          if (!v.some((x) => isObj(x) && rich(x))) continue;
+          out.push('');
+          out.push(`## ${k}`);
+          records(v, 3, out);
+        } else {
+          const s = inline(v);
+          if (s) out.push(`${k}：${s}`);
+        }
+      }
+    }
+    if (!out.lines.slice(body).some((l) => l.trim())) out.lines.length = start;
+    if (out.full) break;
+  }
+  return out.lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 export function htmlToText(s: string): string {
   const n = s.length;
   const o = new Out();
   const lists: { ordered: boolean; n: number }[] = [];
   let cells = 0;
+  const data: ScriptData[] = [];
   let i = 0;
   while (i < n) {
     const lt = s.indexOf('<', i);
@@ -160,6 +321,10 @@ export function htmlToText(s: string): string {
       const re = CLOSE.get(name)!;
       re.lastIndex = i;
       const c = re.exec(s);
+      if (name === 'script' && c) {
+        const d = scriptData(s.slice(lt, end + 1), s.slice(i, c.index));
+        if (d) data.push(d);
+      }
       const e = c ? s.indexOf('>', c.index) : -1;
       i = e < 0 ? n : e + 1;
       continue;
@@ -218,5 +383,7 @@ export function htmlToText(s: string): string {
         if (BLOCK.has(name)) o.br();
     }
   }
-  return o.result();
+  const text = o.result();
+  const extra = data.length ? renderData(data) : '';
+  return extra ? (text ? `${text}\n\n${extra}` : extra) : text;
 }

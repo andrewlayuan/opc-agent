@@ -17,6 +17,8 @@ export interface DocView {
   item_id: number | null;
   file_name: string | null;
   file_size: number | null;
+  /** 上传的网页：可以在沙箱里预览原网页 */
+  preview: boolean;
   truncated: boolean;
   created_at: number;
   updated_at: number;
@@ -34,6 +36,7 @@ interface DocRow {
   item_id: number | null;
   file_name: string | null;
   file_size: number | null;
+  file_mime: string | null;
   storage: string | null;
   truncated: number;
   created_at: number;
@@ -41,7 +44,7 @@ interface DocRow {
 }
 
 const NOT_FOUND = '条目不存在';
-const COLS = 'id, folder_id, kind, title, status, error, body, review_id, item_id, file_name, file_size, storage, truncated, created_at, updated_at';
+const COLS = 'id, folder_id, kind, title, status, error, body, review_id, item_id, file_name, file_size, file_mime, storage, truncated, created_at, updated_at';
 const num = (v: unknown) => (v == null ? null : Number(v));
 
 function pathMap(db: DB): Map<number, string> {
@@ -62,6 +65,7 @@ export function toDocView(r: DocRow, paths: Map<number, string>): DocView {
     item_id: num(r.item_id),
     file_name: r.file_name,
     file_size: num(r.file_size),
+    preview: r.kind === 'upload' && r.file_mime === 'text/html' && r.storage != null,
     truncated: Boolean(r.truncated),
     created_at: Number(r.created_at),
     updated_at: Number(r.updated_at),

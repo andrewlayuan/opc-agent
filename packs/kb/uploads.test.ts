@@ -111,3 +111,17 @@ test('上传：处理中被删除不报错；recover 把 processing 置 error �
   assert.equal(tmps(dir), 0);
   done();
 });
+
+test('上传：网页条目可预览（preview），其他文件不可；内嵌数据进入正文和分块', async () => {
+  const { db, files, put, done } = setup();
+  const a = put('图谱.html', '<h1>图谱</h1><script>window.KG = {"nodes":[{"title":"记忆架构","summary":"分层记忆"}]};</script>');
+  const b = put('说明.txt', '正文');
+  await files.idle();
+  const da = getDoc(db, a.id)!;
+  assert.equal(da.doc.status, 'ready');
+  assert.equal(da.doc.preview, true);
+  assert.match(da.body!, /### 记忆架构\nsummary：分层记忆/);
+  assert.ok(da.chunks.some((c) => c.heading.endsWith('记忆架构')), JSON.stringify(da.chunks));
+  assert.equal(getDoc(db, b.id)!.doc.preview, false);
+  done();
+});

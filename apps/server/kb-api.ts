@@ -9,6 +9,8 @@ import { searchKb } from '../../packs/kb/search.ts';
 import { suggestFolder } from '../../packs/kb/suggest.ts';
 import { KB_LIMITS, KbError } from '../../packs/kb/types.ts';
 import type { KbFiles } from '../../packs/kb/uploads.ts';
+import { ExtractError } from '../../packs/pm/extract.ts';
+import { decodeHtml } from '../../packs/pm/html.ts';
 import { HttpError, contentDisposition, readBodyToFile, readJson, sendJson } from './http.ts';
 
 export interface KbApiDeps {
@@ -85,6 +87,48 @@ function sendFile(req: http.IncomingMessage, res: http.ServerResponse, files: Kb
     res.destroy();
   });
   rs.pipe(res);
+}
+
+/**
+ * 网页预览：原网页在沙箱中运行（不同源，读不到登录 Cookie、调不了接口），只允许页面自带的脚本、样式和内嵌资源，禁止一切网络请求和表单提交。
+ * 已按 <meta charset> 等解码，统一以 UTF-8 输出
+ */
+export const PREVIEW_CSP = [
+  'sandbox allow-scripts',
+  "default-src 'none'",
+  "script-src 'unsafe-inline' 'unsafe-eval'",
+  "style-src 'unsafe-inline'",
+  'img-src data: blob:',
+  'font-src data:',
+  'media-src data: blob:',
+  'worker-src blob:',
+  "connect-src 'none'",
+  "frame-src 'none'",
+  "form-action 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'self'",
+].join('; ');
+
+function sendPreview(res: http.ServerResponse, files: KbFiles, id: number): void {
+  const f = files.file(id);
+  if (!f || f.mime !== 'text/html') throw new HttpError(404, '没有可预览的网页');
+  let html: string;
+  try {
+    html = decodeHtml(fs.readFileSync(f.path));
+  } catch (e) {
+    if (e instanceof ExtractError) throw new HttpError(422, e.message);
+    throw new HttpError(404, '文件不存在');
+  }
+  const body = Buffer.from(html, 'utf8');
+  res.setHeader('Content-Security-Policy', PREVIEW_CSP);
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'private, no-store',
+    'cross-origin-resource-policy': 'same-origin',
+    'content-length': body.length,
+  });
+  res.end(body);
 }
 
 /** 来源类条目在读取前按需重建；失败只记日志 */
@@ -208,6 +252,11 @@ async function route(deps: KbApiDeps, req: http.IncomingMessage, res: http.Serve
     const { storage } = deleteDoc(db, idOf(m[1]));
     files.unlink(storage);
     sendJson(res, 200, { ok: true });
+    return true;
+  }
+  m = p.match(/^\/api\/kb\/docs\/(\d+)\/preview$/);
+  if (m && method === 'GET') {
+    sendPreview(res, files, idOf(m[1]));
     return true;
   }
   m = p.match(/^\/api\/kb\/docs\/(\d+)\/file$/);
