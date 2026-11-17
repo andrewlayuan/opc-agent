@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { CONVERT_TIMEOUT_MS, LO_FAILED, LO_MISSING, LO_TIMEOUT, PROFILE_XCU, TARGET, convertLegacy, realRun } from './convert.ts';
+import { CONVERT_TIMEOUT_MS, LO_FAILED, LO_MISSING, LO_TIMEOUT, PROFILE_XCU, TARGET, convertHtmlToDocx, convertLegacy, realRun } from './convert.ts';
 import type { RunFn } from './convert.ts';
 import { ExtractError, MIME, detectType } from './extract.ts';
 import type { LegacyFormat } from './extract.ts';
@@ -176,5 +176,36 @@ test('真实 LibreOffice：doc / rtf / odt / xls / ods / ppt / odp 识别与提�
     }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('convertHtmlToDocx：参数数组含 HTML 导入过滤器和 Word 导出过滤器，不经 shell，最小环境，结束后删除临时目录', async () => {
+  const { root, done } = sandbox();
+  try {
+    const calls: { cmd: string; args: string[]; opts: Parameters<RunFn>[2]; input: string; xcu: string }[] = [];
+    const run: RunFn = async (cmd, args, opts) => {
+      const profile = new URL(args[6].slice('-env:UserInstallation='.length)).pathname;
+      calls.push({ cmd, args, opts, input: fs.readFileSync(args[args.length - 1], 'utf8'), xcu: fs.readFileSync(path.join(profile, 'user', 'registrymodifications.xcu'), 'utf8') });
+      fs.writeFileSync(path.join(args[args.indexOf('--outdir') + 1], 'in.docx'), DOCX);
+      return { code: 0, timedOut: false, stderr: '' };
+    };
+    const html = '<html><body><p>正文 $(rm -rf /) `x`</p></body></html>';
+    const buf = await convertHtmlToDocx(html, { run, tmpRoot: root });
+    assert.deepEqual(buf, DOCX);
+    const [c] = calls;
+    const dir = c.opts.cwd;
+    assert.equal(c.cmd, 'soffice');
+    assert.deepEqual(c.args, ['--headless', '--norestore', '--nolockcheck', '--nodefault', '--nologo', '--invisible', `-env:UserInstallation=file://${dir}/profile`, '--infilter=HTML (StarWriter)', '--convert-to', 'docx:MS Word 2007 XML', '--outdir', `${dir}/out`, `${dir}/in.html`]);
+    assert.deepEqual(c.opts.env, { PATH: '/usr/bin:/bin', HOME: dir, TMPDIR: dir, LANG: 'C.UTF-8' });
+    assert.equal(c.opts.timeoutMs, CONVERT_TIMEOUT_MS);
+    assert.equal(c.input, html);
+    assert.equal(c.xcu, PROFILE_XCU);
+    assert.deepEqual(leftovers(root), []);
+    await assert.rejects(convertHtmlToDocx(html, { run: async () => ({ code: null, timedOut: true, stderr: '' }), tmpRoot: root }), (e) => e instanceof ExtractError && e.message === LO_TIMEOUT);
+    await assert.rejects(convertHtmlToDocx(html, { run: async () => Promise.reject(Object.assign(new Error('x'), { code: 'ENOENT' })), tmpRoot: root }), (e) => e instanceof ExtractError && e.message === LO_MISSING);
+    await assert.rejects(convertHtmlToDocx(html, { run: async () => ({ code: 0, timedOut: false, stderr: '' }), tmpRoot: root }), (e) => e instanceof ExtractError && e.message === LO_FAILED);
+    assert.deepEqual(leftovers(root), []);
+  } finally {
+    done();
   }
 });

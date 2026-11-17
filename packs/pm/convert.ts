@@ -88,37 +88,45 @@ export interface ConvertOpts {
   tmpRoot?: string;
 }
 
-export function convertLegacy(file: string, format: LegacyFormat, o: ConvertOpts = {}): Promise<{ format: 'docx' | 'xlsx' | 'pptx'; buf: Buffer }> {
-  return serial(async () => {
-    const target = TARGET[format];
-    const dir = fs.mkdtempSync(path.join(o.tmpRoot ?? os.tmpdir(), 'opc-lo-'));
+/** 在一次性临时目录里运行 soffice：写入输入文件、生成配置、执行、读回输出；结束后删除整个目录 */
+async function runSoffice(o: ConvertOpts, inName: string, writeInput: (file: string) => void, convArgs: string[], outName: string): Promise<Buffer> {
+  const dir = fs.mkdtempSync(path.join(o.tmpRoot ?? os.tmpdir(), 'opc-lo-'));
+  try {
+    const input = path.join(dir, inName);
+    writeInput(input);
+    const profile = path.join(dir, 'profile');
+    fs.mkdirSync(path.join(profile, 'user'), { recursive: true });
+    fs.writeFileSync(path.join(profile, 'user', 'registrymodifications.xcu'), PROFILE_XCU);
+    const out = path.join(dir, 'out');
+    fs.mkdirSync(out);
+    const args = ['--headless', '--norestore', '--nolockcheck', '--nodefault', '--nologo', '--invisible', `-env:UserInstallation=${pathToFileURL(profile).href}`, ...convArgs, '--outdir', out, input];
+    const env = { PATH: '/usr/bin:/bin', HOME: dir, TMPDIR: dir, LANG: 'C.UTF-8' };
+    let r: RunResult;
     try {
-      const input = path.join(dir, `in.${format}`);
-      fs.copyFileSync(file, input);
-      const profile = path.join(dir, 'profile');
-      fs.mkdirSync(path.join(profile, 'user'), { recursive: true });
-      fs.writeFileSync(path.join(profile, 'user', 'registrymodifications.xcu'), PROFILE_XCU);
-      const out = path.join(dir, 'out');
-      fs.mkdirSync(out);
-      const args = ['--headless', '--norestore', '--nolockcheck', '--nodefault', '--nologo', '--invisible', `-env:UserInstallation=${pathToFileURL(profile).href}`, '--convert-to', target, '--outdir', out, input];
-      const env = { PATH: '/usr/bin:/bin', HOME: dir, TMPDIR: dir, LANG: 'C.UTF-8' };
-      let r: RunResult;
-      try {
-        r = await (o.run ?? realRun)('soffice', args, { cwd: dir, env, timeoutMs: o.timeoutMs ?? CONVERT_TIMEOUT_MS });
-      } catch (e) {
-        throw new ExtractError(422, (e as { code?: unknown }).code === 'ENOENT' ? LO_MISSING : LO_FAILED);
-      }
-      if (r.timedOut) throw new ExtractError(422, LO_TIMEOUT);
-      let st: fs.Stats;
-      try {
-        st = fs.lstatSync(path.join(out, `in.${target}`));
-      } catch {
-        throw new ExtractError(422, LO_FAILED);
-      }
-      if (!st.isFile() || st.size === 0 || st.size > OUT_MAX) throw new ExtractError(422, LO_FAILED);
-      return { format: target, buf: fs.readFileSync(path.join(out, `in.${target}`)) };
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      r = await (o.run ?? realRun)('soffice', args, { cwd: dir, env, timeoutMs: o.timeoutMs ?? CONVERT_TIMEOUT_MS });
+    } catch (e) {
+      throw new ExtractError(422, (e as { code?: unknown }).code === 'ENOENT' ? LO_MISSING : LO_FAILED);
     }
-  });
+    if (r.timedOut) throw new ExtractError(422, LO_TIMEOUT);
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(path.join(out, outName));
+    } catch {
+      throw new ExtractError(422, LO_FAILED);
+    }
+    if (!st.isFile() || st.size === 0 || st.size > OUT_MAX) throw new ExtractError(422, LO_FAILED);
+    return fs.readFileSync(path.join(out, outName));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+export function convertLegacy(file: string, format: LegacyFormat, o: ConvertOpts = {}): Promise<{ format: 'docx' | 'xlsx' | 'pptx'; buf: Buffer }> {
+  const target = TARGET[format];
+  return serial(async () => ({ format: target, buf: await runSoffice(o, `in.${format}`, (dst) => fs.copyFileSync(file, dst), ['--convert-to', target], `in.${target}`) }));
+}
+
+/** Wiki 导出：服务端生成的 HTML（无外部资源）转成 docx */
+export function convertHtmlToDocx(html: string, o: ConvertOpts = {}): Promise<Buffer> {
+  return serial(() => runSoffice(o, 'in.html', (dst) => fs.writeFileSync(dst, html), ['--infilter=HTML (StarWriter)', '--convert-to', 'docx:MS Word 2007 XML'], 'in.docx'));
 }
