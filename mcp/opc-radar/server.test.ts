@@ -164,3 +164,49 @@ test('kb_doc：标题、路径、来源、分页正文；不存在与孤儿条�
   assert.throws(() => callTool('kb_doc', { id: ids.long, page: 9 }, db), /页码/);
   close();
 });
+
+test('wiki_page 分页返回 8000 字和 next_offset；wiki_search 能检索到；不存在的 slug 报「页面不存在」', async () => {
+  const { createOp, finishOp, tx, writePages } = await import('../../packs/wiki/store.ts');
+  const f = path.join(dir, 'wiki.db');
+  const w = openDb(f);
+  const body = `向量检索的原理与取舍。${'字'.repeat(20000 - 11)}`;
+  tx(w, () => {
+    const id = createOp(w, 'edit', { status: 'running' });
+    const { changes } = writePages(w, id, [
+      { slug: 'vector-search', kind: 'concept', title: '向量检索', summary: '近似最近邻检索', body },
+      { slug: 'rag', kind: 'concept', title: 'RAG', summary: '检索增强生成', body: '依赖 [[vector-search]]' },
+    ]);
+    finishOp(w, id, { status: 'done', pages: changes });
+  });
+  w.close();
+  const d = new DatabaseSync(f, { readOnly: true });
+  try {
+    assert.ok(TOOLS.some((t) => t.name === 'wiki_search') && TOOLS.some((t) => t.name === 'wiki_page'));
+    const p1 = JSON.parse(callTool('wiki_page', { slug: 'vector-search' }, d));
+    assert.equal(p1.slug, 'vector-search');
+    assert.equal(p1.title, '向量检索');
+    assert.equal(p1.kind, 'concept');
+    assert.equal(len(p1.body), 8000);
+    assert.equal(p1.next_offset, 8000);
+    assert.deepEqual(p1.backlinks, [{ slug: 'rag', title: 'RAG' }]);
+    assert.deepEqual(p1.cites, []);
+    const p3 = JSON.parse(callTool('wiki_page', { slug: 'vector-search', offset: 16000 }, d));
+    assert.equal(len(p3.body), 4000);
+    assert.equal(p3.next_offset, null);
+    assert.throws(() => callTool('wiki_page', { slug: 'vector-search', offset: 30000 }, d), /超出范围/);
+    assert.throws(() => callTool('wiki_page', { slug: 'nope' }, d), /页面不存在/);
+    const hits = JSON.parse(callTool('wiki_search', { q: '向量检索' }, d)) as { slug: string; kind: string; title: string; summary: string }[];
+    assert.ok(hits.some((h) => h.slug === 'vector-search' && h.summary === '近似最近邻检索'));
+    assert.ok(hits.length <= 20);
+    const all = JSON.parse(callTool('wiki_search', { kind: 'concept' }, d)) as unknown[];
+    assert.equal(all.length, 2);
+    assert.throws(() => callTool('wiki_search', { kind: 'bad' }, d), /页面类型/);
+  } finally {
+    d.close();
+  }
+});
+
+test('MCP 说明文字提示优先使用 wiki_search / wiki_page', async () => {
+  const src = fs.readFileSync(new URL('./server.ts', import.meta.url), 'utf8');
+  assert.ok(src.includes('有整理好的结论时优先用 wiki_search / wiki_page，需要细节或原文时用 kb_doc。'));
+});

@@ -13,6 +13,9 @@ import { latestBrief } from '../../packs/radar/analyze.ts';
 import { getItem, listItems } from '../../packs/radar/query.ts';
 import type { ItemView } from '../../packs/radar/query.ts';
 import { loadTopics } from '../../packs/radar/text.ts';
+import { slugify } from '../../packs/wiki/parse.ts';
+import { getPage, listPages } from '../../packs/wiki/store.ts';
+import { PAGE_KINDS, WIKI_LIMITS, isPageKind } from '../../packs/wiki/types.ts';
 
 const cfg = loadConfig();
 const topics = loadTopics();
@@ -107,6 +110,28 @@ export const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'wiki_search',
+    description: '在知识库 Wiki（模型整理好的互链页面：资料摘要、实体、概念、对比、总览、问答）中检索，返回最多 20 条 {slug, kind, title, summary}；不传 q 时按最近更新列出。只读。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        q: { type: 'string', maxLength: 200 },
+        kind: { type: 'string', enum: [...PAGE_KINDS] },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'wiki_page',
+    description: `读取一个 Wiki 页面：{slug, title, kind, body, next_offset, backlinks, cites}。正文每次 ${WIKI_LIMITS.mcpPage} 字，next_offset 不为 null 时用 offset 继续读；cites 中的 doc 可用 kb_doc 查看原文。只读。`,
+    inputSchema: {
+      type: 'object',
+      properties: { slug: { type: 'string', minLength: 1, maxLength: 200 }, offset: { type: 'integer', minimum: 0, default: 0 } },
+      required: ['slug'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 function num(v: unknown, def: number, min: number, max: number): number {
@@ -185,6 +210,32 @@ function kbDoc(d: DB, args: Record<string, unknown>): string {
   return [...head, ...(doc.truncated ? ['（条目过长，只索引了前面部分）'] : []), '', body || '（无正文）', '', `（第 ${page}/${pages} 页）`].join('\n');
 }
 
+function wikiSearch(d: DB, args: Record<string, unknown>): string {
+  if (args.kind !== undefined && !isPageKind(args.kind)) throw new Error('页面类型不合法');
+  const q = typeof args.q === 'string' ? args.q.trim().slice(0, 200) : '';
+  const pages = listPages(d, { kind: args.kind as Parameters<typeof listPages>[1]['kind'], q, limit: 20 });
+  return JSON.stringify(pages.map((p) => ({ slug: p.slug, kind: p.kind, title: p.title, summary: p.summary })));
+}
+
+function wikiPage(d: DB, args: Record<string, unknown>): string {
+  const slug = slugify(typeof args.slug === 'string' ? args.slug : '');
+  const p = slug ? getPage(d, slug) : null;
+  if (!p) throw new Error('页面不存在');
+  const cps = [...p.body];
+  const offset = num(args.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+  if (offset > cps.length) throw new Error(`offset 超出范围（正文共 ${cps.length} 字）`);
+  const end = offset + WIKI_LIMITS.mcpPage;
+  return JSON.stringify({
+    slug: p.slug,
+    title: p.title,
+    kind: p.kind,
+    body: cps.slice(offset, end).join(''),
+    next_offset: end < cps.length ? end : null,
+    backlinks: p.backlinks,
+    cites: p.cites,
+  });
+}
+
 /** d 仅供测试注入；默认打开配置中的只读库 */
 export function callTool(name: string, args: Record<string, unknown>, d: DB = database()): string {
   switch (name) {
@@ -228,6 +279,10 @@ export function callTool(name: string, args: Record<string, unknown>, d: DB = da
       return kbSearch(d, args);
     case 'kb_doc':
       return kbDoc(d, args);
+    case 'wiki_search':
+      return wikiSearch(d, args);
+    case 'wiki_page':
+      return wikiPage(d, args);
     default:
       throw new Error(`未知工具：${name}`);
   }
@@ -250,7 +305,7 @@ function handle(req: Req): void {
           protocolVersion: typeof params?.protocolVersion === 'string' ? params.protocolVersion : '2025-06-18',
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: 'opc-radar', version: '0.1.0' },
-          instructions: 'OPC Radar：本地 AI 技术情报库。回答 AI 新闻/模型发布/Agent/RAG/记忆/语音等问题时，先用 radar_latest 或 radar_search 查询，引用时附上条目 URL。了解用户背景用 memory_profile，查过去讨论用 history_search，查用户自己的资料与笔记用 kb_search / kb_doc。',
+          instructions: 'OPC Radar：本地 AI 技术情报库。回答 AI 新闻/模型发布/Agent/RAG/记忆/语音等问题时，先用 radar_latest 或 radar_search 查询，引用时附上条目 URL。了解用户背景用 memory_profile，查过去讨论用 history_search，查用户自己的资料与笔记用 kb_search / kb_doc；有整理好的结论时优先用 wiki_search / wiki_page，需要细节或原文时用 kb_doc。',
         };
         break;
       case 'ping':
