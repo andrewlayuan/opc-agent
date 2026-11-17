@@ -16,6 +16,7 @@ import { loadTopics } from '../../packs/radar/text.ts';
 import { slugify } from '../../packs/wiki/parse.ts';
 import { getPage, listPages } from '../../packs/wiki/store.ts';
 import { PAGE_KINDS, WIKI_LIMITS, isPageKind } from '../../packs/wiki/types.ts';
+import type { PageKind } from '../../packs/wiki/types.ts';
 
 const cfg = loadConfig();
 const topics = loadTopics();
@@ -213,7 +214,7 @@ function kbDoc(d: DB, args: Record<string, unknown>): string {
 function wikiSearch(d: DB, args: Record<string, unknown>): string {
   if (args.kind !== undefined && !isPageKind(args.kind)) throw new Error('页面类型不合法');
   const q = typeof args.q === 'string' ? args.q.trim().slice(0, 200) : '';
-  const pages = listPages(d, { kind: args.kind as Parameters<typeof listPages>[1]['kind'], q, limit: 20 });
+  const pages = listPages(d, { kind: args.kind as PageKind | undefined, q, limit: 20 });
   return JSON.stringify(pages.map((p) => ({ slug: p.slug, kind: p.kind, title: p.title, summary: p.summary })));
 }
 
