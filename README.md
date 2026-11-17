@@ -60,7 +60,8 @@ npm test
 | `OPC_FETCH_INTERVAL_MIN` | 可选，默认 60 |
 | `OPC_ANALYZE_LIMIT` | 可选，每轮最多分析的条数，默认 80 |
 | `OPC_MAX_AGE_DAYS` | 可选，默认 14 |
-| `OPC_LLM_MODEL` | 可选，默认 `deepseek-chat` |
+| `OPC_LLM_MODEL` | 可选，默认 `deepseek-flash`（DeepSeek V4.1 Flash，支持图片输入；旧名 `deepseek-chat` 已停用） |
+| `OPC_LLM_THINKING` | 可选，`on` / `off` / `auto`（默认）。`auto` 时接 DeepSeek 官方接口关闭思考模式（与旧 `deepseek-chat` 一致：思考 token 会占用输出上限，长文档容易被挤掉篇幅），接其他兼容接口时不发送该参数 |
 | `OPC_LLM_BASE_URL` | 可选 |
 | `OPC_FULLTEXT_LIMIT` | 可选，每轮最多用 Agent-Reach 补全多少条正文，默认 25，设为 0 关闭 |
 | `OPC_AGENT_REACH` | 可选，设为 `off` 停用 Agent-Reach |

@@ -4,11 +4,18 @@ import type http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { HttpError, clientIp, contentDisposition, readBodyToFile } from './http.ts';
 
+const dirs: string[] = [];
+after(() => {
+  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+});
+
 function tmpFile(): string {
-  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'opc-http-')), 'up');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-http-'));
+  dirs.push(d);
+  return path.join(d, 'up');
 }
 
 function fromChunks(chunks: string[]): Readable {

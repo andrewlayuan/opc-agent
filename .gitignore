@@ -11,3 +11,7 @@ dsh-superagent-prototype/
 agent-reach/
 .agent-reach-home/
 pm-skills/
+
+# 本地生成的架构图与项目模板，不纳入版本管理
+.archify/
+opc-agent-starter/

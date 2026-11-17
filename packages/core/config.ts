@@ -26,6 +26,8 @@ export interface AppConfig {
     apiKey: string;
     baseUrl: string;
     model: string;
+    /** 是否开启模型的思考模式；null 表示不发送该参数（非 DeepSeek 的兼容接口） */
+    thinking: LlmThinking;
     concurrency: number;
     analyzeLimitPerRun: number;
   };
@@ -35,8 +37,24 @@ export interface AppConfig {
   fulltextLimit: number;
 }
 
+export type LlmThinking = 'on' | 'off' | null;
+export const DEFAULT_MODEL = 'deepseek-flash';
+
+/**
+ * OPC_LLM_THINKING：on / off / auto（默认）。auto 时接 DeepSeek 官方接口关闭思考，
+ * 与停用的 deepseek-chat 行为一致（思考 token 会占用 max_tokens，长文档容易被挤掉篇幅）；接其他兼容接口时不发送该参数
+ */
+export function thinkingOf(raw: string | undefined, baseUrl: string): LlmThinking {
+  const v = (raw ?? '').trim().toLowerCase() || 'auto';
+  if (v === 'on' || v === 'off') return v;
+  if (v !== 'auto') throw new Error('OPC_LLM_THINKING 只能是 on、off 或 auto');
+  return new URL(baseUrl).hostname === 'api.deepseek.com' ? 'off' : null;
+}
+
 export function loadConfig(opts: { requireAuth?: boolean } = {}): AppConfig {
   const port = int('OPC_PORT', 4180, 1, 65535);
+  const baseUrl = (process.env.OPC_LLM_BASE_URL?.trim() || 'https://api.deepseek.com').replace(/\/+$/, '');
+  if (!/^https:\/\//.test(baseUrl)) throw new Error('OPC_LLM_BASE_URL 必须是 https 地址');
   const dataDir = path.resolve(process.env.OPC_DATA_DIR?.trim() || path.join(ROOT, 'data'));
   const cfg: AppConfig = {
     env: process.env.NODE_ENV?.trim() || 'production',
@@ -50,8 +68,9 @@ export function loadConfig(opts: { requireAuth?: boolean } = {}): AppConfig {
     adminHash: process.env.OPC_ADMIN_HASH?.trim() || '',
     llm: {
       apiKey: process.env.DEEPSEEK_API_KEY?.trim() || '',
-      baseUrl: (process.env.OPC_LLM_BASE_URL?.trim() || 'https://api.deepseek.com').replace(/\/+$/, ''),
-      model: process.env.OPC_LLM_MODEL?.trim() || 'deepseek-chat',
+      baseUrl,
+      model: process.env.OPC_LLM_MODEL?.trim() || DEFAULT_MODEL,
+      thinking: thinkingOf(process.env.OPC_LLM_THINKING, baseUrl),
       concurrency: int('OPC_LLM_CONCURRENCY', 4, 1, 16),
       analyzeLimitPerRun: int('OPC_ANALYZE_LIMIT', 80, 0, 2000),
     },
@@ -65,6 +84,5 @@ export function loadConfig(opts: { requireAuth?: boolean } = {}): AppConfig {
     }
     if (!cfg.adminHash.startsWith('scrypt$')) throw new Error('OPC_ADMIN_HASH 格式应为 scrypt$N$r$p$salt$hash');
   }
-  if (!/^https:\/\//.test(cfg.llm.baseUrl)) throw new Error('OPC_LLM_BASE_URL 必须是 https 地址');
   return cfg;
 }

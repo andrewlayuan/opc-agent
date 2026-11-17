@@ -12,6 +12,8 @@ export interface LlmOptions {
   apiKey: string;
   baseUrl: string;
   model: string;
+  /** on / off 时发送 thinking 参数；null 或缺省时不发送 */
+  thinking?: 'on' | 'off' | null;
   concurrency: number;
 }
 
@@ -82,6 +84,7 @@ export class Llm {
               max_tokens: o.maxTokens ?? 1200,
               stream: false,
               ...(o.json ? { response_format: { type: 'json_object' } } : {}),
+              ...(this.opts.thinking ? { thinking: { type: this.opts.thinking === 'on' ? 'enabled' : 'disabled' } } : {}),
             },
             o.timeoutMs,
           );
