@@ -285,7 +285,7 @@ export interface Clock {
   clearInterval(h: unknown): void;
 }
 
-const realClock: Clock = {
+export const realClock: Clock = {
   now: () => Date.now(),
   setTimeout: (fn, ms) => setTimeout(fn, ms).unref(),
   clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout),
