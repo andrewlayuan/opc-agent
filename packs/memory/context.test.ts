@@ -221,3 +221,18 @@ test('userContext：记忆与画像里的标签被中和，不能闭合 <user_co
   assert.match(t, /‹\/user_context›/);
   done();
 });
+
+test('resolveRefs：Wiki 引用保留 wiki 字段，exists 取决于页面是否存在且未删除', () => {
+  const { db, done } = tmp();
+  db.prepare("INSERT INTO wiki_pages(slug, kind, title, created_at, updated_at) VALUES ('pricing', 'concept', '定价', 1, 1)").run();
+  db.prepare("INSERT INTO wiki_pages(slug, kind, title, deleted, created_at, updated_at) VALUES ('gone', 'concept', '旧页', 1, 1, 1)").run();
+  const kb = [
+    { doc: 0, ord: 0, title: '定价', heading: '', wiki: 'pricing' },
+    { doc: 0, ord: 0, title: '旧页', heading: '', wiki: 'gone' },
+  ];
+  assert.deepEqual(resolveRefs(db, JSON.stringify({ memories: [], reviews: [], kb }))!.kb, [
+    { doc: 0, ord: 0, title: '定价', heading: '', wiki: 'pricing', exists: true },
+    { doc: 0, ord: 0, title: '旧页', heading: '', wiki: 'gone', exists: false },
+  ]);
+  done();
+});

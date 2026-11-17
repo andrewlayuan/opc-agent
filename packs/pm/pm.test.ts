@@ -794,3 +794,11 @@ test('文档上限翻倍：手动保存 8 万字以内可以，超过拒绝', as
   assert.deepEqual(statusOf(() => advisor.saveManual(id, '字'.repeat(80001), 2)), { status: 400, message: '内容需在 1–80000 字之间' });
   done();
 });
+
+test('知识库：Wiki 引用的 wiki 字段写入 context_refs 并原样读回', async () => {
+  const refs = [{ doc: 0, ord: 0, title: '定价', heading: '', wiki: 'pricing' }, ...KB_REFS];
+  const { advisor, done } = setup({ chat: (m) => fakeTurn(m) }, { kb: () => ({ text: KB, refs }) });
+  const id = await doneReview(advisor);
+  assert.deepEqual(advisor.get(id)!.context_refs, { memories: [], reviews: [], kb: refs });
+  done();
+});

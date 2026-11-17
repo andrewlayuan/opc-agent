@@ -5,8 +5,8 @@ import { LoginLimiter, createSession, deleteSession, getSession, safeEqualStr, v
 import { loadConfig } from '../../packages/core/config.ts';
 import { openDb } from '../../packages/core/db.ts';
 import { allowHost } from '../../packages/core/net.ts';
-import { recallKb } from '../../packs/kb/search.ts';
 import { KbFiles } from '../../packs/kb/uploads.ts';
+import { recallWiki } from '../../packs/wiki/recall.ts';
 import { MemoryKeeper } from '../../packs/memory/consolidate.ts';
 import { resolveRefs, touchMemories, userContext } from '../../packs/memory/context.ts';
 import { paragraphDiff, recordEvent } from '../../packs/memory/events.ts';
@@ -46,7 +46,7 @@ const pm = new PmAdvisor(
     context: (_, o) => userContext(db, 'pm', o),
     onEvent: (e) => record({ ...scrubAttachments(e), refType: 'review' }),
     used: (ids) => touchMemories(db, ids),
-    kb: (q) => recallKb(db, q),
+    kb: (q) => recallWiki(db, q),
   },
   files,
 );

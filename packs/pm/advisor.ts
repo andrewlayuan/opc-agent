@@ -149,7 +149,7 @@ function parseRefs(raw: unknown): ContextRefs | null {
     const v = JSON.parse(raw) as Partial<ContextRefs>;
     if (!Array.isArray(v.memories) || !Array.isArray(v.reviews)) return null;
     const out: ContextRefs = { memories: v.memories, reviews: v.reviews };
-    if (Array.isArray(v.kb)) out.kb = v.kb.filter(isKbRef).map((r) => ({ doc: r.doc, ord: r.ord, title: r.title, heading: r.heading }));
+    if (Array.isArray(v.kb)) out.kb = v.kb.filter(isKbRef).map((r) => ({ doc: r.doc, ord: r.ord, title: r.title, heading: r.heading, ...(typeof r.wiki === 'string' && r.wiki ? { wiki: r.wiki.slice(0, 80) } : {}) }));
     return out;
   } catch {
     return null;

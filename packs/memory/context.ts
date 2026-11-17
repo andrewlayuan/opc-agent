@@ -225,6 +225,7 @@ export function resolveRefs(db: DB, raw: unknown): ContextView | null {
   const mq = db.prepare('SELECT kind, content FROM memories WHERE id = ?');
   const rq = db.prepare('SELECT input FROM pm_reviews WHERE id = ?');
   const dq = db.prepare('SELECT 1 FROM kb_docs WHERE id = ?');
+  const wq = db.prepare('SELECT 1 FROM wiki_pages WHERE slug = ? AND deleted = 0');
   return {
     memories: mIds.map((id) => {
       const m = mq.get(id) as { kind: string; content: string } | undefined;
@@ -234,7 +235,11 @@ export function resolveRefs(db: DB, raw: unknown): ContextView | null {
       const r = rq.get(id) as { input: string } | undefined;
       return { id, input: r ? cut(String(r.input).replace(/\s+/g, ' ').trim(), 100) : '（已删除）' };
     }),
-    kb: kbs.map((k) => ({ doc: k.doc, ord: k.ord, title: k.title, heading: k.heading, exists: Boolean(dq.get(k.doc)) })),
+    kb: kbs.map((k) =>
+      typeof k.wiki === 'string' && k.wiki
+        ? { doc: 0, ord: 0, title: k.title, heading: '', wiki: k.wiki.slice(0, 80), exists: Boolean(wq.get(k.wiki)) }
+        : { doc: k.doc, ord: k.ord, title: k.title, heading: k.heading, exists: Boolean(dq.get(k.doc)) },
+    ),
   };
 }
 

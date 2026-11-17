@@ -1081,7 +1081,7 @@ function contextNote(c, inline = false) {
   const rs = c?.reviews ?? [];
   const ks = c?.kb ?? [];
   if (!ms.length && !rs.length && !ks.length) return null;
-  const kbLabel = (k) => `知识库：${k.title}${k.heading ? ` › ${k.heading}` : ''}`;
+  const kbLabel = (k) => (k.wiki ? `Wiki：${k.title}` : `知识库：${k.title}${k.heading ? ` › ${k.heading}` : ''}`);
   return h(
     'details',
     { class: `pm-ctx${inline ? ' inline' : ''}` },
@@ -1117,7 +1117,7 @@ function contextNote(c, inline = false) {
               'li',
               {},
               k.exists
-                ? h('button', { type: 'button', class: 'link', text: kbLabel(k), onclick: () => kb.open(k.doc, k.ord) })
+                ? h('button', { type: 'button', class: 'link', text: kbLabel(k), onclick: () => (k.wiki ? kb.openWiki?.(k.wiki) : kb.open(k.doc, k.ord)) })
                 : h('span', { text: `${kbLabel(k)}（已删除）` }),
             ),
           ),

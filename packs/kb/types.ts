@@ -41,6 +41,8 @@ export interface KbRef {
   ord: number;
   title: string;
   heading: string;
+  /** Wiki 页面的 slug；有值时 doc / ord 为 0 */
+  wiki?: string;
 }
 
 export const len = (s: string): number => [...s].length;
