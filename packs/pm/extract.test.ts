@@ -53,25 +53,98 @@ test('detectType：docx/xlsx/pptx 按包内条目识别', () => {
   assert.equal(status(() => detectType(buildZip({ 'a.txt': 'x' }), 'a.docx')), 415);
 });
 
-test('detectType：旧版 Office、svg、html、无扩展名文本、含 NUL 的 .txt 都抛 415', () => {
-  const ole = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0]);
-  assert.equal(status(() => detectType(ole, 'a.doc')), 415);
-  assert.equal(message(() => detectType(ole, 'a.doc')), '旧版 Office 文件请另存为 docx / xlsx / pptx');
+/** 构造最小 OLE 复合文档：512 字节扇区，扇区 0 为 FAT，之后是目录；条目下标从 1 开始（0 是根） */
+function buildOle(entries: { name: string; type: number; child?: number; left?: number; right?: number }[]): Buffer {
+  const NO = 0xffffffff;
+  const dirSectors = Math.ceil((entries.length + 1) / 4);
+  const buf = Buffer.alloc(512 * (2 + dirSectors));
+  Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).copy(buf);
+  buf.writeUInt16LE(0x3e, 0x18);
+  buf.writeUInt16LE(3, 0x1a);
+  buf.writeUInt16LE(0xfffe, 0x1c);
+  buf.writeUInt16LE(9, 0x1e);
+  buf.writeUInt16LE(6, 0x20);
+  buf.writeUInt32LE(1, 0x2c);
+  buf.writeUInt32LE(1, 0x30);
+  buf.writeUInt32LE(4096, 0x38);
+  buf.writeUInt32LE(0xfffffffe, 0x3c);
+  buf.writeUInt32LE(0xfffffffe, 0x44);
+  for (let i = 0; i < 109; i++) buf.writeUInt32LE(i === 0 ? 0 : NO, 0x4c + i * 4);
+  buf.fill(0xff, 512, 1024);
+  buf.writeUInt32LE(0xfffffffd, 512);
+  for (let s = 1; s <= dirSectors; s++) buf.writeUInt32LE(s === dirSectors ? 0xfffffffe : s + 1, 512 + s * 4);
+  [{ name: 'Root Entry', type: 5, child: entries.length ? 1 : NO }, ...entries].forEach((e, i) => {
+    const p = 1024 + i * 128;
+    const nm = Buffer.from(`${e.name}\0`, 'utf16le');
+    nm.copy(buf, p);
+    buf.writeUInt16LE(nm.length, p + 64);
+    buf[p + 66] = e.type;
+    buf.writeUInt32LE((e as { left?: number }).left ?? NO, p + 68);
+    buf.writeUInt32LE((e as { right?: number }).right ?? NO, p + 72);
+    buf.writeUInt32LE(e.child ?? NO, p + 76);
+  });
+  return buf;
+}
+const pick = (d: { format: string; kind: string; mime: string }) => [d.format, d.kind, d.mime];
+
+test('detectType：svg、无扩展名文本、非网页的未知扩展名、含 NUL 的 .txt 抛 415；文本类扩展名', () => {
   for (const [buf, name] of [
     [Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'), 'a.svg'],
-    [Buffer.from('<html></html>'), 'a.html'],
     [Buffer.from('hello'), 'README'],
+    [Buffer.from('<p>片段</p>'), 'a.bin'],
   ] as const) {
     assert.equal(status(() => detectType(buf, name)), 415);
     assert.equal(message(() => detectType(buf, name)), '不支持的文件类型');
   }
   assert.equal(message(() => detectType(Buffer.from([0x61, 0, 0x62]), 'a.txt')), '请另存为 UTF-8 文本');
-  for (const n of ['a.TXT', 'b.md', 'c.markdown', 'd.csv', 'e.json']) assert.deepEqual(detectType(Buffer.from('ok'), n).format, 'text');
+  for (const n of ['a.TXT', 'b.md', 'c.markdown', 'd.csv', 'e.json', 'f.tsv', 'g.log', 'h.yaml', 'i.yml', 'j.xml']) assert.deepEqual(detectType(Buffer.from('ok'), n).format, 'text');
+  assert.equal(detectType(Buffer.from('\ufeff你好', 'utf16le'), 'a.txt').format, 'text', 'UTF-16 带 BOM 时 NUL 字节不算错');
 });
 
-test('decodeText：去 BOM；GBK 字节抛 415', () => {
+test('detectType：HTML 按扩展名或内容识别；文本类扩展名不按内容猜', () => {
+  for (const n of ['a.html', 'b.HTM', 'c.xhtml']) assert.deepEqual(pick(detectType(Buffer.from('<p>x</p>'), n)), ['html', 'doc', 'text/html']);
+  assert.equal(detectType(Buffer.from('\ufeff  <!-- c --><!DOCTYPE html><html>'), 'export.doc').format, 'html');
+  assert.equal(detectType(Buffer.from('<?xml version="1.0"?>\n<html xmlns="x">'), 'noext').format, 'html');
+  assert.equal(detectType(Buffer.from('<html><body>x'), 'a.md').format, 'text');
+  assert.equal(message(() => detectType(Buffer.from([0x3c, 0x70, 0, 0x3e]), 'a.html')), '请另存为 UTF-8 文本');
+});
+
+test('detectType：OLE 复合文档按根目录流名识别 doc / xls / ppt，扩展名不影响', () => {
+  const doc = detectType(buildOle([{ name: 'WordDocument', type: 2, right: 2 }, { name: '1Table', type: 2 }]), 'a.wps');
+  assert.deepEqual(pick(doc), ['doc', 'doc', 'application/msword']);
+  assert.equal(detectType(buildOle([{ name: 'Book', type: 2 }]), 'a.et').format, 'xls');
+  assert.equal(detectType(buildOle([{ name: 'PowerPoint Document', type: 2, left: 2 }, { name: 'Current User', type: 2 }]), 'a.dps').format, 'ppt');
+  const embedded = buildOle([{ name: 'Workbook', type: 2, right: 2 }, { name: 'MBD0001', type: 1, child: 3 }, { name: 'WordDocument', type: 2 }]);
+  assert.equal(detectType(embedded, 'a.xls').format, 'xls', '只看根目录，嵌入的 Word 对象不影响');
+});
+
+test('detectType：加密 Office、损坏或循环引用的 OLE、未知 OLE 都抛 415', () => {
+  const enc = buildOle([{ name: 'EncryptionInfo', type: 2, right: 2 }, { name: 'EncryptedPackage', type: 2 }]);
+  assert.equal(message(() => detectType(enc, 'a.docx')), '文件有密码保护，请去掉密码后再上传');
+  const truncated = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0]);
+  assert.equal(status(() => detectType(truncated, 'a.doc')), 415);
+  assert.equal(message(() => detectType(truncated, 'a.doc')), '文件损坏或结构不支持');
+  assert.equal(message(() => detectType(buildOle([{ name: 'A', type: 2, right: 1 }]), 'a.doc')), '文件损坏或结构不支持');
+  assert.equal(message(() => detectType(buildOle([{ name: '__properties_version1.0', type: 2 }]), 'a.msg')), '不支持的文件类型');
+});
+
+test('detectType：RTF 按文件头、ODF 按 mimetype 识别；加密的 ODF 抛 415', () => {
+  assert.deepEqual(pick(detectType(Buffer.from('{\\rtf1\\ansi hello}'), 'a.doc')), ['rtf', 'doc', 'application/rtf']);
+  const odf = (mt: string, extra: Record<string, string> = {}) => buildZip({ mimetype: mt, 'content.xml': '<x/>', ...extra });
+  assert.equal(detectType(odf('application/vnd.oasis.opendocument.text'), 'a.zip').format, 'odt');
+  assert.equal(detectType(odf('application/vnd.oasis.opendocument.spreadsheet-template'), 'a').format, 'ods');
+  assert.equal(detectType(odf('application/vnd.oasis.opendocument.presentation'), 'a').format, 'odp');
+  assert.equal(message(() => detectType(odf('application/vnd.oasis.opendocument.graphics'), 'a.odg')), '不支持的文件类型');
+  const encOdt = odf('application/vnd.oasis.opendocument.text', { 'META-INF/manifest.xml': '<manifest:encryption-data/>' });
+  assert.equal(message(() => detectType(encOdt, 'a.odt')), '文件有密码保护，请去掉密码后再上传');
+});
+
+test('decodeText：去 BOM；UTF-16 BOM；非 UTF-8 时按 GB18030；仍无法解码或含 NUL 抛 415', () => {
   assert.equal(decodeText(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('你好')])), '你好');
-  assert.equal(status(() => decodeText(Buffer.from([0xc4, 0xe3, 0xba, 0xc3]))), 415);
+  assert.equal(decodeText(Buffer.from([0xc4, 0xe3, 0xba, 0xc3])), '你好');
+  assert.equal(decodeText(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('你好a', 'utf16le')])), '你好a');
+  assert.equal(decodeText(Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from('你好a', 'utf16le').swap16()])), '你好a');
+  assert.equal(status(() => decodeText(Buffer.from([0x61, 0xff, 0xff]))), 415);
   assert.equal(message(() => decodeText(Buffer.from([0x61, 0, 0x62]))), '请另存为 UTF-8 文本');
 });
 
@@ -119,15 +192,26 @@ test('extractXlsx：按 workbook 顺序输出多个工作表，共享字符串�
   assert.ok(out.includes('名称 |  | 100\n | 1'), out);
   assert.ok(out.indexOf('## 明细\nx<y') > out.indexOf('## 汇总'), out);
 
-  const rows = Array.from({ length: 600 }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}"><v>${i + 1}</v></c></row>`).join('');
+  const rows = Array.from({ length: 6000 }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}"><v>${i + 1}</v></c></row>`).join('');
   const big = extractXlsx(xlsx([{ name: '大表', target: 'worksheets/sheet1.xml', xml: SHEET(rows) }], []));
   const lines = big.split('\n');
-  assert.equal(lines.filter((l) => /^\d+$/.test(l)).length, 500);
+  assert.equal(lines.filter((l) => /^\d+$/.test(l)).length, 5000);
   assert.ok(big.endsWith('（已截断）'), big.slice(-20));
   const wide = SHEET(`<row r="1">${Array.from({ length: 60 }, (_, i) => `<c r="${i < 26 ? String.fromCharCode(65 + i) : 'A' + String.fromCharCode(65 + i - 26)}1"><v>${i}</v></c>`).join('')}</row>`);
   const w = extractXlsx(xlsx([{ name: '宽表', target: 'worksheets/sheet1.xml', xml: wide }], []));
   assert.equal(w.split('\n')[1].split(' | ').length, 50);
   assert.ok(w.includes('（已截断）'));
+});
+
+test('extractXlsx：合计超过 15 万字时截断，后面的工作表不再读取', () => {
+  const row = (i: number) => `<row r="${i}"><c r="A${i}" t="inlineStr"><is><t>${String(i).padEnd(100, 'x')}</t></is></c></row>`;
+  const a = { name: '甲', target: 'worksheets/sheet1.xml', xml: SHEET(Array.from({ length: 2000 }, (_, i) => row(i + 1)).join('')) };
+  const b = { name: '乙', target: 'worksheets/sheet2.xml', xml: SHEET(row(1)) };
+  const out = extractXlsx(xlsx([a, b], []));
+  assert.ok(out.length > 145000 && out.length < 155000, String(out.length));
+  assert.ok(out.includes('（已截断）'));
+  assert.ok(!out.includes('## 乙'));
+  assert.ok(out.endsWith('（篇幅已达上限，其余工作表未读取）'), out.slice(-30));
 });
 
 test('extractXlsx：主命名空间带前缀（OpenXML SDK 生成的 x: 前缀）也能读出', () => {

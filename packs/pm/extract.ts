@@ -1,10 +1,11 @@
-/** 附件类型判断与文字提取（txt / docx / xlsx / pptx / pdf）；不信任浏览器声明的类型 */
+/** 附件与知识库共用的类型判断与文字提取（文本 / HTML / Office / PDF；旧版 Office、RTF、ODF 经 LibreOffice 转换，见 convert.ts）；不信任浏览器声明的类型 */
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { Worker } from 'node:worker_threads';
+import { oleRootNames } from './ole.ts';
 import { openZip } from './zip.ts';
 
 export class ExtractError extends Error {
@@ -15,7 +16,10 @@ export class ExtractError extends Error {
   }
 }
 
-export type Format = 'png' | 'jpeg' | 'gif' | 'webp' | 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'text';
+export type Format = 'png' | 'jpeg' | 'gif' | 'webp' | 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'text' | 'html' | LegacyFormat;
+/** 需要先经 LibreOffice 转成 docx / xlsx / pptx 的格式 */
+export type LegacyFormat = 'doc' | 'xls' | 'ppt' | 'rtf' | 'odt' | 'ods' | 'odp';
+export type OfficeFormat = 'docx' | 'xlsx' | 'pptx' | 'html';
 
 export interface Detected {
   format: Format;
@@ -33,14 +37,26 @@ export const MIME: Record<Format, string> = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   text: 'text/plain',
+  html: 'text/html',
+  doc: 'application/msword',
+  xls: 'application/vnd.ms-excel',
+  ppt: 'application/vnd.ms-powerpoint',
+  rtf: 'application/rtf',
+  odt: 'application/vnd.oasis.opendocument.text',
+  ods: 'application/vnd.oasis.opendocument.spreadsheet',
+  odp: 'application/vnd.oasis.opendocument.presentation',
 };
 
 export const UNSUPPORTED = '不支持的文件类型';
 export const NOT_UTF8 = '请另存为 UTF-8 文本';
-export const LEGACY_OFFICE = '旧版 Office 文件请另存为 docx / xlsx / pptx';
+export const ENCRYPTED = '文件有密码保护，请去掉密码后再上传';
 export const BROKEN = '文件损坏或结构不支持';
 export const NO_TEXT = '未提取到文字内容';
-const TEXT_EXT = new Set(['txt', 'md', 'markdown', 'csv', 'json']);
+const TEXT_EXT = new Set(['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'log', 'yaml', 'yml', 'xml']);
+const HTML_EXT = new Set(['html', 'htm', 'xhtml']);
+const ODF = /^application\/vnd\.oasis\.opendocument\.(text|spreadsheet|presentation)(?:-template)?$/;
+const ODF_FORMAT = { text: 'odt', spreadsheet: 'ods', presentation: 'odp' } as const;
+const utf16Bom = (b: Buffer) => (b[0] === 0xff && b[1] === 0xfe) || (b[0] === 0xfe && b[1] === 0xff);
 
 const det = (format: Format): Detected => ({ format, mime: MIME[format], kind: ['png', 'jpeg', 'gif', 'webp'].includes(format) ? 'image' : 'doc' });
 const startsWith = (b: Buffer, bytes: number[]) => bytes.every((x, i) => b[i] === x);
@@ -52,34 +68,74 @@ export function detectType(buf: Buffer, name: string): Detected {
   if (head.startsWith('GIF87a') || head.startsWith('GIF89a')) return det('gif');
   if (head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP') return det('webp');
   if (head.startsWith('%PDF-')) return det('pdf');
-  if (startsWith(buf, [0xd0, 0xcf, 0x11, 0xe0])) throw new ExtractError(415, LEGACY_OFFICE);
+  if (head.startsWith('{\\rtf')) return det('rtf');
+  if (startsWith(buf, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])) {
+    // OLE 复合文档：按根目录的流名区分；加密的 docx/xlsx/pptx 也是这种容器
+    const names = oleRootNames(buf);
+    if (!names) throw new ExtractError(415, BROKEN);
+    if (names.includes('EncryptedPackage')) throw new ExtractError(415, ENCRYPTED);
+    if (names.includes('WordDocument')) return det('doc');
+    if (names.includes('Workbook') || names.includes('Book')) return det('xls');
+    if (names.includes('PowerPoint Document')) return det('ppt');
+    throw new ExtractError(415, UNSUPPORTED);
+  }
   if (startsWith(buf, [0x50, 0x4b, 0x03, 0x04])) {
-    let names: Set<string>;
+    let zip: ReturnType<typeof openZip>;
     try {
-      names = new Set(openZip(buf).names);
+      zip = openZip(buf);
     } catch {
       throw new ExtractError(415, UNSUPPORTED);
     }
-    if (names.has('word/document.xml')) return det('docx');
-    if (names.has('xl/workbook.xml')) return det('xlsx');
-    if (names.has('ppt/presentation.xml')) return det('pptx');
+    if (zip.has('word/document.xml')) return det('docx');
+    if (zip.has('xl/workbook.xml')) return det('xlsx');
+    if (zip.has('ppt/presentation.xml')) return det('pptx');
+    if (zip.has('mimetype')) {
+      let m: RegExpExecArray | null = null;
+      try {
+        m = ODF.exec(zip.read('mimetype').toString('latin1').trim());
+        if (m && zip.has('META-INF/manifest.xml') && zip.read('META-INF/manifest.xml').includes('encryption-data')) throw new ExtractError(415, ENCRYPTED);
+      } catch (e) {
+        if (e instanceof ExtractError) throw e;
+        throw new ExtractError(415, BROKEN);
+      }
+      if (m) return det(ODF_FORMAT[m[1] as keyof typeof ODF_FORMAT]);
+    }
     throw new ExtractError(415, UNSUPPORTED);
   }
   const ext = /\.([^./\\]+)$/.exec(name)?.[1]?.toLowerCase() ?? '';
-  if (TEXT_EXT.has(ext)) {
-    if (buf.subarray(0, 8192).includes(0)) throw new ExtractError(415, NOT_UTF8);
-    return det('text');
+  // 扩展名不是文本类时也按内容识别 HTML（例如另存为 .doc 的网页）
+  const html = HTML_EXT.has(ext) || (!TEXT_EXT.has(ext) && looksHtml(buf));
+  if (html || TEXT_EXT.has(ext)) {
+    if (!utf16Bom(buf) && buf.subarray(0, 8192).includes(0)) throw new ExtractError(415, NOT_UTF8);
+    return det(html ? 'html' : 'text');
   }
   throw new ExtractError(415, UNSUPPORTED);
 }
 
+/** 开头（跳过 BOM、空白、XML 声明和注释）是 <!doctype html> 或 <html> */
+function looksHtml(buf: Buffer): boolean {
+  const s = buf.subarray(0, 1024).toString('latin1').replace(/^\xef\xbb\xbf/, '').trimStart().toLowerCase();
+  return /^(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!doctype html|<html[\s>])/.test(s);
+}
+
+function strict(enc: string, b: Uint8Array): string {
+  try {
+    return new TextDecoder(enc, { fatal: true }).decode(b);
+  } catch {
+    throw new ExtractError(415, NOT_UTF8);
+  }
+}
+
+/** 有 UTF-16 BOM 按 UTF-16；否则先按 UTF-8，失败再按 GB18030（兼容 GBK / GB2312） */
 export function decodeText(buf: Buffer): string {
+  if (buf[0] === 0xff && buf[1] === 0xfe) return strict('utf-16le', buf.subarray(2));
+  if (buf[0] === 0xfe && buf[1] === 0xff) return strict('utf-16be', buf.subarray(2));
   if (buf.includes(0)) throw new ExtractError(415, NOT_UTF8);
   const body = buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf ? buf.subarray(3) : buf;
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(body);
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(body);
   } catch {
-    throw new ExtractError(415, NOT_UTF8);
+    return strict('gb18030', body);
   }
 }
 
@@ -152,8 +208,10 @@ export function extractDocx(buf: Buffer): string {
 }
 
 // ---------------- xlsx ----------------
-const XLSX_ROWS = 500;
+const XLSX_ROWS = 5000;
 const XLSX_COLS = 50;
+/** 全部工作表合计的字数预算：超出后截断，避免大表格超过知识库单篇正文上限而整篇失败 */
+const XLSX_CHARS = 150000;
 
 function colIndex(ref: string | undefined): number | null {
   const letters = /^([A-Z]+)/.exec(ref ?? '')?.[1];
@@ -227,16 +285,21 @@ export function extractXlsx(buf: Buffer): string {
     const base1904 = /<workbookPr\b[^>]*\bdate1904="(?:1|true)"/.test(wb);
     const out: string[] = [];
     let total = 0;
+    let chars = 0;
     for (const m of wb.matchAll(/<sheet\b[^>]*>/g)) {
       const a = attrs(m[0]);
       const rid = Object.entries(a).find(([k]) => /^\w+:id$/.test(k))?.[1];
       const file = rid ? rels.get(rid) : undefined;
       if (!file || !zip.has(file)) continue;
+      if (chars >= XLSX_CHARS) {
+        out.push('（篇幅已达上限，其余工作表未读取）');
+        break;
+      }
       const xml = smlXml(zip.read(file));
       const lines: string[] = [];
       let truncated = false;
       for (const row of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
-        if (lines.length >= XLSX_ROWS) {
+        if (lines.length >= XLSX_ROWS || chars >= XLSX_CHARS) {
           truncated = true;
           break;
         }
@@ -256,7 +319,11 @@ export function extractXlsx(buf: Buffer): string {
           cells[idx] = val.replace(/\s*\n\s*/g, ' ');
         }
         while (cells.length && !cells[cells.length - 1]) cells.pop();
-        if (cells.length) lines.push(cells.join(' | '));
+        if (cells.length) {
+          const line = cells.join(' | ');
+          lines.push(line);
+          chars += line.length + 1;
+        }
       }
       total += lines.length;
       out.push(`## ${a.name ?? '工作表'}\n${lines.join('\n')}${truncated ? '\n（已截断）' : ''}`);
@@ -288,10 +355,10 @@ export function extractPptx(buf: Buffer): string {
 export const OFFICE_TIMEOUT_MS = 20000;
 
 /**
- * 在 worker 中运行 docx / xlsx / pptx 提取：超时或内存超限就终止 worker，报 422「文件损坏或结构不支持」。
+ * 在 worker 中运行 docx / xlsx / pptx / html 提取：超时或内存超限就终止 worker，报 422「文件损坏或结构不支持」。
  * 正则对构造的未闭合标签是平方级，放在主线程会卡住整个服务。
  */
-export function extractOffice(format: 'docx' | 'xlsx' | 'pptx', buf: Buffer, timeoutMs: number = OFFICE_TIMEOUT_MS): Promise<string> {
+export function extractOffice(format: OfficeFormat, buf: Buffer, timeoutMs: number = OFFICE_TIMEOUT_MS): Promise<string> {
   return new Promise((resolve, reject) => {
     const w = new Worker(new URL('./office-worker.ts', import.meta.url), {
       workerData: { format, buf },

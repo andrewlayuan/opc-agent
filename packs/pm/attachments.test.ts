@@ -94,13 +94,14 @@ test('create：文档提取不到文字时标记为 error，不当作 ready', as
   done();
 });
 
-test('create：超 10MB 413、svg 415 时删除 tmp，不入库', () => {
+test('create：超 10MB 413、svg / 损坏 OLE / 无法解码的文本 415 时删除 tmp，不入库', () => {
   const { db, store, done } = setupStore();
   for (const [name, buf, status, msg] of [
     ['big.txt', Buffer.alloc(LIMITS.fileMax + 1, 0x61), 413, '单个文件最大 10MB'],
     ['a.svg', Buffer.from('<svg/>'), 415, '不支持的文件类型'],
-    ['a.doc', Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 1, 2]), 415, '旧版 Office 文件请另存为 docx / xlsx / pptx'],
-    ['gbk.txt', Buffer.from([0xc4, 0xe3, 0xba, 0xc3]), 415, '请另存为 UTF-8 文本'],
+    ['a.doc', Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 1, 2]), 415, '文件损坏或结构不支持'],
+    ['bad.txt', Buffer.from([0x61, 0xff, 0xff]), 415, '请另存为 UTF-8 文本'],
+    ['bad.html', Buffer.from([0x3c, 0x70, 0, 0x3e]), 415, '请另存为 UTF-8 文本'],
     ['late-nul.txt', Buffer.concat([Buffer.alloc(9000, 0x61), Buffer.from([0])]), 415, '请另存为 UTF-8 文本'],
   ] as const) {
     const tmp = store.tmpPath();

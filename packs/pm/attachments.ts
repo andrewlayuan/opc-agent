@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { DB } from '../../packages/core/db.ts';
 import type { Llm } from '../../packages/core/llm.ts';
-import { ExtractError, OFFICE_TIMEOUT_MS, clampText, decodeText, detectType, realExec } from './extract.ts';
+import { ExtractError, OFFICE_TIMEOUT_MS, clampText, detectType, realExec } from './extract.ts';
 import type { ExecFn } from './extract.ts';
-import { extractFileText } from './ingest.ts';
+import { checkText, extractFileText } from './ingest.ts';
 
 export const LIMITS = {
   fileMax: 10 * 1024 * 1024,
@@ -139,8 +139,8 @@ export class AttachmentStore {
       try {
         const buf = fs.readFileSync(tmp);
         det = detectType(buf, name);
-        // spec 4.2：文本须能严格按 UTF-8 解码，否则上传时就返回 415，而不是先收下再在后台失败
-        if (det.format === 'text') decodeText(buf);
+        // 文本须能解码，否则上传时就返回 415，而不是先收下再在后台失败
+        checkText(det, buf);
       } catch (e) {
         if (e instanceof ExtractError) throw new AttachmentError(e.status, e.message);
         throw e;

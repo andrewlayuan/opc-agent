@@ -650,7 +650,7 @@ function newPmReview() {
 const ATT_MAX = 8;
 const ATT_FILE_MAX = 10 * 1024 * 1024;
 const ATT_POLL_MS = 1500;
-const ATT_ACCEPT = '.png,.jpg,.jpeg,.gif,.webp,.pdf,.docx,.xlsx,.pptx,.txt,.md,.markdown,.csv,.json';
+const ATT_ACCEPT = '.png,.jpg,.jpeg,.gif,.webp,.pdf,.doc,.docx,.docm,.rtf,.odt,.wps,.xls,.xlsx,.xlsm,.ods,.et,.ppt,.pptx,.pptm,.odp,.dps,.html,.htm,.xhtml,.txt,.md,.markdown,.csv,.tsv,.json,.log,.yaml,.yml,.xml';
 const IMG_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
 let attSeq = 0;
 
