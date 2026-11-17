@@ -6,6 +6,8 @@ import { loadConfig } from '../../packages/core/config.ts';
 import { openDb } from '../../packages/core/db.ts';
 import { allowHost } from '../../packages/core/net.ts';
 import { KbFiles } from '../../packs/kb/uploads.ts';
+import { WikiAssets } from '../../packs/wiki/assets.ts';
+import { WikiQueue } from '../../packs/wiki/queue.ts';
 import { recallWiki } from '../../packs/wiki/recall.ts';
 import { MemoryKeeper } from '../../packs/memory/consolidate.ts';
 import { resolveRefs, touchMemories, userContext } from '../../packs/memory/context.ts';
@@ -28,6 +30,7 @@ import { Radar } from '../../packs/radar/service.ts';
 import { HttpError, clientIp, contentDisposition, parseCookies, readBodyToFile, readJson, sameOrigin, securityHeaders, sendJson, staticFor } from './http.ts';
 import { handleMemoryApi } from './memory-api.ts';
 import { handleKbApi } from './kb-api.ts';
+import { handleWikiApi } from './wiki-api.ts';
 import { handleProtoApi } from './proto-api.ts';
 
 const cfg = loadConfig({ requireAuth: true });
@@ -37,6 +40,9 @@ const keeper = new MemoryKeeper(db, radar.llm);
 const pmSkillsDir = defaultSkillsDir();
 const files = new AttachmentStore(db, path.join(cfg.dataDir, 'uploads'), radar.llm);
 const kbFiles = new KbFiles(db, path.join(cfg.dataDir, 'kb'), radar.llm);
+const wikiAssets = new WikiAssets(db, path.join(cfg.dataDir, 'wiki-assets'));
+const wikiTmp = path.join(cfg.dataDir, 'wiki-export');
+const wikiQueue = new WikiQueue(db, radar.llm, { dailyCalls: cfg.wikiDailyCalls });
 const pm = new PmAdvisor(
   db,
   radar.llm,
@@ -340,6 +346,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
 
   if (await handleMemoryApi({ db, keeper, llmEnabled: radar.llm.enabled }, req, res, method, p)) return;
   if (await handleKbApi({ db, files: kbFiles, llm: radar.llm }, req, res, method, url)) return;
+  if (await handleWikiApi({ db, llm: radar.llm, queue: wikiQueue, assets: wikiAssets, tmpDir: wikiTmp }, req, res, method, url)) return;
   if (await handleProtoApi({ db, runner: protoRunner }, req, res, method, url)) return;
 
   // ---------- 产品顾问（pm-skills） ----------
@@ -589,6 +596,16 @@ server.listen(cfg.port, cfg.host, () => {
   radar.startSchedule();
   keeper.start();
   try {
+    // 上次运行中断时遗留的导出临时文件
+    fs.rmSync(wikiTmp, { recursive: true, force: true });
+    wikiQueue.start();
+    const ws = wikiQueue.status();
+    const pages = Number((db.prepare('SELECT count(*) AS n FROM wiki_pages WHERE deleted = 0').get() as { n: number }).n);
+    console.log(`[wiki] ${radar.llm.enabled ? '已启用' : '模型未配置，暂停摄入'}：${pages} 页，排队 ${ws.queued}，今日调用 ${ws.usedToday}/${ws.limit}`);
+  } catch (e) {
+    console.error('[wiki] 启动队列失败', e);
+  }
+  try {
     const n = files.recover();
     if (n) console.log(`[pm] ${n} 个附件因重启中断，已标记为失败`);
   } catch (e) {
@@ -621,6 +638,7 @@ function cleanupFiles(): void {
 function shutdown(): void {
   radar.stop();
   keeper.stop();
+  wikiQueue.stop();
   server.close(() => {
     db.close();
     process.exit(0);

@@ -35,6 +35,8 @@ export interface AppConfig {
   maxAgeDays: number;
   /** 每轮最多用 Agent-Reach 补全多少条正文（Jina 无 Key 限额 20 次/分钟） */
   fulltextLimit: number;
+  /** Wiki 每日模型调用上限（摄入、体检、提问合计） */
+  wikiDailyCalls: number;
 }
 
 export type LlmThinking = 'on' | 'off' | null;
@@ -77,6 +79,7 @@ export function loadConfig(opts: { requireAuth?: boolean } = {}): AppConfig {
     fetchIntervalMin: int('OPC_FETCH_INTERVAL_MIN', 60, 5, 24 * 60),
     maxAgeDays: int('OPC_MAX_AGE_DAYS', 14, 1, 365),
     fulltextLimit: int('OPC_FULLTEXT_LIMIT', 25, 0, 500),
+    wikiDailyCalls: int('OPC_WIKI_DAILY_CALLS', 200, 1, 100000),
   };
   if (opts.requireAuth) {
     if (!cfg.adminUser || !cfg.adminHash) {
