@@ -582,7 +582,7 @@ const server = http.createServer(async (req, res) => {
 server.headersTimeout = 20000;
 server.requestTimeout = 180000;
 server.listen(cfg.port, cfg.host, () => {
-  console.log(`[opc] OPC Radar 已启动：${cfg.publicOrigin}（监听 ${cfg.host}:${cfg.port}，数据 ${cfg.dbPath}）`);
+  console.log(`[opc] 天枢 Tianshu 已启动：${cfg.publicOrigin}（监听 ${cfg.host}:${cfg.port}，数据 ${cfg.dbPath}）`);
   console.log(`[opc] Agent-Reach：${radar.reach.enabled ? `已启用（${radar.reach.bin}）` : '未启用'}`);
   console.log(`[opc] 产品顾问：${pm.skills.length ? `已加载 ${pm.skills.length} 个 pm-skills（${pmSkillsDir}）` : `未找到 pm-skills（${pmSkillsDir}），运行 scripts/setup-pm-skills.sh`}`);
   console.log(`[opc] 模型：${radar.llm.enabled ? `DeepSeek ${cfg.llm.model}` : '未配置 DEEPSEEK_API_KEY，分析/翻译不可用'}；每 ${cfg.fetchIntervalMin} 分钟采集一次`);

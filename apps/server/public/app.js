@@ -592,7 +592,59 @@ const pm = {
   verCache: new Map(),
   edit: null,
   att: { form: [], reply: [], replyFor: 0, replyEl: null, replySync: null },
+  tabs: new Map(),
+  draft: { id: 0, text: '', revise: false },
+  dom: null,
+  sig: {},
 };
+
+const PM_TABS = [['doc', '文档'], ['chat', '对话'], ['proto', '原型']];
+const PM_SIDE_KEY = 'opc.pmSide';
+const TRUNC_NOTE = '输出达到上限，内容可能不完整';
+const isNarrow = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches;
+
+function setPmSide(collapsed, save = true) {
+  $('pm-layout').classList.toggle('collapsed', collapsed);
+  const t = $('pm-side-toggle');
+  t.textContent = collapsed ? '展开列表' : '收起列表';
+  t.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  if (save) {
+    try { localStorage.setItem(PM_SIDE_KEY, collapsed ? 'collapsed' : 'open'); } catch {}
+  }
+}
+
+function initPmSide() {
+  let saved = null;
+  try { saved = localStorage.getItem(PM_SIDE_KEY); } catch {}
+  setPmSide(saved ? saved === 'collapsed' : isNarrow(), false);
+}
+
+/** 未打开评审时显示新建表单，打开后显示详情 */
+function pmShowMode(r) {
+  const open = !!r;
+  $('pm-form').hidden = open;
+  $('pm-result').hidden = !open;
+  $('pm-new').hidden = !open;
+  $('pm-crumb').textContent = open ? `#${r.id} ${clipText(r.input.replace(/\s+/g, ' '), 40)}` : '新建评审';
+}
+
+function markPmHistory() {
+  for (const li of $('pm-history').children) li.classList?.toggle('on', Number(li.getAttribute?.('data-id')) === pm.current);
+}
+
+function newPmReview() {
+  if (pm.edit && !confirm('放弃未保存的编辑？')) return false;
+  clearTimeout(pm.pollTimer);
+  pm.openSeq++;
+  pm.current = null;
+  pm.review = null;
+  pm.edit = null;
+  proto.leave();
+  pmShowMode(null);
+  markPmHistory();
+  $('pm-input').focus();
+  return true;
+}
 
 // ---------- 附件 ----------
 const ATT_MAX = 8;
@@ -872,59 +924,155 @@ function viewedContent(r) {
   return pm.verCache.get(`${r.id}:${pm.view.n}`) ?? null;
 }
 
-function renderReview(r) {
-  pm.review = r;
-  const box = $('pm-result');
-  box.hidden = false;
-  const head = h(
-    'div',
-    { class: 'pm-head' },
-    h('div', { class: 'meta' }, h('span', { text: r.mode_label }), h('span', { text: '·' }), h('span', { text: new Date(r.created_at).toLocaleString('zh-CN') })),
+function renderHead(r) {
+  return [
+    h('div', { class: 'meta' }, h('span', { class: 'pm-mode', text: r.mode_label }), h('span', { text: '·' }), h('span', { text: new Date(r.created_at).toLocaleString('zh-CN') }), h('span', { text: '·' }), h('span', { text: `#${r.id}` })),
     h('details', { class: 'pm-input' }, h('summary', { text: r.input.length > 60 ? `${r.input.slice(0, 60)}…` : r.input }), h('div', { text: r.input })),
     attList(r.attachments),
     r.skills.length ? h('div', { class: 'tags' }, r.skills.map((s) => h('span', { class: 'tag', text: s }))) : null,
-  );
-  const panel = r.status === 'done' && r.latest ? proto.panel(r, pm.view.n) : null;
-  if (!panel) proto.leave();
-  const before = [head];
-  const after = [];
-  if (r.status === 'running') {
-    before.push(h('div', { class: 'brief' }, h('p', { class: 'muted', text: '正在评审…一般需要 1-3 分钟，可以先去看看别的，回来在「历史评审」里查看。' })));
-  } else if (r.status === 'error' || !r.latest) {
-    before.push(h('div', { class: 'brief' }, h('p', { class: 'err', text: `评审失败：${r.error || '没有可用的文档'}` })));
-  } else {
-    before.push(contextNote(r.context), renderVersions(r), renderDoc(r));
-    after.push(renderThread(r), renderReply(r));
-  }
-  if (r.status === 'done') {
-    after.push(
+    r.status === 'done'
+      ? h(
+          'div',
+          { class: 'actions' },
+          h('button', {
+            class: 'link',
+            text: '用相同内容和框架再评一次',
+            onclick: () => {
+              if (!newPmReview()) return;
+              $('pm-input').value = r.input;
+              updatePmCount();
+              const known = new Set(pm.meta?.skills.map((s) => s.name) ?? []);
+              const skills = r.skills.filter((s) => known.has(s));
+              if (pm.meta && skills.length && skills.length <= pm.meta.maxSelected) {
+                pm.sel = { presets: [], skills };
+                renderPmPicker();
+              }
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }),
+          kb.button({ reviewId: r.id }),
+        )
+      : null,
+  ];
+}
+
+function pmSkeleton() {
+  if (pm.dom) return pm.dom;
+  const head = h('div', { class: 'pm-head' });
+  const status = h('div', { class: 'pm-status' });
+  const tabs = h('div', { class: 'pm-tabs', role: 'tablist', 'aria-label': '评审内容' });
+  const panes = {};
+  for (const [k] of PM_TABS) panes[k] = h('div', { class: 'pm-pane', 'data-pane': k, role: 'tabpanel' });
+  $('pm-result').replaceChildren(head, status, tabs, panes.doc, panes.chat, panes.proto);
+  pm.dom = { head, status, tabs, panes, thread: null, reply: null };
+  return pm.dom;
+}
+
+function renderPmTabs(r) {
+  const d = pm.dom;
+  const tab = pm.tabs.get(r.id) || 'doc';
+  const turns = (r.messages || []).filter((m) => m.role === 'user').length;
+  const badge = { doc: `v${r.latest}`, chat: turns ? String(turns) : '', proto: '' };
+  d.tabs.replaceChildren(
+    ...PM_TABS.map(([k, label]) =>
       h(
-        'div',
-        { class: 'actions' },
-        h('button', {
-          class: 'link',
-          text: '用相同内容和框架再评一次',
-          onclick: () => {
-            $('pm-input').value = r.input;
-            updatePmCount();
-            const known = new Set(pm.meta?.skills.map((s) => s.name) ?? []);
-            const skills = r.skills.filter((s) => known.has(s));
-            if (pm.meta && skills.length && skills.length <= pm.meta.maxSelected) {
-              pm.sel = { presets: [], skills };
-              renderPmPicker();
-            }
-            $('pm-input').focus();
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          },
-        }),
-        kb.button({ reviewId: r.id }),
+        'button',
+        { type: 'button', role: 'tab', class: `pm-tab${k === tab ? ' on' : ''}`, 'aria-selected': k === tab ? 'true' : 'false', onclick: () => setPmTab(r.id, k) },
+        label,
+        badge[k] ? h('span', { class: 'pm-tab-n', text: ` ${badge[k]}` }) : null,
       ),
-    );
+    ),
+  );
+  for (const [k] of PM_TABS) d.panes[k].hidden = k !== tab;
+}
+
+function setPmTab(id, tab) {
+  pm.tabs.set(id, tab);
+  if (pm.review?.id === id && pm.dom) renderPmTabs(pm.review);
+}
+
+/** 从对话跳到文档页并定位到指定版本开头 */
+async function gotoDoc(id, n) {
+  pm.tabs.set(id, 'doc');
+  if (pm.edit) {
+    toast('请先保存或取消编辑');
+    if (pm.review) renderPmTabs(pm.review);
+  } else {
+    await selectVersion(id, n);
   }
-  for (const child of [...box.children]) if (child !== panel) child.remove();
-  if (panel && !panel.parentNode) box.append(panel);
-  for (const node of before) if (node) box.insertBefore(node, panel || null);
-  for (const node of after) if (node) box.append(node);
+  pm.dom?.tabs.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+}
+
+/** 局部刷新：各区块按内容签名判断是否重建，未变化的区块（滚动位置、焦点、草稿）保持原样 */
+function renderReview(r) {
+  pm.review = r;
+  const d = pmSkeleton();
+  pmShowMode(r);
+  markPmHistory();
+  const sigHead = JSON.stringify([r.id, r.status, r.input, r.skills, r.mode_label, (r.attachments || []).map((a) => a.id)]);
+  if (pm.sig.head !== sigHead) {
+    pm.sig.head = sigHead;
+    d.head.replaceChildren(...renderHead(r).filter(Boolean));
+  }
+  if (r.status === 'running' || r.status === 'error' || !r.latest) {
+    proto.leave();
+    pm.sig.doc = pm.sig.thread = pm.sig.reply = null;
+    d.tabs.hidden = true;
+    for (const [k] of PM_TABS) d.panes[k].hidden = true;
+    d.panes.doc.replaceChildren();
+    d.panes.chat.replaceChildren();
+    d.thread = d.reply = null;
+    d.status.hidden = false;
+    d.status.replaceChildren(
+      r.status === 'running'
+        ? h('div', { class: 'brief' }, h('p', { class: 'muted', text: '正在评审…一般需要 1-3 分钟，可以先去看看别的，回来在左侧「历史评审」里查看。' }))
+        : h('div', { class: 'brief' }, h('p', { class: 'err', text: `评审失败：${r.error || '没有可用的文档'}` })),
+    );
+    return;
+  }
+  d.status.hidden = true;
+  d.status.replaceChildren();
+  d.tabs.hidden = false;
+  renderPmTabs(r);
+
+  const busy = hasRunningTurn(r);
+  const content = viewedContent(r);
+  const cur = r.versions.find((v) => v.n === pm.view.n);
+  const sigDoc = JSON.stringify([r.id, r.latest, pm.view.n, busy, pm.edit ? pm.edit.base : null, content == null ? -1 : content.length, r.versions.length, cur?.note ?? null]);
+  if (pm.sig.doc !== sigDoc) {
+    pm.sig.doc = sigDoc;
+    d.panes.doc.replaceChildren(...[contextNote(r.context), renderVersions(r), renderVerNote(cur), renderDoc(r)].filter(Boolean));
+  }
+
+  const sigThread = JSON.stringify([r.id, busy, (r.messages || []).map((m) => [m.id, m.status, m.kind, m.version_n, (m.content || '').length, m.error, (m.attachments || []).length])]);
+  const sigReply = JSON.stringify([r.id, busy || pm.edit != null]);
+  if (pm.sig.thread !== sigThread || !d.thread) {
+    pm.sig.thread = sigThread;
+    const t = renderThread(r);
+    if (d.thread && d.thread.parentNode === d.panes.chat) {
+      d.panes.chat.insertBefore(t, d.thread);
+      d.thread.remove();
+    } else {
+      d.panes.chat.insertBefore(t, d.panes.chat.children[0] ?? null);
+    }
+    d.thread = t;
+  }
+  if (pm.sig.reply !== sigReply || !d.reply) {
+    pm.sig.reply = sigReply;
+    const f = renderReply(r);
+    if (d.reply && d.reply.parentNode === d.panes.chat) d.reply.remove();
+    d.panes.chat.append(f);
+    d.reply = f;
+  }
+
+  const panel = proto.panel(r, pm.view.n);
+  for (const c of [...d.panes.proto.children]) if (c !== panel) c.remove();
+  if (panel.parentNode !== d.panes.proto) d.panes.proto.append(panel);
+}
+
+function renderVerNote(v) {
+  if (!v?.note) return null;
+  return h('p', { class: `ver-note${v.note === TRUNC_NOTE ? ' warn' : ''}`, text: `本版说明：${v.note}` });
 }
 
 /** 「参考了 N 条记忆、M 次历史讨论、K 段知识库」：展开后列出记忆内容、可跳转的历史会话与知识库段落 */
@@ -978,26 +1126,28 @@ function contextNote(c, inline = false) {
   );
 }
 
+function verLabel(v, r) {
+  const t = new Date(v.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return `v${v.n} · ${SOURCE_LABEL[v.source] ?? v.source} · ${t}${v.n === r.latest ? ' · 最新' : ''}`;
+}
+
 function renderVersions(r) {
   const n = pm.view.n;
   const busy = hasRunningTurn(r);
-  const edit = h('button', { type: 'button', class: 'link', text: '编辑', title: busy ? '上一轮还在进行中' : '在 Markdown 原文上修改，保存为新版本', onclick: () => startEdit(r) });
+  const edit = h('button', { type: 'button', class: 'link', text: '编辑', title: busy ? '上一轮还在进行中' : '在 Markdown 原文上修改，保存为新版本', onclick: () => startEdit(pm.review) });
   edit.disabled = busy || pm.edit != null;
+  const sel = h('select', {
+    class: 'ver-select',
+    'aria-label': '文档版本',
+    onchange: (e) => selectVersion(r.id, Number(e.target.value)),
+  });
+  for (const v of [...r.versions].reverse()) sel.append(h('option', { value: String(v.n), text: verLabel(v, r) }));
+  sel.value = String(n);
+  sel.disabled = pm.edit != null;
   return h(
     'div',
     { class: 'pm-versions' },
-    h(
-      'div',
-      { class: 'ver-list', role: 'group', 'aria-label': '文档版本' },
-      r.versions.map((v) =>
-        h(
-          'button',
-          { type: 'button', class: `ver${v.n === n ? ' on' : ''}`, title: v.note || SOURCE_LABEL[v.source], onclick: () => selectVersion(r.id, v.n) },
-          `v${v.n}`,
-          h('small', { text: v.n === r.latest ? `${SOURCE_LABEL[v.source]} · 最新` : SOURCE_LABEL[v.source] }),
-        ),
-      ),
-    ),
+    h('label', { class: 'ver-pick' }, h('span', { class: 'muted', text: `共 ${r.versions.length} 版` }), sel),
     h(
       'div',
       { class: 'ver-actions' },
@@ -1007,7 +1157,7 @@ function renderVersions(r) {
         text: '复制全文',
         onclick: async () => {
           try {
-            await navigator.clipboard.writeText(viewedContent(r) ?? '');
+            await navigator.clipboard.writeText(viewedContent(pm.review) ?? '');
             toast('已复制');
           } catch {
             toast('复制失败，请手动选择文本');
@@ -1055,7 +1205,7 @@ function renderDoc(r) {
     else box.append(...renderMarkdown(content, r.refs));
     return box;
   }
-  const ta = h('textarea', { class: 'pm-edit', rows: '18', maxlength: '40000', 'aria-label': '编辑文档（Markdown）' });
+  const ta = h('textarea', { class: 'pm-edit', rows: '18', maxlength: '80000', 'aria-label': '编辑文档（Markdown）' });
   ta.value = pm.edit.value;
   ta.addEventListener('input', () => {
     if (pm.edit) pm.edit.value = ta.value;
@@ -1113,7 +1263,6 @@ function renderThread(r) {
   return h(
     'div',
     { class: 'pm-thread' },
-    h('div', { class: 'grp-title', text: '对话' }),
     msgs.map((m, i) => {
       if (m.role === 'user') {
         return h('div', { class: 'pm-msg user' }, h('div', { class: 'bubble', text: m.content }), attList(m.attachments), m.kind === 'revise' ? h('small', { class: 'muted', text: '要求改写文档' }) : null);
@@ -1135,7 +1284,13 @@ function renderThread(r) {
         );
       }
       if (m.kind === 'revise' && m.version_n) {
-        return h('div', { class: 'pm-event' }, h('button', { type: 'button', class: 'link', text: `→ 生成了 v${m.version_n}：${m.content}`, onclick: () => selectVersion(r.id, m.version_n) }), contextNote(m.context, true));
+        return h(
+          'div',
+          { class: 'pm-event' },
+          h('span', { class: 'pm-event-text', text: `已生成 v${m.version_n}：${m.content}` }),
+          h('button', { type: 'button', class: 'link', text: '查看文档', onclick: () => gotoDoc(r.id, m.version_n) }),
+          contextNote(m.context, true),
+        );
       }
       return h('div', { class: 'pm-msg assistant brief' }, ...renderMarkdown(m.content, r.refs), contextNote(m.context, true));
     }),
@@ -1144,9 +1299,12 @@ function renderThread(r) {
 
 function renderReply(r) {
   const busy = hasRunningTurn(r);
-  const ta = h('textarea', { rows: '3', maxlength: '4000', 'aria-label': '继续对话', placeholder: '继续追问，或说明要怎么改（如：定价部分按 To B 年费重写）· Ctrl/⌘+Enter 发送' });
-  const chk = h('input', { type: 'checkbox', 'aria-label': '改写文档' });
-  const count = h('span', { class: 'muted', text: '0/4000' });
+  const ta = h('textarea', { rows: '3', maxlength: '8000', 'aria-label': '继续对话', placeholder: '继续追问，或说明要怎么改（如：定价部分按 To B 年费重写）· Ctrl/⌘+Enter 发送' });
+  const chk = h('input', { type: 'checkbox', 'aria-label': '改写文档', onchange: () => (pm.draft.revise = chk.checked) });
+  if (pm.draft.id !== r.id) pm.draft = { id: r.id, text: '', revise: false };
+  ta.value = pm.draft.text;
+  chk.checked = pm.draft.revise;
+  const count = h('span', { class: 'muted', text: `${[...pm.draft.text].length}/8000` });
   const btn = h('button', { type: 'submit', text: busy ? '进行中…' : '发送' });
   const blocked = busy || pm.edit != null;
   if (pm.att.replyFor !== r.id) {
@@ -1166,7 +1324,10 @@ function renderReply(r) {
   pm.att.replySync = sync;
   ta.disabled = blocked;
   sync();
-  ta.addEventListener('input', () => (count.textContent = `${[...ta.value].length}/4000`));
+  ta.addEventListener('input', () => {
+    pm.draft.text = ta.value;
+    count.textContent = `${[...ta.value].length}/8000`;
+  });
   ta.addEventListener('paste', (e) => onPasteFiles(e, pm.att.reply));
   const send = async () => {
     if (blocked || sending) return;
@@ -1212,6 +1373,7 @@ async function sendTurn(id, text, mode, attachmentIds = []) {
   try {
     await api(`/api/pm/reviews/${id}/messages`, { method: 'POST', body: attachmentIds.length ? { text, mode, attachmentIds } : { text, mode } });
     if (attachmentIds.length) pm.att.reply = [];
+    if (pm.draft.id === id) pm.draft = { id, text: '', revise: false };
     await openReview(id);
     return true;
   } catch (e) {
@@ -1230,6 +1392,7 @@ async function openReview(id) {
     const prev = pm.review?.id === id ? pm.review : null;
     if (!prev) {
       pm.edit = null;
+      pm.sig = {};
       pm.view = { id, n: review.latest };
     } else if (review.latest > prev.latest || pm.view.n < 1 || pm.view.n > review.latest) {
       pm.view = { id, n: review.latest };
@@ -1245,44 +1408,51 @@ async function openReview(id) {
 async function loadPmHistory() {
   try {
     const { reviews } = await api('/api/pm/reviews');
-    $('pm-history-title').hidden = !reviews.length;
+    $('pm-history-empty').hidden = reviews.length > 0;
+    $('pm-history-count').textContent = reviews.length ? String(reviews.length) : '';
     $('pm-history').replaceChildren(
       ...reviews.map((r) => {
         const info = r.status === 'running' ? '进行中' : r.status === 'error' ? '失败' : `${r.mode_label} · v${r.latest} · ${r.turns} 轮`;
         return h(
           'li',
-          { class: `pm-row${r.id === pm.current ? ' on' : ''}` },
+          { class: `pm-row${r.id === pm.current ? ' on' : ''}${r.status === 'running' ? ' running' : r.status === 'error' ? ' failed' : ''}`, 'data-id': String(r.id) },
           h('a', {
             href: '#',
-            text: r.input.replace(/\s+/g, ' ').slice(0, 80),
+            title: r.input,
+            text: clipText(r.input.replace(/\s+/g, ' '), 60),
             onclick: (e) => {
               e.preventDefault();
+              if (pm.edit && pm.current !== r.id && !confirm('放弃未保存的编辑？')) return;
+              if (isNarrow()) setPmSide(true, false);
               openReview(r.id);
               window.scrollTo({ top: 0, behavior: 'smooth' });
             },
           }),
-          h('span', { class: 'info', text: `${info} · ${ago(r.updated_at || r.created_at)}` }),
-          r.status !== 'running'
-            ? h('button', {
-                class: 'link',
-                text: '删除',
-                onclick: async () => {
-                  if (!confirm('删除这条评审及其所有版本和对话？')) return;
-                  try {
-                    await api(`/api/pm/reviews/${r.id}`, { method: 'DELETE' });
-                    if (pm.current === r.id) {
-                      pm.current = null;
-                      pm.review = null;
-                      pm.edit = null;
-                      $('pm-result').hidden = true;
+          h(
+            'div',
+            { class: 'pm-row-foot' },
+            h('span', { class: 'info', text: `${info} · ${ago(r.updated_at || r.created_at)}` }),
+            r.status !== 'running'
+              ? h('button', {
+                  class: 'link pm-del',
+                  text: '删除',
+                  'aria-label': `删除评审 #${r.id}`,
+                  onclick: async () => {
+                    if (!confirm('删除这条评审及其所有版本和对话？')) return;
+                    try {
+                      await api(`/api/pm/reviews/${r.id}`, { method: 'DELETE' });
+                      if (pm.current === r.id) {
+                        pm.edit = null;
+                        newPmReview();
+                      }
+                      loadPmHistory();
+                    } catch (err) {
+                      toast(err.message);
                     }
-                    loadPmHistory();
-                  } catch (err) {
-                    toast(err.message);
-                  }
-                },
-              })
-            : null,
+                  },
+                })
+              : null,
+          ),
         );
       }),
     );
@@ -1292,7 +1462,7 @@ async function loadPmHistory() {
 }
 
 function updatePmCount() {
-  $('pm-count').textContent = `${[...$('pm-input').value].length}/4000`;
+  $('pm-count').textContent = `${[...$('pm-input').value].length}/8000`;
 }
 
 async function submitPm(e) {
@@ -1531,6 +1701,9 @@ async function init() {
   $('focus-edit').addEventListener('submit', saveFocus);
   $('focus-cancel').addEventListener('click', () => ($('focus-edit').hidden = true));
   $('pm-form').addEventListener('submit', submitPm);
+  initPmSide();
+  $('pm-side-toggle').addEventListener('click', () => setPmSide(!$('pm-layout').classList.contains('collapsed')));
+  $('pm-new').addEventListener('click', () => newPmReview());
   $('pm-input').addEventListener('input', updatePmCount);
   $('pm-input').addEventListener('paste', (e) => onPasteFiles(e, pm.att.form));
   $('pm-att-add').addEventListener('click', () => $('pm-att-file').click());
