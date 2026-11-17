@@ -81,7 +81,7 @@ CREATE INDEX wiki_pages_kind ON wiki_pages(kind, updated_at DESC);
 
 CREATE TABLE wiki_ops (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind TEXT NOT NULL,                     -- ingest | lint | fix | generate | query_save | edit | restore | revert
+  kind TEXT NOT NULL,                     -- ingest | lint | fix | generate | query_save | edit | restore | revert | ask（ask 只计入额度，不可撤销）
   doc_id INTEGER,                         -- ingest 对应的资料；不设外键，资料删除后仍保留
   target_op INTEGER,                      -- revert / retry 指向的 op
   status TEXT NOT NULL DEFAULT 'queued',  -- queued | running | done | error | reverted
@@ -218,7 +218,7 @@ CREATE VIRTUAL TABLE wiki_fts USING fts5(title, summary, body, tokenize='trigram
 
 ### 提问（`packs/wiki/ask.ts`）
 1. **选页**（1 次调用，JSON 输出）：给模型问题和 index（检索前 60 页加全部 overview 页，只含标题和一句话摘要），返回 3–5 个 slug。
-2. **回答**（1 次调用，流式输出）：给模型选中页面的正文和它们引用的原文分段（不超过 4000 字）。要求每个结论都标注 `[[页]]` 或 `[^doc:ord]`；依据不足时回答「知识库中没有相关内容」，不能编造。
+2. **回答**（1 次调用，一次性返回 JSON，前端显示「正在查阅 Wiki…」）：给模型选中页面的正文和它们引用的原文分段（不超过 4000 字）。要求每个结论都标注 `[[页]]` 或 `[^doc:ord]`；依据不足时回答「知识库中没有相关内容」，不能编造。
 3. 计入每日额度，额度用完时返回 429 和提示「今日额度已用完」。
 4. **存为问答页**：根据问题生成 slug，正文是问题加回答，类型为 answer，记一条 `query_save` op，可以撤销。
 5. 提问记录不单独存表。
@@ -307,7 +307,7 @@ CREATE VIRTUAL TABLE wiki_fts USING fts5(title, summary, body, tokenize='trigram
 - **历史**：版本列表，可以查看差异、恢复到某一版。
 
 ### 问 Wiki
-输入框，回答区流式显示，引用可以点击。下方有「存为问答页」按钮。
+输入框，请求期间显示进度提示，回答返回后显示，引用可以点击。下方有「存为问答页」按钮。
 
 ### 体检与日志
 - 上方是最近一次体检报告，按问题类型分组，有跳转链接、「生成此页」和「立即体检」按钮。
@@ -333,7 +333,7 @@ CREATE VIRTUAL TABLE wiki_fts USING fts5(title, summary, body, tokenize='trigram
 | POST | `/api/wiki/assets?page=` | 上传图片：octet-stream，只接受 png/jpg/gif/webp，按文件头识别，≤5MB |
 | GET | `/api/wiki/assets/:id` | 读取图片，带 `nosniff`，使用识别出的 MIME |
 | GET | `/api/wiki/graph` | 图谱的节点和边 |
-| POST | `/api/wiki/ask` | 提问，SSE 流式返回 |
+| POST | `/api/wiki/ask` | 提问，返回 JSON（`Llm` 为整段返回，项目中没有 SSE） |
 | POST | `/api/wiki/answers` | `{question, answer}` → 存为问答页 |
 | GET | `/api/wiki/status` | 队列、额度、最近一次体检、各资料的 Wiki 状态 |
 | POST | `/api/wiki/ingest/:docId` | 手动编入或重新编入（会清除 `reverted` 和失败次数） |
@@ -387,7 +387,7 @@ apps/server/public/wiki.js
   - diff；
   - export：文件名清洗、目录划分、链接与脚注改写、超出上限；
   - zip：用系统 `unzip -t` 校验生成的文件。
-- **接口测试**：登录、同源校验、409 冲突、图片类型校验、SSE。
+- **接口测试**：登录、同源校验、409 冲突、图片类型校验、提问额度 429。
 - **真实验证**：
   - 用 `deepseek-flash` 摄入现有 2 份资料，人工抽查页面质量和引用准确性；
   - 拿 5 个问题对比旧召回和新召回；
