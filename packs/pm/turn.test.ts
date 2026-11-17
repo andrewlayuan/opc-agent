@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildTurnMessages, normMode, parseTurn, pickHistory } from './turn.ts';
+import { TURN_PROTOCOL, buildTurnMessages, normMode, parseTurn, pickHistory } from './turn.ts';
 import type { TurnMsg } from './turn.ts';
 
 const doc = '# 新版\n' + '内容'.repeat(150);
@@ -21,8 +21,8 @@ test('parseTurn：剥掉外层代码围栏、剔除 URL、过短内容视为失�
   assert.equal(r.kind, 'revise');
   assert.ok(r.kind === 'revise' && !r.doc.includes('```') && !r.doc.includes('https://'));
   assert.throws(() => parseTurn('[改写]\n太短', 'auto'), /模型没有返回完整文档/);
-  const long = parseTurn('[回答]\n' + '长'.repeat(3000), 'auto');
-  assert.ok(long.kind === 'ask' && long.answer.length === 1500);
+  const long = parseTurn('[回答]\n' + '长'.repeat(6000), 'auto');
+  assert.ok(long.kind === 'ask' && long.answer.length === 3000);
   const note = parseTurn(`[改写]\n${doc}\n---变更说明---\n${'说'.repeat(200)}`, 'auto');
   assert.ok(note.kind === 'revise' && note.note.length === 80);
 });
@@ -69,4 +69,12 @@ test('buildTurnMessages：合并相邻的同角色消息，保证 user/assistant
   for (let i = 1; i < roles.length; i++) assert.notEqual(roles[i], roles[i - 1], `第 ${i} 条与前一条同为 ${roles[i]}`);
   assert.match(msgs[2].content, /当前文档（v1）[\s\S]*被截断后剩下的回答/);
   assert.match(msgs.at(-1)!.content, /上一问[\s\S]*本轮/);
+});
+
+
+test('parseTurn：回答上限 3000 字，协议里写明 3000 字', () => {
+  const r = parseTurn('[回答]\n' + '答'.repeat(3500), 'auto');
+  assert.equal(r.kind, 'ask');
+  assert.equal([...(r as { answer: string }).answer].length, 3000);
+  assert.match(TURN_PROTOCOL, /不超过 3000 字/);
 });

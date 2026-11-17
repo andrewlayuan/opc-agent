@@ -382,7 +382,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   if (m && (method === 'GET' || method === 'HEAD')) return sendAttachmentFile(req, res, idFrom(m));
   if (p === '/api/pm/reviews' && method === 'GET') return sendJson(res, 200, { reviews: pm.list(30) });
   if (p === '/api/pm/reviews' && method === 'POST') {
-    const body = await readJson(req, 32 * 1024);
+    // 8000 字上限按 UTF-8 最坏 4 字节/字计，另留 JSON 转义余量
+    const body = await readJson(req, 64 * 1024);
     let id: number;
     try {
       id = pm.start({
@@ -413,16 +414,16 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   m = p.match(/^\/api\/pm\/reviews\/(\d+)\/messages$/);
   if (m && method === 'POST') {
     const id = idFrom(m);
-    // 4000 字上限按 UTF-8 最坏 4 字节/字计
-    const body = await readJson(req, 32 * 1024);
+    // 8000 字上限按 UTF-8 最坏 4 字节/字计，另留 JSON 转义余量
+    const body = await readJson(req, 64 * 1024);
     const messageId = pmCall(() => pm.ask(id, typeof body.text === 'string' ? body.text : '', body.mode, body.attachmentIds));
     return sendJson(res, 202, { messageId });
   }
   m = p.match(/^\/api\/pm\/reviews\/(\d+)\/versions$/);
   if (m && method === 'POST') {
     const id = idFrom(m);
-    // 40000 字上限：中文 3 字节/字，另留 JSON 转义余量
-    const body = await readJson(req, 192 * 1024);
+    // 80000 字上限：中文 3 字节/字，另留 JSON 转义余量
+    const body = await readJson(req, 384 * 1024);
     const content = typeof body.content === 'string' ? body.content : '';
     const n = pmCall(() => pm.saveManual(id, content, body.baseN));
     record(() => ({ kind: 'version_manual', refType: 'review', refId: id, summary: `手动编辑 v${n}`, payload: paragraphDiff(pm.version(id, n - 1)?.content ?? '', content.trim()) }));

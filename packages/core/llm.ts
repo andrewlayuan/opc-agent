@@ -17,13 +17,22 @@ export interface LlmOptions {
 
 export class LlmError extends Error {}
 
+export interface ChatOptions { json?: boolean; maxTokens?: number; temperature?: number; timeoutMs?: number }
+type Post = typeof apiPost;
+
+/** 输出达到上限后，最多自动续写的次数 */
+export const CONTINUE_MAX = 2;
+const CONTINUE_PROMPT = '你上一条回复因长度限制被截断。请从中断处直接接着写，不要重复已经写过的内容，不要加任何开场白、标记或说明。';
+
 export class Llm {
   private active = 0;
   private waiters: (() => void)[] = [];
   readonly opts: LlmOptions;
+  private readonly post: Post;
 
-  constructor(opts: LlmOptions) {
+  constructor(opts: LlmOptions, post: Post = apiPost) {
     this.opts = opts;
+    this.post = post;
     if (opts.apiKey) allowHost(new URL(opts.baseUrl).hostname);
   }
 
@@ -42,13 +51,28 @@ export class Llm {
     }
   }
 
-  async chat(messages: ChatMessage[], o: { json?: boolean; maxTokens?: number; temperature?: number; timeoutMs?: number } = {}): Promise<string> {
+  async chat(messages: ChatMessage[], o: ChatOptions = {}): Promise<string> {
+    return (await this.complete(messages, o)).content;
+  }
+
+  /** 长文输出：被长度截断时从断点续写，最多 CONTINUE_MAX 次；仍未写完时 truncated 为 true */
+  async chatLong(messages: ChatMessage[], o: ChatOptions = {}): Promise<{ content: string; truncated: boolean }> {
+    let r = await this.complete(messages, o);
+    let content = r.content;
+    for (let i = 0; i < CONTINUE_MAX && r.finish === 'length'; i++) {
+      r = await this.complete([...messages, { role: 'assistant', content }, { role: 'user', content: CONTINUE_PROMPT }], o);
+      content += r.content;
+    }
+    return { content, truncated: r.finish === 'length' };
+  }
+
+  private async complete(messages: ChatMessage[], o: ChatOptions): Promise<{ content: string; finish: string }> {
     if (!this.enabled) throw new LlmError('未配置 DEEPSEEK_API_KEY，无法调用模型');
     return this.slot(async () => {
       let lastErr: unknown;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const res = await apiPost(
+          const res = await this.post(
             `${this.opts.baseUrl}/chat/completions`,
             { authorization: `Bearer ${this.opts.apiKey}` },
             {
@@ -70,9 +94,10 @@ export class Llm {
             const msg = (res.json as { error?: { message?: string } } | null)?.error?.message ?? res.text.slice(0, 200);
             throw new LlmError(`模型调用失败（HTTP ${res.status}）：${msg}`);
           }
-          const content = (res.json as { choices?: { message?: { content?: string } }[] } | null)?.choices?.[0]?.message?.content;
+          const choice = (res.json as { choices?: { message?: { content?: string }; finish_reason?: string }[] } | null)?.choices?.[0];
+          const content = choice?.message?.content;
           if (typeof content !== 'string') throw new LlmError('模型返回格式异常');
-          return content;
+          return { content, finish: String(choice?.finish_reason ?? '') };
         } catch (e) {
           if (e instanceof LlmError && !String(e.message).includes('暂时不可用')) throw e;
           lastErr = e;

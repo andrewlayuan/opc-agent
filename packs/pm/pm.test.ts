@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { openDb } from '../../packages/core/db.ts';
 import type { Llm } from '../../packages/core/llm.ts';
 import { syncSources } from '../radar/collect.ts';
-import { PmAdvisor, modeLabel } from './advisor.ts';
+import { INPUT_MAX, PmAdvisor, modeLabel } from './advisor.ts';
 import type { AdvisorEvent, AdvisorHooks, PmError } from './advisor.ts';
 import { loadPmSkills, parseSkill } from './skills.ts';
 import { AttachmentStore } from './attachments.ts';
@@ -50,7 +50,11 @@ test('加载技能目录：固定层级、排除无关插件、拒绝符号链�
 });
 
 function setup(
-  llmImpl: { json?: (m: { content: string }[]) => unknown; chat?: (m: { content: string }[]) => string | Promise<string> },
+  llmImpl: {
+    json?: (m: { content: string }[]) => unknown;
+    chat?: (m: { content: string }[]) => string | Promise<string>;
+    truncated?: (m: { content: string }[]) => boolean;
+  },
   hooks: AdvisorHooks = {},
   log: (s: string) => void = () => {},
 ) {
@@ -67,6 +71,9 @@ function setup(
     enabled: true,
     json: async (m: { content: string }[]) => llmImpl.json?.(m) ?? {},
     chat: async (m: { content: string }[]) => llmImpl.chat?.(m) ?? '',
+    async chatLong(m: { content: string }[], o: unknown) {
+      return { content: await (this as { chat: (m: unknown, o: unknown) => Promise<string> }).chat(m, o), truncated: llmImpl.truncated?.(m) ?? false };
+    },
   } as unknown as Llm;
   const advisor = new PmAdvisor(db, llm, skills, log, hooks);
   return { db, advisor, done: () => (db.close(), fs.rmSync(dir, { recursive: true, force: true })) };
@@ -85,7 +92,8 @@ test('产品顾问：参数校验', () => {
   const { advisor, done } = setup({});
   const ok = '一个足够长的产品点子描述内容';
   assert.throws(() => advisor.start({ input: '太短', presets: [], skills: [], useRadar: false }), /至少/);
-  assert.throws(() => advisor.start({ input: 'x'.repeat(4001), presets: [], skills: [], useRadar: false }), /过长/);
+  assert.throws(() => advisor.start({ input: 'x'.repeat(8001), presets: [], skills: [], useRadar: false }), /过长/);
+  assert.equal(INPUT_MAX, 8000);
   assert.throws(() => advisor.start({ input: ok, presets: ['nope'], skills: [], useRadar: false }), /未知/);
   assert.throws(() => advisor.start({ input: ok, presets: [], skills: ['../x'], useRadar: false }), /无效/);
   assert.throws(() => advisor.start({ input: ok, presets: ['idea', 'business', 'redteam'], skills: [], useRadar: false }), /最多组合 6 个框架（当前 7 个）/);
@@ -136,8 +144,8 @@ test('产品顾问：多框架组合时按数量均分框架说明长度，并�
   assert.equal(r.mode_label, '点子快评 + 商业模式与变现');
   for (const n of r.skills) assert.match(system, new RegExp(`<skill name="${n}">`));
   assert.ok(system.length < 45000, `system prompt too long: ${system.length}`);
-  assert.match(user, /4500 字以内/);
-  assert.equal(opts.maxTokens, 8000);
+  assert.match(user, /9000 字以内/);
+  assert.equal(opts.maxTokens, 16000);
   done();
 });
 
@@ -295,7 +303,7 @@ test('多轮：首版未完成或失败、长度、并发都会被拒绝；进�
   assert.equal(statusOf(() => advisor.ask(999, '为什么呢', 'auto'))!.status, 404);
   const id = await doneReview(advisor);
   assert.equal(statusOf(() => advisor.ask(id, 'x', 'auto'))!.status, 400);
-  assert.equal(statusOf(() => advisor.ask(id, 'x'.repeat(4001), 'auto'))!.status, 400);
+  assert.equal(statusOf(() => advisor.ask(id, 'x'.repeat(8001), 'auto'))!.status, 400);
   hang = true;
   advisor.ask(id, '为什么呢', 'auto');
   assert.deepEqual(statusOf(() => advisor.ask(id, '再问一次', 'auto')), { status: 409, message: '上一轮还在进行中' });
@@ -316,7 +324,7 @@ test('多轮：手动版本、冲突、内容未变化，之后的追问基于�
   assert.deepEqual(statusOf(() => advisor.saveManual(id, '# 另一版', 1)), { status: 409, message: '已有更新的 v2' });
   assert.deepEqual(statusOf(() => advisor.saveManual(id, '  # 手改\n我补充的内容 ', 2)), { status: 400, message: '内容没有变化' });
   assert.equal(statusOf(() => advisor.saveManual(id, '   ', 2))!.status, 400);
-  assert.equal(statusOf(() => advisor.saveManual(id, 'x'.repeat(40001), 2))!.status, 400);
+  assert.equal(statusOf(() => advisor.saveManual(id, 'x'.repeat(80001), 2))!.status, 400);
   assert.equal(statusOf(() => advisor.saveManual(id, '# 新', 'abc'))!.status, 409);
   advisor.ask(id, '为什么这么改', 'auto');
   await waitTurn(advisor, id);
@@ -569,6 +577,9 @@ function setupFiles(llmImpl: Parameters<typeof setup>[0], hooks: AdvisorHooks = 
     enabled: true,
     json: async (m: { content: string }[]) => llmImpl.json?.(m) ?? {},
     chat: async (m: { content: string }[]) => llmImpl.chat?.(m) ?? '',
+    async chatLong(m: { content: string }[], o: unknown) {
+      return { content: await (this as { chat: (m: unknown, o: unknown) => Promise<string> }).chat(m, o), truncated: llmImpl.truncated?.(m) ?? false };
+    },
   } as unknown as Llm;
   const files = new AttachmentStore(db, path.join(dir, 'uploads'), llm, { log: () => {} });
   const advisor = new PmAdvisor(db, llm, skills, () => {}, hooks, files);
@@ -687,7 +698,7 @@ test('附件：没有附件时 ask 仍要求至少 2 字；有附件时可为空
   const { advisor, files, done } = setupFiles({ chat: vision(fakeTurn) });
   const id = advisor.start(startReq([], '给团队做一个周报自动生成工具'));
   await waitDone(advisor, id);
-  assert.deepEqual(statusOf(() => advisor.ask(id, '问', 'auto')), { status: 400, message: '请输入 2–4000 字' });
+  assert.deepEqual(statusOf(() => advisor.ask(id, '问', 'auto')), { status: 400, message: '请输入 2–8000 字' });
   const a = await upload(files, 'a.txt', '内容');
   advisor.ask(id, '  ', 'auto', [a]);
   await waitTurn(advisor, id);
@@ -731,5 +742,55 @@ test('附件：未注入 files 时传附件返回 400「附件功能不可用」
     status: 400,
     message: '附件功能不可用',
   });
+  done();
+});
+
+
+test('篇幅翻倍：单框架首版 6000 字 / 12000 tokens，对话 16000 tokens，超时 600 秒', async () => {
+  const opts: { maxTokens?: number; timeoutMs?: number }[] = [];
+  const users: string[] = [];
+  const { advisor, done } = setup({});
+  (advisor.llm as unknown as { chat: unknown }).chat = async (m: { content: string }[], o: { maxTokens?: number; timeoutMs?: number }) => {
+    opts.push(o);
+    users.push(m.at(-1)!.content);
+    return fakeTurn(m);
+  };
+  const id = advisor.start({ input: '给团队做一个周报自动生成工具', presets: [], skills: ['lean-canvas'], useRadar: false });
+  assert.equal((await waitDone(advisor, id)).status, 'done');
+  assert.match(users[0], /6000 字以内/);
+  assert.deepEqual([opts[0].maxTokens, opts[0].timeoutMs], [12000, 600000]);
+  advisor.ask(id, '为什么选这个市场？', 'auto');
+  await waitTurn(advisor, id);
+  assert.deepEqual([opts[1].maxTokens, opts[1].timeoutMs], [16000, 600000]);
+  done();
+});
+
+test('截断标注：首版、改写、回答在续写后仍未写完时明确标注', async () => {
+  let cut = false;
+  const { db, advisor, done } = setup({ chat: fakeTurn, truncated: () => cut });
+  cut = true;
+  const id = await doneReview(advisor);
+  assert.equal(advisor.get(id)!.versions[0].note, '输出达到上限，内容可能不完整');
+  advisor.ask(id, '把定价改成年费', 'auto');
+  await waitTurn(advisor, id);
+  const r = advisor.get(id)!;
+  assert.equal(r.versions.at(-1)!.note, '输出达到上限，内容可能不完整');
+  assert.equal(r.messages.at(-1)!.content, '输出达到上限，内容可能不完整');
+  advisor.ask(id, '为什么选这个市场？', 'auto');
+  await waitTurn(advisor, id);
+  assert.match(advisor.get(id)!.messages.at(-1)!.content, /解释\n\n（回答达到长度上限，可能不完整）$/);
+  cut = false;
+  advisor.ask(id, '再解释一次', 'auto');
+  await waitTurn(advisor, id);
+  assert.equal(advisor.get(id)!.messages.at(-1)!.content, '解释');
+  assert.equal(db.prepare("SELECT note FROM pm_versions WHERE review_id=? AND n=2").get(id)!.note, '输出达到上限，内容可能不完整');
+  done();
+});
+
+test('文档上限翻倍：手动保存 8 万字以内可以，超过拒绝', async () => {
+  const { advisor, done } = setup({ chat: fakeTurn });
+  const id = await doneReview(advisor);
+  assert.equal(advisor.saveManual(id, '字'.repeat(80000), 1), 2);
+  assert.deepEqual(statusOf(() => advisor.saveManual(id, '字'.repeat(80001), 2)), { status: 400, message: '内容需在 1–80000 字之间' });
   done();
 });

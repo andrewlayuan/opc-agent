@@ -69,8 +69,8 @@ export class ProtoError extends Error {
 }
 
 export const PROTO_LIMITS = {
-  prdOutlineChars: 12000,
-  prdPageChars: 6000,
+  prdOutlineChars: 24000,
+  prdPageChars: 12000,
   requestMax: 1000,
   pagesMax: 10,
   slugRe: /^[a-z0-9-]{1,32}$/,

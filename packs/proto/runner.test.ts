@@ -5,7 +5,7 @@ import type { EventInput } from '../memory/events.ts';
 import type { LlmPort } from '../pm/ingest.ts';
 import { ProtoRunner } from './runner.ts';
 import { getVersion, listVersions } from './store.ts';
-import { ProtoError } from './types.ts';
+import { PROTO_LIMITS, ProtoError } from './types.ts';
 
 type ChatArgs = Parameters<LlmPort['chat']>;
 const OUTLINE = {
@@ -247,16 +247,23 @@ test('前置检查：模型未配置 503、版本不存在 400、评审未完成
     (e: unknown) => e instanceof ProtoError && e.status === 409 && e.message === '评审还没完成');
 });
 
-test('PRD 截断：大纲提示词的 PRD 不超过 12000 字，并带「后文已截断」', async () => {
-  const db = setup();
-  let outlinePromptText = '';
-  const stub = makeLlm({ onCall: (p) => { if (p.includes('原型大纲') && !outlinePromptText) outlinePromptText = p; } });
-  const runner = new ProtoRunner(db, stub.llm, makeDeps({ content: '长'.repeat(15000) }));
-  runner.generate(1, 1);
-  await runner.idle();
-  const m = /<prd>\n([\s\S]*?)\n<\/prd>/.exec(outlinePromptText)!;
-  assert.ok([...m[1]].length <= 12000);
-  assert.ok(outlinePromptText.includes('后文已截断'));
+test('PRD 截断：大纲提示词的 PRD 最多 24000 字，并带「后文已截断」；1.5 万字文档完整进入', async () => {
+  for (const [len, cut] of [[15000, false], [30000, true]] as const) {
+    const db = setup();
+    let outlinePromptText = '';
+    const stub = makeLlm({ onCall: (p) => { if (p.includes('原型大纲') && !outlinePromptText) outlinePromptText = p; } });
+    const runner = new ProtoRunner(db, stub.llm, makeDeps({ content: '长'.repeat(len) }));
+    runner.generate(1, 1);
+    await runner.idle();
+    const m = /<prd>\n([\s\S]*?)\n<\/prd>/.exec(outlinePromptText)!;
+    assert.equal([...m[1]].length, cut ? 24000 : len);
+    assert.equal(outlinePromptText.includes('后文已截断'), cut);
+  }
+});
+
+test('PROTO_LIMITS：PRD 输入上限翻倍', () => {
+  assert.equal(PROTO_LIMITS.prdOutlineChars, 24000);
+  assert.equal(PROTO_LIMITS.prdPageChars, 12000);
 });
 
 const V1_PAGES = [

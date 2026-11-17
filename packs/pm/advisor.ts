@@ -24,13 +24,17 @@ export const PRESETS: { id: string; label: string; skills: string[]; format?: 'p
 ];
 
 export const INPUT_MIN = 10;
-export const INPUT_MAX = 4000;
+export const INPUT_MAX = 8000;
 /** 单次评审最多组合的框架数；框架说明按数量均分总预算，避免提示词过长、输出过散 */
 export const MAX_SELECTED = 6;
 const SKILLS_TOTAL_CHARS = 40000;
 const TURN_SKILLS_CHARS = 20000;
 const TURN_MIN = 2;
-const DOC_MAX = 40000;
+const DOC_MAX = 80000;
+/** 续写后仍被长度截断时的统一说明 */
+export const TRUNC_NOTE = '输出达到上限，内容可能不完整';
+const TRUNC_ANSWER = '\n\n（回答达到长度上限，可能不完整）';
+const LLM_TIMEOUT_MS = 600000;
 const SKILL_MAX_CHARS = 9000;
 const MAX_SKILLS = 3;
 const MAX_RUNNING = 2;
@@ -327,20 +331,20 @@ export class PmAdvisor {
       .run(JSON.stringify(chosen), JSON.stringify(refs.map((r) => r.id)), ctx ? JSON.stringify(ctx.refs) : null, id);
 
     const images = this.images(atts);
-    const prompt = this.userPrompt(input, refs, p.prd ? 'prd' : undefined, chosen.length > 3 ? 4500 : 3000, texts.length ? renderAttachments(texts, ATT_TURN) : '', images.length > 0);
-    const content = await this.llm.chat(
+    const prompt = this.userPrompt(input, refs, p.prd ? 'prd' : undefined, chosen.length > 3 ? 9000 : 6000, texts.length ? renderAttachments(texts, ATT_TURN) : '', images.length > 0);
+    const { content, truncated } = await this.llm.chatLong(
       [
         { role: 'system', content: this.systemPrompt(chosen, SKILLS_TOTAL_CHARS, false, ctx?.text) },
         { role: 'user', content: images.length ? [{ type: 'text', text: prompt }, ...images] : prompt },
       ],
-      { maxTokens: chosen.length > 3 ? 8000 : 6000, temperature: 0.5, timeoutMs: 300000 },
+      { maxTokens: chosen.length > 3 ? 16000 : 12000, temperature: 0.5, timeoutMs: LLM_TIMEOUT_MS },
     );
-    const clean = content.replace(/https?:\/\/\S+/g, '').trim().slice(0, 40000);
+    const clean = content.replace(/https?:\/\/\S+/g, '').trim().slice(0, DOC_MAX);
     if (!clean) throw new Error('模型没有返回内容');
     const now = Date.now();
     this.tx(() => {
       this.db.prepare("UPDATE pm_reviews SET status='done', content=?, finished_at=?, updated_at=? WHERE id=?").run(clean, now, now, id);
-      this.db.prepare("INSERT INTO pm_versions(review_id, n, created_at, source, content) VALUES (?, 1, ?, 'ai_initial', ?)").run(id, now, clean);
+      this.db.prepare("INSERT INTO pm_versions(review_id, n, created_at, source, content, note) VALUES (?, 1, ?, 'ai_initial', ?, ?)").run(id, now, clean, truncated ? TRUNC_NOTE : null);
     });
     this.markUsed(ctx);
     this.emit({
@@ -700,8 +704,9 @@ ${structure}
     const images = this.images(current);
     const last = messages[messages.length - 1];
     if (images.length && last.role === 'user' && typeof last.content === 'string') last.content = [{ type: 'text', text: last.content }, ...images];
-    const raw = await this.llm.chat(messages, { maxTokens: 8000, temperature: 0.5, timeoutMs: 300000 });
-    const res = parseTurn(raw, mode);
+    const { content: raw, truncated } = await this.llm.chatLong(messages, { maxTokens: 16000, temperature: 0.5, timeoutMs: LLM_TIMEOUT_MS });
+    const parsed = parseTurn(raw, mode);
+    const res = !truncated ? parsed : parsed.kind === 'revise' ? { ...parsed, note: TRUNC_NOTE } : { ...parsed, answer: parsed.answer + TRUNC_ANSWER };
     const now = Date.now();
     this.tx(() => {
       const refs = ctx ? JSON.stringify(ctx.refs) : null;
