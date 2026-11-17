@@ -444,10 +444,27 @@ async function refreshStatus() {
 
 // ---------------- 简报 ----------------
 /** 把模型输出的简化 Markdown 转为 DOM（全部 textContent，不解析 HTML）；[n] 映射为服务端给出的来源链接 */
-function renderMarkdown(content, refList = []) {
+/** opts（Wiki 用）：wikiLink(slug, 文字)、cite(doc, ord)、image(id, alt) 分别返回 [[链接]]、[^doc:ord] 引用、![](asset:id) 图片的节点；不传时行为不变 */
+function renderMarkdown(content, refList = [], opts = {}) {
   const refs = new Map(refList.map((x) => [x.n, x]));
+  const wikiMode = Boolean(opts.wikiLink || opts.cite || opts.image);
+  const WIKI_RE = /!\[([^\]\n]*)\]\(asset:(\d{1,9})\)|\[\[([^[\]|\n]{1,120})(?:\|([^[\]\n]{0,120}))?\]\]|\[\^(\d{1,9}):(\d{1,6})\]/g;
   const inline = (text) => {
     const line = text.replace(/\*\*/g, '').replace(/`/g, '');
+    if (!wikiMode) return refInline(line);
+    const parts = [];
+    let last = 0;
+    for (const m of line.matchAll(WIKI_RE)) {
+      parts.push(...refInline(line.slice(last, m.index)));
+      if (m[2] !== undefined) parts.push(opts.image ? opts.image(Number(m[2]), m[1]) : m[1]);
+      else if (m[3] !== undefined) parts.push(opts.wikiLink ? opts.wikiLink(m[3].trim(), (m[4] ?? '').trim()) : (m[4] || m[3]));
+      else parts.push(opts.cite ? opts.cite(Number(m[5]), Number(m[6])) : m[0]);
+      last = m.index + m[0].length;
+    }
+    parts.push(...refInline(line.slice(last)));
+    return parts;
+  };
+  const refInline = (line) => {
     const parts = [];
     let last = 0;
     for (const m of line.matchAll(/\[(\d{1,3})\]/g)) {
@@ -1778,7 +1795,7 @@ async function init() {
   setInterval(refreshStatus, 30000);
 }
 
-const kb = initKb({ h, api, toast, show, openReview, openItem });
+const kb = initKb({ h, api, toast, show, openReview, openItem, renderMarkdown });
 const proto = initProto({ h, api, toast });
 
 init().catch((e) => toast(e.message));

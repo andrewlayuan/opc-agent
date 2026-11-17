@@ -191,3 +191,17 @@ test('exportWiki：超过 exportMax 抛 413，临时文件已删除', async () =
     done();
   }
 });
+
+test('parseScope / exportWiki({page})：导出单页；slug 不规范 400，页面不存在 404', async () => {
+  assert.deepEqual(parseScope('page:alpha-1'), { page: 'alpha-1' });
+  for (const bad of ['page:', 'page:../x', 'page:A', 'page:a b']) assert.throws(() => parseScope(bad), (e) => e instanceof WikiError && e.status === 400, bad);
+  const { db, assetsDir, tmpDir, done } = setup();
+  try {
+    put(db, [pg('one', '第一页', '内容'), pg('two', '第二页', '内容')]);
+    const r = await exportWiki(db, { page: 'one' }, { assetsDir, tmpDir });
+    assert.deepEqual(names(r.file).sort(), ['index.md', 'log.md', '概念/第一页.md'].sort());
+    await assert.rejects(exportWiki(db, { page: 'nope' }, { assetsDir, tmpDir }), (e) => e instanceof WikiError && e.status === 404);
+  } finally {
+    done();
+  }
+});

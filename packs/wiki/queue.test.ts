@@ -18,7 +18,7 @@ function setup(o: { now?: number; busy?: () => boolean; dailyCalls?: number; ing
   const ok = (calls: number) => async (db: DB, opId: number, docId?: number): Promise<IngestResult> => {
     ran.push(`ingest:${docId}`);
     tx(db, () => {
-      finishOp(db, opId, { status: 'done', llmCalls: calls });
+      finishOp(db, opId, { status: 'done', llmCalls: calls, now });
       db.prepare(
         "INSERT INTO wiki_docs(doc_id, body_hash, state, fails, ingested_at) VALUES (?, ?, 'done', 0, ?) ON CONFLICT(doc_id) DO UPDATE SET body_hash = excluded.body_hash, state = 'done', fails = 0",
       ).run(docId!, docHash(db, docId!), now);
@@ -34,12 +34,12 @@ function setup(o: { now?: number; busy?: () => boolean; dailyCalls?: number; ing
       ingest: (_llm, opId, docId) => (o.ingest ?? ok(5))(env.db, opId, docId),
       lint: async (_llm, opId) => {
         ran.push('lint');
-        finishOp(env.db, opId, { status: 'done', llmCalls: 1, note: JSON.stringify({ issues: [{ type: 'orphan' }], fixOp: null }) });
+        finishOp(env.db, opId, { status: 'done', llmCalls: 1, now, note: JSON.stringify({ issues: [{ type: 'orphan' }], fixOp: null }) });
         return { changes: [], llmCalls: 1, note: '' };
       },
       generate: async (_llm, opId, slug) => {
         ran.push(`generate:${slug}`);
-        finishOp(env.db, opId, { status: 'done', llmCalls: 1 });
+        finishOp(env.db, opId, { status: 'done', llmCalls: 1, now });
         return { changes: [], llmCalls: 1, note: '' };
       },
     },

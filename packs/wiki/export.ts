@@ -12,7 +12,7 @@ import { KIND_LABEL, WIKI_LIMITS, WikiError, isPageKind } from './types.ts';
 import type { OpKind, OpStatus, PageKind } from './types.ts';
 import { ZipWriter } from './zip.ts';
 
-export type ExportScope = { all: true } | { kind: PageKind } | { folder: number };
+export type ExportScope = { all: true } | { kind: PageKind } | { folder: number } | { page: string };
 
 export interface ExportOpts {
   assetsDir: string;
@@ -34,6 +34,8 @@ export function parseScope(raw: string): ExportScope {
   if (k && isPageKind(k[1])) return { kind: k[1] };
   const f = /^folder:([1-9]\d{0,9})$/.exec(s);
   if (f && Number.isSafeInteger(Number(f[1]))) return { folder: Number(f[1]) };
+  const p = /^page:(.+)$/.exec(s);
+  if (p && slugify(p[1]) === p[1]) return { page: p[1] };
   throw new WikiError(400, '导出范围不合法');
 }
 
@@ -225,6 +227,11 @@ export function pageToHtml(db: DB, page: PageRow, assetsDir: string): string {
 function selectPages(db: DB, scope: ExportScope): PageRow[] {
   if ('all' in scope) return db.prepare(`SELECT ${COLS} FROM wiki_pages WHERE deleted = 0`).all() as unknown as PageRow[];
   if ('kind' in scope) return db.prepare(`SELECT ${COLS} FROM wiki_pages WHERE deleted = 0 AND kind = ?`).all(scope.kind) as unknown as PageRow[];
+  if ('page' in scope) {
+    const one = db.prepare(`SELECT ${COLS} FROM wiki_pages WHERE deleted = 0 AND slug = ?`).all(scope.page) as unknown as PageRow[];
+    if (!one.length) throw new WikiError(404, '页面不存在');
+    return one;
+  }
   const rows = db.prepare('SELECT id, parent_id FROM kb_folders').all() as { id: number; parent_id: number | null }[];
   if (!rows.some((r) => r.id === scope.folder)) throw new WikiError(404, '目录不存在');
   const folders = new Set([scope.folder]);

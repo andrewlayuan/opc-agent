@@ -1,5 +1,7 @@
-// 知识库页：目录树、条目列表与搜索、条目详情、上传、笔记、入库与归类弹窗。外部数据只通过 textContent 写入 DOM
-export function initKb({ h, api, toast, show, openReview, openItem }) {
+// 知识库页：顶部标签（资料 / Wiki / 问 Wiki / 体检与日志）、目录树、条目列表与搜索、条目详情、上传、笔记、入库与归类弹窗。外部数据只通过 textContent 写入 DOM
+import { initWiki } from './wiki.js';
+
+export function initKb({ h, api, toast, show, openReview, openItem, renderMarkdown }) {
   const $ = (id) => document.getElementById(id);
   const KIND = { upload: '上传', review: '评审', item: '资讯', note: '笔记' };
   const STATUS = { processing: '处理中', error: '失败', orphan: '来源已删除' };
@@ -12,6 +14,51 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
   const when = (ts) => new Date(ts).toLocaleString('zh-CN', { hour12: false });
   const day = (ts) => new Date(ts).toLocaleDateString('zh-CN');
   const visible = () => !$('view-kb').hidden;
+  const TABS = [
+    ['docs', '资料'],
+    ['wiki', 'Wiki'],
+    ['ask', '问 Wiki'],
+    ['lint', '体检与日志'],
+  ];
+  const WIKI_STATE = { none: '未编入', queued: '排队中', running: '编入中', done: '已编入', error: '失败', reverted: '已撤销' };
+  const savedTab = localStorage.getItem('kb.tab');
+  st.tab = TABS.some(([k]) => k === savedTab) ? savedTab : 'docs';
+  st.wikiDocs = {};
+  const wiki = initWiki({
+    h,
+    api,
+    toast,
+    renderMarkdown,
+    openDoc: (doc, ord) => open(doc, ord),
+    onStatus: (s) => (st.wikiDocs = s.docs || {}),
+  });
+
+  // ---------- 顶部标签 ----------
+  function renderTabs() {
+    $('kb-tabs').replaceChildren(
+      ...TABS.map(([k, label]) =>
+        h('button', { type: 'button', role: 'tab', class: `pm-tab${k === st.tab ? ' on' : ''}`, 'aria-selected': k === st.tab ? 'true' : 'false', text: label, onclick: () => setTab(k) }),
+      ),
+    );
+  }
+
+  /** 切换标签并记住；o.slug 给出时在 Wiki 标签里直接打开该页 */
+  function setTab(k, o = {}) {
+    st.tab = k;
+    localStorage.setItem('kb.tab', k);
+    renderTabs();
+    for (const [key] of TABS) $(`kb-pane-${key}`).hidden = key !== k;
+    if (k === 'docs') {
+      wiki.deactivate();
+      if (!st.tree && st.view === 'list') load().catch(() => {});
+    } else wiki.activate(k, o);
+  }
+
+  function openWiki(slug) {
+    if (!visible()) show('kb', { skipLoad: true });
+    setTab('wiki', { slug });
+  }
+  wiki.setOpenWiki(openWiki);
 
   // ---------- 目录 ----------
   function paths() {
@@ -207,6 +254,11 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
   // ---------- 列表与搜索 ----------
   const kindTag = (d) => h('span', { class: `kb-kind k-${d.kind}`, text: KIND[d.kind] ?? d.kind });
   const statusTag = (d) => (STATUS[d.status] ? h('span', { class: `kb-status s-${d.status}`, text: STATUS[d.status] }) : null);
+  const wikiTag = (d) => {
+    if (d.status !== 'ready') return null;
+    const s = st.wikiDocs[d.id] ?? 'none';
+    return h('span', { class: `kb-wiki w-${s}`, text: WIKI_STATE[s] ?? s, title: 'Wiki 状态' });
+  };
   const titleLink = (d, ord) => h('a', { href: '#', class: 'kb-title', text: d.title, onclick: (e) => (e.preventDefault(), open(d.id, ord)) });
 
   async function loadList() {
@@ -250,7 +302,7 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
             h(
               'li',
               { class: 'kb-doc-row' },
-              h('div', { class: 'kb-line' }, kindTag(x.doc), titleLink(x.doc, x.ord), statusTag(x.doc)),
+              h('div', { class: 'kb-line' }, kindTag(x.doc), titleLink(x.doc, x.ord), statusTag(x.doc), wikiTag(x.doc)),
               h('div', { class: 'kb-meta muted', text: [x.doc.path, x.heading].filter(Boolean).join(' › ') }),
               snip(x.snippet),
             ),
@@ -271,7 +323,7 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
           const li = h(
             'li',
             { class: 'kb-doc-row' },
-            h('div', { class: 'kb-line' }, kindTag(d), titleLink(d), statusTag(d)),
+            h('div', { class: 'kb-line' }, kindTag(d), titleLink(d), statusTag(d), wikiTag(d)),
             h('div', { class: 'kb-meta muted', text: `${d.path} · ${day(d.updated_at)}` }),
           );
           dragSrc(li, `kb-doc:${d.id}`);
@@ -303,6 +355,7 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
 
   async function open(id, ord) {
     if (!visible()) show('kb', { skipLoad: true });
+    if (st.tab !== 'docs') setTab('docs');
     st.view = 'doc';
     st.docId = id;
     const seq = ++st.seq;
@@ -364,6 +417,7 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
       editable ? h('button', { type: 'button', class: 'link', text: '编辑', onclick: () => editDoc(doc, body) }) : null,
       h('button', { type: 'button', class: 'link', text: '移动到…', onclick: () => moveDocDialog(doc) }),
       h('button', { type: 'button', class: 'link', text: '删除', onclick: () => deleteDoc(doc) }),
+      ...wikiActions(doc),
     );
     let last = null;
     const blocks = chunks.map((c) => {
@@ -384,6 +438,33 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
       docContent(doc, blocks, ord),
     );
     if (ord != null) document.getElementById(`kb-c-${ord}`)?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+  }
+
+  /** 条目详情里的「编入 Wiki / 重新编入」和「Wiki 摘要页」 */
+  function wikiActions(doc) {
+    if (doc.status !== 'ready') return [];
+    const s = st.wikiDocs[doc.id] ?? 'none';
+    const busy = s === 'queued' || s === 'running';
+    const b = h('button', {
+      type: 'button',
+      class: 'link',
+      text: busy ? WIKI_STATE[s] : s === 'none' ? '编入 Wiki' : '重新编入',
+      onclick: async () => {
+        b.disabled = true;
+        try {
+          await api(`/api/wiki/ingest/${doc.id}`, { method: 'POST' });
+          st.wikiDocs[doc.id] = 'queued';
+          b.textContent = WIKI_STATE.queued;
+          toast('已加入编入队列');
+        } catch (e) {
+          toast(e.message);
+          b.disabled = false;
+        }
+      },
+    });
+    b.disabled = busy;
+    const link = s === 'done' ? h('button', { type: 'button', class: 'link', text: 'Wiki 摘要页', onclick: () => openWiki(`src-${doc.id}`) }) : null;
+    return [b, link];
   }
 
   function editDoc(doc, body) {
@@ -720,8 +801,11 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
   async function load() {
     st.view = 'list';
     st.docId = null;
+    renderTabs();
+    for (const [key] of TABS) $(`kb-pane-${key}`).hidden = key !== st.tab;
+    if (st.tab !== 'docs') wiki.activate(st.tab);
     try {
-      await Promise.all([loadTree(), loadList()]);
+      await Promise.all([loadTree(), wiki.refreshStatus().then(() => loadList())]);
     } catch (e) {
       toast(e.message);
     }
@@ -745,6 +829,7 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
     e.target.value = '';
     upload(files);
   });
+  wiki.mount({ wiki: $('kb-pane-wiki'), ask: $('kb-pane-ask'), lint: $('kb-pane-lint') });
   $('kb-dialog').addEventListener('keydown', (e) => {
     if (e.key === 'Escape') st.cancel?.();
   });
@@ -752,5 +837,5 @@ export function initKb({ h, api, toast, show, openReview, openItem }) {
     if (e.target === $('kb-dialog')) st.cancel?.();
   });
 
-  return { load, open, saveDialog, button };
+  return { load, open, saveDialog, button, openWiki };
 }
