@@ -314,6 +314,96 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX pm_prototypes_review ON pm_prototypes(review_id, n);
   `,
+  // 9：LLM Wiki 知识层。页面软删除；wiki_fts 只收录未删除的页面
+  `
+  CREATE TABLE wiki_pages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    source_doc INTEGER UNIQUE REFERENCES kb_docs(id) ON DELETE SET NULL,
+    edited_by_user INTEGER NOT NULL DEFAULT 0,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    rev INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX wiki_pages_kind ON wiki_pages(kind, updated_at DESC);
+
+  CREATE TABLE wiki_ops (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    doc_id INTEGER,
+    target_op INTEGER,
+    status TEXT NOT NULL DEFAULT 'queued',
+    pages TEXT NOT NULL DEFAULT '[]',
+    note TEXT NOT NULL DEFAULT '',
+    error TEXT,
+    llm_calls INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    finished_at INTEGER
+  );
+  CREATE INDEX wiki_ops_status ON wiki_ops(status, id);
+  CREATE INDEX wiki_ops_created ON wiki_ops(created_at);
+
+  CREATE TABLE wiki_revisions (
+    page_id INTEGER NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+    rev INTEGER NOT NULL,
+    op_id INTEGER REFERENCES wiki_ops(id),
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    body TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (page_id, rev)
+  );
+
+  CREATE TABLE wiki_links (
+    from_page INTEGER NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+    to_slug TEXT NOT NULL,
+    PRIMARY KEY (from_page, to_slug)
+  );
+  CREATE INDEX wiki_links_to ON wiki_links(to_slug);
+
+  CREATE TABLE wiki_cites (
+    page_id INTEGER NOT NULL REFERENCES wiki_pages(id) ON DELETE CASCADE,
+    doc_id INTEGER NOT NULL,
+    ord INTEGER NOT NULL,
+    PRIMARY KEY (page_id, doc_id, ord)
+  );
+  CREATE INDEX wiki_cites_doc ON wiki_cites(doc_id);
+
+  CREATE TABLE wiki_docs (
+    doc_id INTEGER PRIMARY KEY,
+    body_hash TEXT NOT NULL,
+    state TEXT NOT NULL,
+    fails INTEGER NOT NULL DEFAULT 0,
+    ingested_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE wiki_assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    page_id INTEGER REFERENCES wiki_pages(id) ON DELETE SET NULL,
+    mime TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    storage TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE VIRTUAL TABLE wiki_fts USING fts5(title, summary, body, tokenize='trigram');
+  CREATE TRIGGER wiki_pages_ai AFTER INSERT ON wiki_pages WHEN new.deleted = 0 BEGIN
+    INSERT INTO wiki_fts(rowid, title, summary, body) VALUES (new.id, new.title, new.summary, new.body);
+  END;
+  CREATE TRIGGER wiki_pages_ad AFTER DELETE ON wiki_pages BEGIN
+    DELETE FROM wiki_fts WHERE rowid = old.id;
+  END;
+  CREATE TRIGGER wiki_pages_au AFTER UPDATE ON wiki_pages BEGIN
+    DELETE FROM wiki_fts WHERE rowid = old.id;
+    INSERT INTO wiki_fts(rowid, title, summary, body) SELECT new.id, new.title, new.summary, new.body WHERE new.deleted = 0;
+  END;
+  `,
 ];
 
 export type DB = DatabaseSync;

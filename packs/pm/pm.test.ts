@@ -207,7 +207,7 @@ test('多轮：迁移把旧的已完成评审回填为 v1', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-pm-mig-'));
   const file = path.join(dir, 't.db');
   let db = openDb(file);
-  db.exec(`DROP TABLE IF EXISTS pm_prototypes; DROP TABLE IF EXISTS kb_fts; DROP TABLE IF EXISTS kb_chunks; DROP TABLE IF EXISTS kb_docs; DROP TABLE IF EXISTS kb_folders; DROP TABLE pm_attachments; DROP TRIGGER pm_reviews_hi; DROP TRIGGER pm_reviews_hd; DROP TRIGGER pm_versions_hi; DROP TRIGGER pm_messages_hi; DROP TRIGGER pm_messages_hu;
+  db.exec(`DROP TABLE IF EXISTS wiki_fts; DROP TABLE IF EXISTS wiki_assets; DROP TABLE IF EXISTS wiki_docs; DROP TABLE IF EXISTS wiki_cites; DROP TABLE IF EXISTS wiki_links; DROP TABLE IF EXISTS wiki_revisions; DROP TABLE IF EXISTS wiki_ops; DROP TABLE IF EXISTS wiki_pages; DROP TABLE IF EXISTS pm_prototypes; DROP TABLE IF EXISTS kb_fts; DROP TABLE IF EXISTS kb_chunks; DROP TABLE IF EXISTS kb_docs; DROP TABLE IF EXISTS kb_folders; DROP TABLE pm_attachments; DROP TRIGGER pm_reviews_hi; DROP TRIGGER pm_reviews_hd; DROP TRIGGER pm_versions_hi; DROP TRIGGER pm_messages_hi; DROP TRIGGER pm_messages_hu;
     DROP TABLE events; DROP TABLE memories; DROP TABLE profile; DROP TABLE memory_changes; DROP TABLE history_fts;
     ALTER TABLE items DROP COLUMN relevance; ALTER TABLE items DROP COLUMN relevance_zh; ALTER TABLE pm_reviews DROP COLUMN context_refs;`);
   db.exec('DROP TABLE IF EXISTS pm_messages; DROP TABLE IF EXISTS pm_versions; PRAGMA user_version = 3;');

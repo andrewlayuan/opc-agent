@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { openDb } from '../../packages/core/db.ts';
 
 const V5_DROP = `
-  DROP TABLE IF EXISTS pm_prototypes; DROP TABLE IF EXISTS kb_fts; DROP TABLE IF EXISTS kb_chunks; DROP TABLE IF EXISTS kb_docs; DROP TABLE IF EXISTS kb_folders;
+  DROP TABLE IF EXISTS wiki_fts; DROP TABLE IF EXISTS wiki_assets; DROP TABLE IF EXISTS wiki_docs; DROP TABLE IF EXISTS wiki_cites; DROP TABLE IF EXISTS wiki_links; DROP TABLE IF EXISTS wiki_revisions; DROP TABLE IF EXISTS wiki_ops; DROP TABLE IF EXISTS wiki_pages; DROP TABLE IF EXISTS pm_prototypes; DROP TABLE IF EXISTS kb_fts; DROP TABLE IF EXISTS kb_chunks; DROP TABLE IF EXISTS kb_docs; DROP TABLE IF EXISTS kb_folders;
   DROP TABLE IF EXISTS pm_attachments;
   DROP TRIGGER IF EXISTS pm_reviews_hi; DROP TRIGGER IF EXISTS pm_versions_hi; DROP TRIGGER IF EXISTS pm_messages_hi;
   DROP TRIGGER IF EXISTS pm_messages_hu; DROP TRIGGER IF EXISTS pm_reviews_hd;
@@ -36,7 +36,7 @@ test('迁移 5：新表、profile 单行、history_fts 触发器与回填', () =
   const count = (where: string) => Number(get(`SELECT count(*) AS n FROM ${where}`).n);
   const run = (sql: string) => db.prepare(sql).run();
 
-  assert.equal(get('PRAGMA user_version').user_version, 8);
+  assert.equal(get('PRAGMA user_version').user_version, 9);
   assert.deepEqual({ ...get('SELECT id, content, manual FROM profile') }, { id: 1, content: '', manual: 0 });
   for (const t of ['events', 'memories', 'memory_changes']) assert.equal(count(t), 0);
   assert.equal(count('history_fts WHERE review_id = 1'), 3);
