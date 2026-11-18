@@ -1,7 +1,7 @@
 // Wiki 存储：页面、版本、链接、引用、操作记录。写函数不自己开事务，调用方用 tx() 包起来
 import type { DB } from '../../packages/core/db.ts';
 import { ftsSegments } from '../memory/context.ts';
-import { normalizeBody, parseBody, slugify } from './parse.ts';
+import { normalizeBody, parseBody, slugify, titleKeys } from './parse.ts';
 import type { Cite } from './parse.ts';
 import { WIKI_LIMITS, WikiError, isPageKind } from './types.ts';
 import type { OpKind, OpStatus, PageKind } from './types.ts';
@@ -191,11 +191,28 @@ function addRevision(db: DB, pageId: number, rev: number, opId: number, p: { tit
 
 const livePages = (db: DB) => Number((db.prepare('SELECT count(*) AS n FROM wiki_pages WHERE deleted = 0').get() as { n: number }).n);
 
+/** 链接目标解析：已有页面或同批页面的 slug 原样保留；否则按标题匹配（同批页面优先），都匹配不到时保持原样（缺页） */
+function linkResolver(db: DB, drafts: PageDraft[]): (slug: string) => string {
+  const slugs = new Set<string>();
+  const byTitle = new Map<string, string>();
+  const add = (slug: string, title: string, override: boolean) => {
+    slugs.add(slug);
+    for (const k of titleKeys(title)) if (override || !byTitle.has(k)) byTitle.set(k, slug);
+  };
+  for (const p of db.prepare('SELECT slug, title FROM wiki_pages WHERE deleted = 0 ORDER BY id').all() as { slug: string; title: string }[]) add(p.slug, p.title, false);
+  for (const d of drafts) {
+    const slug = slugify(String(d.slug ?? ''));
+    if (slug) add(slug, String(d.title ?? ''), true);
+  }
+  return (s) => (slugs.has(s) ? s : (byTitle.get(s) ?? s));
+}
+
 /** 写入一批页面（新建、更新或恢复已删除页）。同一批里重复的 slug 合并为一条改动记录 */
 export function writePages(db: DB, opId: number, drafts: PageDraft[], o: { byUser?: boolean; now?: number } = {}): { changes: PageChange[]; dropped: string[] } {
   const now = o.now ?? Date.now();
   const changes = new Map<string, PageChange>();
   const dropped: string[] = [];
+  const resolve = linkResolver(db, drafts);
   for (const d of drafts) {
     if (!isPageKind(d.kind)) throw new WikiError(400, '页面类型不合法');
     const slug = slugify(String(d.slug ?? ''));
@@ -203,7 +220,7 @@ export function writePages(db: DB, opId: number, drafts: PageDraft[], o: { byUse
     const title = clip(String(d.title ?? '').replace(/\s+/g, ' ').trim(), WIKI_LIMITS.titleChars);
     if (!title) throw new WikiError(400, '页面标题不能为空');
     const summary = clip(String(d.summary ?? '').replace(/\s+/g, ' ').trim(), WIKI_LIMITS.summaryChars);
-    const norm = normalizeBody(String(d.body ?? '').replace(/\r\n?/g, '\n'), (doc, ord) => citeValid(db, doc, ord));
+    const norm = normalizeBody(String(d.body ?? '').replace(/\r\n?/g, '\n'), (doc, ord) => citeValid(db, doc, ord), resolve);
     dropped.push(...norm.dropped);
     let body = norm.body;
     if (cp(body).length > WIKI_LIMITS.bodyChars) body = clip(body, WIKI_LIMITS.bodyChars) + TRUNC_NOTE;

@@ -145,3 +145,21 @@ test('listPages：按 kind 过滤；短词退回 LIKE', () => {
   assert.deepEqual(listPages(db, { q: 'AI' }).map((p) => p.slug), ['rag']);
   done();
 });
+
+test('writePages：[[标题]] 按已有页面或同批页面的标题解析为 slug（含去掉括号说明的标题）；解析不到的保持原样', () => {
+  const { db, done } = tmpWikiDb();
+  write(db, [draft('reasoning-models', '定义', 'concept', '推理模型与测试时计算（Test-time Compute）')]);
+  const r = write(db, [
+    draft('map', '见 [[推理模型与测试时计算]]、[[推理模型与测试时计算（Test-time Compute）|这里]]、[[上下文工程总览]] 和 [[不存在的页]]', 'overview', '总览'),
+    draft('context-engineering', '正文', 'concept', '上下文工程总览'),
+  ]);
+  assert.deepEqual(r.dropped, []);
+  const p = getPage(db, 'map')!;
+  assert.equal(p.body, '见 [[reasoning-models|推理模型与测试时计算]]、[[reasoning-models|这里]]、[[context-engineering|上下文工程总览]] 和 [[不存在的页]]');
+  assert.deepEqual(
+    (db.prepare('SELECT to_slug FROM wiki_links WHERE from_page = ? ORDER BY to_slug').all(p.id) as { to_slug: string }[]).map((x) => x.to_slug),
+    ['context-engineering', 'reasoning-models', '不存在的页'].sort(),
+  );
+  assert.deepEqual(getPage(db, 'reasoning-models')!.backlinks, [{ slug: 'map', title: '总览' }]);
+  done();
+});

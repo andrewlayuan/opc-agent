@@ -91,3 +91,18 @@ test('runLint：模型调用失败时程序检查结果照常写入，op 为 don
   assert.match(note.modelError ?? '', /模型检查失败/);
   done();
 });
+
+test('runLint：缺页其实是已有页面的标题时，自动修复把链接改成该页 slug，issue 标记已修复', async () => {
+  const { db, done } = tmpWikiDb();
+  put(db, [pg('map', '总览', '见 [[推理模型]]', 'overview')]);
+  put(db, [pg('reasoning-models', '推理模型', '定义 [[map]]')]);
+  assert.ok(lintChecks(db).some((i) => i.type === 'missing' && i.target === '推理模型'));
+  const op = createOp(db, 'lint', { status: 'running' });
+  await runLint(db, stubLlm([JSON.stringify({ conflicts: [] }), JSON.stringify({ gaps: [] })]), op, { maxCalls: 2 });
+  const note = JSON.parse(getOp(db, op)!.note) as { fixOp: number; issues: { type: string; target?: string; fixed?: boolean }[] };
+  assert.equal(getPage(db, 'map')!.body, '见 [[reasoning-models|推理模型]]');
+  assert.ok(note.issues.find((i) => i.type === 'missing' && i.target === '推理模型')?.fixed);
+  assert.ok(note.fixOp > 0);
+  assert.ok(!lintChecks(db).some((i) => i.type === 'missing'));
+  done();
+});

@@ -38,11 +38,22 @@ export function parseBody(body: string): { links: string[]; cites: Cite[]; asset
   return { links: [...links], cites, assets };
 }
 
-/** 链接改写为 [[slug]] 或 [[slug|显示文字]]；删除 validCite 不认可的引用 */
-export function normalizeBody(body: string, validCite: (doc: number, ord: number) => boolean): { body: string; links: string[]; cites: Cite[]; dropped: string[] } {
+/** 标题的匹配键：完整标题，以及去掉括号说明后的标题（「推理模型（Test-time）」也能用「推理模型」链接到） */
+export function titleKeys(title: string): string[] {
+  const keys = [slugify(title), slugify(title.replace(/[（(][^（）()]*[)）]/g, ''))];
+  return [...new Set(keys.filter(Boolean))];
+}
+
+/** 链接改写为 [[slug]] 或 [[slug|显示文字]]；resolve 把按标题写的链接映射到已有页面的 slug；删除 validCite 不认可的引用 */
+export function normalizeBody(
+  body: string,
+  validCite: (doc: number, ord: number) => boolean,
+  resolve: (slug: string) => string = (s) => s,
+): { body: string; links: string[]; cites: Cite[]; dropped: string[] } {
   const dropped: string[] = [];
   let out = body.replace(LINK_RE, (_all, target: string, label: string | undefined) => {
-    const s = slugify(target);
+    const raw = slugify(target);
+    const s = raw ? resolve(raw) : raw;
     const text = (label ?? target).trim();
     if (!s) return text;
     return text === s ? `[[${s}]]` : `[[${s}|${text}]]`;

@@ -3,7 +3,7 @@
 import type { DB } from '../../packages/core/db.ts';
 import type { Llm } from '../../packages/core/llm.ts';
 import { Calls, str } from './ingest.ts';
-import { ASSET_RE, CITE_RE, LINK_RE } from './parse.ts';
+import { ASSET_RE, CITE_RE, LINK_RE, titleKeys } from './parse.ts';
 import { conflictPrompt, gapPrompt } from './prompts.ts';
 import { citeValid, createOp, finishOp, tx, writePages } from './store.ts';
 import type { PageChange, PageDraft } from './store.ts';
@@ -133,6 +133,15 @@ export function lintChecks(db: DB): LintIssue[] {
 function autoFix(db: DB, issues: LintIssue[]): number | null {
   const pages = new Map(livePages(db).map((p) => [p.slug, p]));
   const bodies = new Map<string, string>();
+  // 缺页其实是已有页面的标题：重新保存链到它的页面，写入时会把链接解析成该页 slug
+  const byTitle = new Map<string, string>();
+  for (const p of pages.values()) for (const k of titleKeys(p.title)) if (!byTitle.has(k)) byTitle.set(k, p.slug);
+  for (const i of issues) {
+    if (i.type !== 'missing' || !i.target || !byTitle.has(i.target)) continue;
+    const from = db.prepare('SELECT p.slug FROM wiki_links l JOIN wiki_pages p ON p.id = l.from_page AND p.deleted = 0 WHERE l.to_slug = ?').all(i.target) as { slug: string }[];
+    for (const f of from) if (pages.has(f.slug) && !bodies.has(f.slug)) bodies.set(f.slug, pages.get(f.slug)!.body);
+    if (from.length) i.fixed = true;
+  }
   for (const i of issues) {
     if (i.type !== 'missing_link' && i.type !== 'broken_cite') continue;
     const p = pages.get(i.slug!);
@@ -156,7 +165,7 @@ function autoFix(db: DB, issues: LintIssue[]): number | null {
       return { slug, kind: p.kind, title: p.title, summary: p.summary, body };
     });
     const { changes } = writePages(db, opId, drafts);
-    finishOp(db, opId, { status: 'done', pages: changes, note: `体检自动修复 ${changes.length} 页（补链接、删除失效出处）` });
+    finishOp(db, opId, { status: 'done', pages: changes, note: `体检自动修复 ${changes.length} 页（补链接、按标题修正链接、删除失效出处）` });
     return opId;
   });
 }
