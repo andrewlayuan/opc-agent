@@ -125,6 +125,14 @@ test('产品顾问：多选合并、去重、上限与模式名称', () => {
   done();
 });
 
+test('产品顾问：catalog 带中文名 label，没有中文名时用英文名', () => {
+  const { advisor, done } = setup({});
+  const c = advisor.catalog();
+  assert.equal(c.find((s) => s.name === 'swot-analysis')?.label, 'SWOT 分析');
+  assert.ok(c.every((s) => s.label && s.label !== s.name));
+  done();
+});
+
 test('产品顾问：多框架组合时按数量均分框架说明长度，并放宽篇幅', async () => {
   let system = '';
   let user = '';

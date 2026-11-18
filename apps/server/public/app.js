@@ -878,6 +878,9 @@ function toggleSkill(name) {
   pmTry({ ...pm.sel, skills: [...pm.sel.skills, name] });
 }
 
+/** 框架中文名（服务端 catalog 提供），找不到时显示英文名 */
+const skillLabel = (name) => pm.meta?.skills.find((s) => s.name === name)?.label || name;
+
 function renderPmPicker() {
   const merged = new Set(pmMerged());
   const auto = merged.size === 0;
@@ -888,7 +891,7 @@ function renderPmPicker() {
         type: 'button',
         class: `chip${on ? ' on' : ''}`,
         'aria-pressed': on ? 'true' : 'false',
-        title: p.id === 'auto' ? '不选任何方案时，按内容自动挑选 2-3 个框架' : `${p.label}\n框架：${p.skills.join(' · ')}`,
+        title: p.id === 'auto' ? '不选任何方案时，按内容自动挑选 2-3 个框架' : `${p.label}\n框架：${p.skills.map(skillLabel).join('、')}`,
         text: p.short,
         onclick: () => togglePreset(p.id),
       });
@@ -915,10 +918,9 @@ function renderPmPicker() {
               type: 'button',
               class: `chip${own ? ' on' : ''}${via ? ' via' : ''}`,
               'aria-pressed': own ? 'true' : 'false',
-              title: via ? `已包含在所选方案中\n${s.description}` : s.description,
-              text: s.name,
+              title: `${s.name}\n${via ? '已包含在所选方案中\n' : ''}${s.description}`,
               onclick: () => toggleSkill(s.name),
-            });
+            }, s.label || s.name, s.label && s.label !== s.name ? h('span', { class: 'chip-en', text: s.name }) : null);
           }),
         ),
       ),
@@ -929,7 +931,7 @@ function renderPmPicker() {
   const list = [...merged];
   $('pm-hint').textContent = auto
     ? '未选择方案：将根据你的描述自动挑选 2-3 个最合适的框架。'
-    : `将组合 ${list.length}/${pm.meta.maxSelected} 个框架：${list.join(' · ')}${list.length === 1 && list[0] === 'create-prd' ? '（输出 PRD 初稿）' : ''}`;
+    : `将组合 ${list.length}/${pm.meta.maxSelected} 个框架：${list.map(skillLabel).join('、')}${list.length === 1 && list[0] === 'create-prd' ? '（输出 PRD 初稿）' : ''}`;
 }
 
 const SOURCE_LABEL = { ai_initial: '首版', ai_revise: 'AI 改写', manual: '手动' };
@@ -946,7 +948,7 @@ function renderHead(r) {
     h('div', { class: 'meta' }, h('span', { class: 'pm-mode', text: r.mode_label }), h('span', { text: '·' }), h('span', { text: new Date(r.created_at).toLocaleString('zh-CN') }), h('span', { text: '·' }), h('span', { text: `#${r.id}` })),
     h('details', { class: 'pm-input' }, h('summary', { text: r.input.length > 60 ? `${r.input.slice(0, 60)}…` : r.input }), h('div', { text: r.input })),
     attList(r.attachments),
-    r.skills.length ? h('div', { class: 'tags' }, r.skills.map((s) => h('span', { class: 'tag', text: s }))) : null,
+    r.skills.length ? h('div', { class: 'tags' }, r.skills.map((s) => h('span', { class: 'tag', text: skillLabel(s), title: s }))) : null,
     r.status === 'done'
       ? h(
           'div',

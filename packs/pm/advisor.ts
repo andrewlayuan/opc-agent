@@ -6,7 +6,7 @@ import { placeholderInput, renderAttachments } from './attach-prompt.ts';
 import type { AttText } from './attach-prompt.ts';
 import { AttachmentError, toView } from './attachments.ts';
 import type { AttachmentRow, AttachmentStore, AttachmentView } from './attachments.ts';
-import { PLUGIN_LABELS } from './skills.ts';
+import { PLUGIN_LABELS, skillLabel } from './skills.ts';
 import { TURN_PROTOCOL, buildTurnMessages, normMode, parseTurn, pickHistory } from './turn.ts';
 import type { TurnMode, TurnMsg } from './turn.ts';
 import type { PmSkill } from './skills.ts';
@@ -264,8 +264,8 @@ export class PmAdvisor {
     );
   }
 
-  catalog(): { name: string; plugin: string; group: string; description: string }[] {
-    return this.skills.map((s) => ({ name: s.name, plugin: s.plugin, group: PLUGIN_LABELS[s.plugin] ?? s.plugin, description: s.description }));
+  catalog(): { name: string; label: string; plugin: string; group: string; description: string }[] {
+    return this.skills.map((s) => ({ name: s.name, label: skillLabel(s.name), plugin: s.plugin, group: PLUGIN_LABELS[s.plugin] ?? s.plugin, description: s.description }));
   }
 
   /** 把多选的方案与框架合并成去重的框架清单（保持选择顺序）；超出上限直接报错 */
