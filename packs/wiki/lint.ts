@@ -5,7 +5,7 @@ import type { Llm } from '../../packages/core/llm.ts';
 import { Calls, str } from './ingest.ts';
 import { ASSET_RE, CITE_RE, LINK_RE, titleKeys } from './parse.ts';
 import { conflictPrompt, gapPrompt } from './prompts.ts';
-import { citeValid, createOp, finishOp, tx, writePages } from './store.ts';
+import { citeValid, createOp, docTitleTargets, finishOp, tx, writePages } from './store.ts';
 import type { PageChange, PageDraft } from './store.ts';
 import { WIKI_LIMITS } from './types.ts';
 import type { PageKind } from './types.ts';
@@ -136,6 +136,7 @@ function autoFix(db: DB, issues: LintIssue[]): number | null {
   // 缺页其实是已有页面的标题：重新保存链到它的页面，写入时会把链接解析成该页 slug
   const byTitle = new Map<string, string>();
   for (const p of pages.values()) for (const k of titleKeys(p.title)) if (!byTitle.has(k)) byTitle.set(k, p.slug);
+  for (const t of docTitleTargets(db)) for (const k of titleKeys(t.title)) if (!byTitle.has(k)) byTitle.set(k, t.slug);
   for (const i of issues) {
     if (i.type !== 'missing' || !i.target || !byTitle.has(i.target)) continue;
     const from = db.prepare('SELECT p.slug FROM wiki_links l JOIN wiki_pages p ON p.id = l.from_page AND p.deleted = 0 WHERE l.to_slug = ?').all(i.target) as { slug: string }[];

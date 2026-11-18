@@ -107,6 +107,18 @@ test('runLint：缺页其实是已有页面的标题时，自动修复把链接�
   done();
 });
 
+test('runLint：缺页其实是某份资料的原标题时，自动修复把链接改成该资料的摘要页', async () => {
+  const { db, done } = tmpWikiDb();
+  const d = seedDoc(db, 'Agent知识全景图谱_2026', '## 一\n内容');
+  put(db, [pg('map', '总览', '见 [[Agent知识全景图谱_2026]]', 'overview')]);
+  put(db, [{ ...pg(`src-${d}`, 'Agent 知识全景图谱（2026.09 版）（资料摘要）', '摘要 [[map]]', 'source'), sourceDoc: d }]);
+  const op = createOp(db, 'lint', { status: 'running' });
+  await runLint(db, stubLlm([JSON.stringify({ conflicts: [] }), JSON.stringify({ gaps: [] })]), op, { maxCalls: 2 });
+  assert.equal(getPage(db, 'map')!.body, `见 [[src-${d}|Agent知识全景图谱_2026]]`);
+  assert.ok(!lintChecks(db).some((i) => i.type === 'missing'));
+  done();
+});
+
 test('runLint：已被自动修复的缺页不再交给模型做缺口分析', async () => {
   const { db, done } = tmpWikiDb();
   put(db, [pg('map', '总览', '见 [[推理模型]] 和 [[真缺页]]', 'overview')]);

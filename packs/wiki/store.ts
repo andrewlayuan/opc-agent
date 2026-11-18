@@ -191,7 +191,14 @@ function addRevision(db: DB, pageId: number, rev: number, opId: number, p: { tit
 
 const livePages = (db: DB) => Number((db.prepare('SELECT count(*) AS n FROM wiki_pages WHERE deleted = 0').get() as { n: number }).n);
 
-/** 链接目标解析：已有页面或同批页面的 slug 原样保留；否则按标题匹配（同批页面优先），都匹配不到时保持原样（缺页） */
+/** 资料摘要页的资料原标题（模型常用资料标题而不是摘要页标题写链接） */
+export function docTitleTargets(db: DB): { slug: string; title: string }[] {
+  return db
+    .prepare('SELECT p.slug, d.title FROM wiki_pages p JOIN kb_docs d ON d.id = p.source_doc WHERE p.deleted = 0 AND p.kind = \'source\' ORDER BY p.id')
+    .all() as { slug: string; title: string }[];
+}
+
+/** 链接目标解析：已有页面或同批页面的 slug 原样保留；否则按标题匹配（同批页面优先），再按资料原标题匹配摘要页，都匹配不到时保持原样（缺页） */
 function linkResolver(db: DB, drafts: PageDraft[]): (slug: string) => string {
   const slugs = new Set<string>();
   const byTitle = new Map<string, string>();
@@ -203,6 +210,13 @@ function linkResolver(db: DB, drafts: PageDraft[]): (slug: string) => string {
   for (const d of drafts) {
     const slug = slugify(String(d.slug ?? ''));
     if (slug) add(slug, String(d.title ?? ''), true);
+  }
+  for (const t of docTitleTargets(db)) add(t.slug, t.title, false);
+  const docTitle = db.prepare('SELECT title FROM kb_docs WHERE id = ?');
+  for (const d of drafts) {
+    const slug = slugify(String(d.slug ?? ''));
+    const doc = d.kind === 'source' && d.sourceDoc != null ? (docTitle.get(d.sourceDoc) as { title: string } | undefined) : undefined;
+    if (slug && doc) add(slug, doc.title, false);
   }
   return (s) => (slugs.has(s) ? s : (byTitle.get(s) ?? s));
 }

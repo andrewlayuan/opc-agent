@@ -163,3 +163,16 @@ test('writePages：[[标题]] 按已有页面或同批页面的标题解析为 s
   assert.deepEqual(getPage(db, 'reasoning-models')!.backlinks, [{ slug: 'map', title: '总览' }]);
   done();
 });
+
+test('writePages：[[资料原标题]] 解析为该资料的摘要页（摘要页标题被改写过也能匹配，含同批摘要页）', () => {
+  const { db, done } = tmpWikiDb();
+  const a = seedDoc(db, 'Agent知识全景图谱_2026', '## 一\n内容');
+  const b = seedDoc(db, '调研报告', '## 一\n内容');
+  write(db, [{ ...draft(`src-${a}`, '摘要', 'source', 'Agent 知识全景图谱（2026.09 版）（资料摘要）'), sourceDoc: a }]);
+  write(db, [
+    draft('map', '见 [[Agent知识全景图谱_2026]]、[[agent知识全景图谱-2026|图谱]] 和 [[调研报告]]', 'overview', '总览'),
+    { ...draft(`src-${b}`, '摘要', 'source', '某调研（资料摘要）'), sourceDoc: b },
+  ]);
+  assert.equal(getPage(db, 'map')!.body, `见 [[src-${a}|Agent知识全景图谱_2026]]、[[src-${a}|图谱]] 和 [[src-${b}|调研报告]]`);
+  done();
+});
