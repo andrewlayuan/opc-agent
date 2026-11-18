@@ -110,6 +110,7 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     parts.push(`今日调用 ${s.usedToday}/${s.limit}`);
     if (!s.enabled) parts.push('未配置模型');
     st.el.status.textContent = parts.join(' · ');
+    st.el.status.classList.toggle('busy', Boolean(s.running));
   }
 
   /** 拉取队列状态；失败时静默返回 null（后台轮询不打扰用户） */
@@ -146,35 +147,61 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     const side = h(
       'aside',
       { class: 'wiki-side' },
-      status,
-      h('div', { class: 'wiki-side-bar' }, h('button', { type: 'button', class: 'link', text: '知识图谱', onclick: goHome }), h('span', { class: 'wiki-export-box' }, scope, exp)),
       q,
+      home,
       list,
+      h(
+        'div',
+        { class: 'wiki-side-foot' },
+        h('div', { class: 'wiki-legend wiki-side-legend muted' }, KINDS.map(([k, label]) => h('span', { class: `wiki-dot k-${k}`, text: label }))),
+        h('div', { class: 'wiki-export-row' }, scope, exp),
+        status,
+      ),
     );
     put(el, h('div', { class: 'wiki-layout' }, side, main, right));
-    st.el = { status, list, main, right };
+    st.el = { status, list, main, right, home };
   }
 
   async function loadPages() {
     const data = await act(() => api(`/api/wiki/pages${st.q ? `?q=${enc(st.q)}` : ''}`));
     if (!data || !st.el) return;
-    const groups = KINDS.map(([k, label]) => [label, data.pages.filter((p) => p.kind === k)]).filter(([, ps]) => ps.length);
     if (!data.pages.length) {
       put(st.el.list, h('p', { class: 'muted wiki-empty-side', text: st.q ? '没有找到相关页面' : '还没有页面' }));
       return;
     }
     put(st.el.list, 
-      ...groups.map(([label, ps]) =>
+      ...pageGroups(data).map(([label, ps]) =>
         h(
           'div',
           { class: 'wiki-group' },
-          h('div', { class: 'wiki-group-title' }, h('span', { text: label }), h('span', { class: 'kb-count', text: String(ps.length) })),
-          h(
-            'ul',
-            {},
-            ps.map((p) => h('li', { class: p.slug === st.slug && st.view !== 'home' ? 'on' : '' }, h('a', { href: '#', text: p.title, title: p.summary || p.title, onclick: (e) => (e.preventDefault(), openPage(p.slug)) }))),
-          ),
+          h('div', { class: 'wiki-group-title' }, h('span', { class: 'wiki-group-name', text: label, title: label }), h('span', { class: 'kb-count', text: String(ps.length) })),
+          h('ul', {}, ps.map(pageItem)),
         ),
+      ),
+    );
+  }
+
+  /** 有总览页时按主题分组（总览页即主题，组内按页面类型排列，搜索时保留相关度顺序），没有总览页时按类型分组 */
+  function pageGroups(data) {
+    const topics = data.topics ?? [];
+    if (!topics.length) return KINDS.map(([k, label]) => [label, data.pages.filter((p) => p.kind === k)]).filter(([, ps]) => ps.length);
+    const rank = (k) => KINDS.findIndex(([x]) => x === k);
+    const sorted = (ps) => (st.q ? ps : [...ps].sort((x, y) => rank(x.kind) - rank(y.kind)));
+    const groups = topics.map((t) => [t.title, sorted(data.pages.filter((p) => p.topic === t.slug))]);
+    groups.push(['其他', sorted(data.pages.filter((p) => !p.topic))]);
+    return groups.filter(([, ps]) => ps.length);
+  }
+
+  function pageItem(p) {
+    const kind = KIND[p.kind] ?? p.kind;
+    return h(
+      'li',
+      { class: p.slug === st.slug && st.view !== 'home' ? 'on' : '' },
+      h(
+        'a',
+        { href: '#', title: `${kind}：${p.summary || p.title}`, onclick: (e) => (e.preventDefault(), openPage(p.slug)) },
+        h('span', { class: `wiki-dot k-${p.kind}`, 'aria-label': kind }),
+        h('span', { class: 'wiki-item-title', text: p.title }),
       ),
     );
   }
@@ -197,7 +224,7 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
       x[i] = W / 2 + r * Math.cos(i * 2.399963);
       y[i] = H / 2 + r * Math.sin(i * 2.399963);
     }
-    const k = Math.sqrt((W * H) / Math.max(1, n)) * 0.5;
+    const k = Math.sqrt((W * H) / Math.max(1, n)) * 0.6;
     const dx = new Float64Array(n);
     const dy = new Float64Array(n);
     for (let it = 0; it < GRAPH_ITERS; it++) {
@@ -226,12 +253,29 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
       }
       const temp = 1 + 24 * (1 - it / GRAPH_ITERS);
       for (let i = 0; i < n; i++) {
-        dx[i] += (W / 2 - x[i]) * 0.05;
-        dy[i] += (H / 2 - y[i]) * 0.05;
+        dx[i] += W / 2 - x[i];
+        dy[i] += H / 2 - y[i];
         const len = Math.sqrt(dx[i] * dx[i] + dy[i] * dy[i]) || 1;
         const step = Math.min(len, temp);
         x[i] = Math.min(W - 20, Math.max(20, x[i] + (dx[i] / len) * step));
         y[i] = Math.min(H - 20, Math.max(20, y[i] + (dy[i] / len) * step));
+      }
+    }
+    // 整体缩放并居中，右侧给节点标签留出空间；页面少时最多放大 1.6 倍
+    if (n) {
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (let i = 0; i < n; i++) {
+        x0 = Math.min(x0, x[i]);
+        x1 = Math.max(x1, x[i]);
+        y0 = Math.min(y0, y[i]);
+        y1 = Math.max(y1, y[i]);
+      }
+      const padX = 40, label = 160, padY = 36;
+      const sc = Math.min(1.6, (W - padX - label) / Math.max(1, x1 - x0), (H - 2 * padY) / Math.max(1, y1 - y0));
+      const cx = padX + (W - padX - label) / 2;
+      for (let i = 0; i < n; i++) {
+        x[i] = cx + (x[i] - (x0 + x1) / 2) * sc;
+        y[i] = H / 2 + (y[i] - (y0 + y1) / 2) * sc;
       }
     }
     return { nodes, edges, x, y };
@@ -251,7 +295,8 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
       const title = svg('title');
       title.textContent = `${nd.title}（${KIND[nd.kind] ?? nd.kind}，${nd.backlinks} 个反向链接）`;
       const label = svg('text', { class: 'wiki-node-label', x: (x[i] + r + 3).toFixed(1), y: (y[i] + 4).toFixed(1) });
-      label.textContent = nd.title;
+      const chars = [...nd.title];
+      label.textContent = chars.length > 12 ? `${chars.slice(0, 12).join('')}…` : nd.title;
       const node = svg('g', { class: `wiki-node k-${nd.kind}`, role: 'button', tabindex: '0' }, svg('circle', { cx: x[i].toFixed(1), cy: y[i].toFixed(1), r: r.toFixed(1) }), label, title);
       node.addEventListener('click', () => {
         if (!dragged) openPage(nd.slug);
@@ -310,6 +355,8 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
   async function goHome() {
     st.view = 'home';
     st.slug = null;
+    st.el.home.classList.add('on');
+    for (const li of st.el.list.querySelectorAll?.('li.on') ?? []) li.classList.remove('on');
     const seq = ++st.seq;
     put(st.el.right, );
     put(st.el.main, h('p', { class: 'muted', text: '正在加载图谱…' }));
@@ -326,6 +373,7 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
   async function openPage(slug) {
     st.view = 'page';
     st.slug = slug;
+    st.el.home.classList.remove('on');
     const seq = ++st.seq;
     try {
       const { page } = await api(pageUrl(slug));
@@ -347,6 +395,22 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     );
   }
 
+  /** 引用按资料分组；小节只显示标题路径的最后一级（完整路径放在悬停提示里），同名小节只列一次，没有小标题时显示段落序号 */
+  function citeGroups(cites) {
+    const groups = new Map();
+    for (const c of cites) {
+      let g = groups.get(c.doc);
+      if (!g) groups.set(c.doc, (g = { doc: c.doc, title: c.title || `资料 ${c.doc}`, items: [], seen: new Set() }));
+      const path = String(c.heading || '');
+      const label = path.split(' › ').at(-1).trim() || `第 ${c.ord + 1} 段`;
+      const key = `${label}\u0000${c.valid ? 1 : 0}`;
+      if (g.seen.has(key)) continue;
+      g.seen.add(key);
+      g.items.push({ ...c, label, path: path || label });
+    }
+    return [...groups.values()];
+  }
+
   function renderPage(page) {
     const titles = new Map((page.links ?? []).map((l) => [l.slug, l.title]));
     const cites = new Map((page.cites ?? []).map((c) => [`${c.doc}:${c.ord}`, c]));
@@ -356,37 +420,55 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
         'div',
         { class: 'wiki-page-head' },
         h('h2', { class: 'kb-doc-title', text: page.title }),
-        h('div', { class: 'kb-meta muted' }, h('span', { class: `kb-kind wiki-kind k-${page.kind}`, text: KIND[page.kind] ?? page.kind }), page.summary ? h('span', { text: page.summary }) : null),
+        h(
+          'div',
+          { class: 'wiki-page-meta' },
+          h('span', { class: `kb-kind wiki-kind k-${page.kind}`, text: KIND[page.kind] ?? page.kind }),
+          page.topic && page.topic.slug !== page.slug ? h('button', { type: 'button', class: 'link wiki-topic', text: `主题：${page.topic.title}`, title: '打开主题总览', onclick: () => openPage(page.topic.slug) }) : null,
+          h('span', { class: 'muted', text: `第 ${page.rev} 版 · ${when(page.updated_at)}${page.edited_by_user ? ' · 人工改过' : ''}` }),
+        ),
+        page.summary ? h('p', { class: 'wiki-summary', text: page.summary }) : null,
       ),
       h('div', { class: 'brief wiki-body' }, ...renderMarkdown(page.body || '（空页面）', [], mdOpts(titles, cites))),
     );
-    const linkList = (items, empty) => (items.length ? h('ul', { class: 'wiki-refs' }, items) : h('p', { class: 'muted', text: empty }));
     const exportHref = `/api/wiki/export?scope=${enc(`page:${page.slug}`)}`;
+    const backs = page.backlinks ?? [];
+    const srcs = citeGroups(page.cites ?? []);
+    const sec = (title, n, body) => h('section', { class: 'wiki-aside-sec' }, h('h4', { class: 'wiki-aside-title' }, h('span', { text: title }), n ? h('span', { class: 'kb-count', text: String(n) }) : null), body);
+    const cite = (c) =>
+      h('li', { class: c.valid ? '' : 'wiki-cite-bad' }, h('a', { href: '#', text: c.label, title: c.path, onclick: (e) => (e.preventDefault(), openDoc(c.doc, c.ord)) }), c.valid ? null : h('span', { class: 'muted', text: '（已失效）' }));
     put(st.el.right, 
-      h('h4', { text: '反向链接' }),
-      linkList(
-        (page.backlinks ?? []).map((b) => h('li', {}, h('a', { href: '#', text: b.title, onclick: (e) => (e.preventDefault(), openPage(b.slug)) }))),
-        '没有页面链接到这里',
-      ),
-      h('h4', { text: '引用的资料' }),
-      linkList(
-        (page.cites ?? []).map((c) =>
-          h(
-            'li',
-            { class: c.valid ? '' : 'wiki-cite-bad' },
-            h('a', { href: '#', text: `${c.title || `资料 ${c.doc}`}${c.heading ? ` › ${c.heading}` : ''}`, onclick: (e) => (e.preventDefault(), openDoc(c.doc, c.ord)) }),
-            c.valid ? null : h('span', { class: 'muted', text: '（已失效）' }),
-          ),
-        ),
-        '没有引用',
-      ),
-      h('p', { class: 'muted wiki-rev', text: `第 ${page.rev} 版 · 更新于 ${when(page.updated_at)}${page.edited_by_user ? ' · 人工改过' : ''}` }),
       h(
         'div',
-        { class: 'actions wiki-actions' },
+        { class: 'wiki-aside-actions' },
         h('button', { type: 'button', class: 'ghost', text: '编辑', onclick: () => editPage(page) }),
         h('button', { type: 'button', class: 'ghost', text: '历史', onclick: () => showHistory(page) }),
-        h('a', { class: 'wiki-export', href: exportHref, text: '导出本页' }),
+        h('a', { class: 'wiki-btn', href: exportHref, text: '导出本页' }),
+      ),
+      sec(
+        '反向链接',
+        backs.length,
+        backs.length
+          ? h('ul', { class: 'wiki-refs' }, backs.map((b) => h('li', {}, h('a', { href: '#', text: b.title, title: b.title, onclick: (e) => (e.preventDefault(), openPage(b.slug)) }))))
+          : h('p', { class: 'muted wiki-aside-empty', text: '还没有页面链接到这里' }),
+      ),
+      sec(
+        '引用的资料',
+        srcs.length,
+        srcs.length
+          ? h(
+              'ul',
+              { class: 'wiki-srcs' },
+              srcs.map((g) =>
+                h(
+                  'li',
+                  { class: 'wiki-src' },
+                  h('a', { class: 'wiki-src-title', href: '#', text: g.title, title: g.title, onclick: (e) => (e.preventDefault(), openDoc(g.doc, g.items[0].ord)) }),
+                  h('ul', { class: 'wiki-src-secs' }, g.items.map(cite)),
+                ),
+              ),
+            )
+          : h('p', { class: 'muted wiki-aside-empty', text: '没有引用原文' }),
       ),
     );
     loadPages();

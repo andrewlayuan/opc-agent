@@ -11,6 +11,7 @@ import { exportWiki, parseScope } from '../../packs/wiki/export.ts';
 import { slugify } from '../../packs/wiki/parse.ts';
 import type { WikiQueue } from '../../packs/wiki/queue.ts';
 import { restorePage, revertOp } from '../../packs/wiki/revert.ts';
+import { pageTopics } from '../../packs/wiki/topics.ts';
 import { createOp, finishOp, getOp, getPage, getPageRow, getRevision, listOps, listPages, listRevisions, tx, writePages } from '../../packs/wiki/store.ts';
 import { WIKI_LIMITS, WikiError, isPageKind } from '../../packs/wiki/types.ts';
 import { HttpError, contentDisposition, readBodyToFile, readJson, sendJson } from './http.ts';
@@ -57,7 +58,9 @@ function livePage(db: DB, slug: string) {
       .prepare('SELECT l.to_slug AS slug, p.title AS title FROM wiki_links l LEFT JOIN wiki_pages p ON p.slug = l.to_slug AND p.deleted = 0 WHERE l.from_page = ? ORDER BY l.to_slug')
       .all(p.id) as { slug: string; title: string | null }[]
   ).map((l) => ({ slug: l.slug, title: l.title ?? null }));
-  return { ...p, links };
+  const { topics, of } = pageTopics(db);
+  const t = topics.find((x) => x.slug === of.get(slug));
+  return { ...p, links, topic: t ? { slug: t.slug, title: t.title } : null };
 }
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
@@ -193,7 +196,9 @@ async function route(deps: WikiApiDeps, req: http.IncomingMessage, res: http.Ser
   if (p === '/api/wiki/pages' && method === 'GET') {
     const kind = q.get('kind') || undefined;
     if (kind !== undefined && !isPageKind(kind)) throw new HttpError(400, '页面类型不合法');
-    sendJson(res, 200, { pages: listPages(db, { kind, q: (q.get('q') ?? '').slice(0, 200) }) });
+    const { topics, of } = pageTopics(db);
+    const pages = listPages(db, { kind, q: (q.get('q') ?? '').slice(0, 200) }).map((p) => ({ ...p, topic: of.get(p.slug) ?? null }));
+    sendJson(res, 200, { pages, topics });
     return true;
   }
   let m = p.match(/^\/api\/wiki\/pages\/([^/]+)(?:\/(generate|revisions|restore))?$/);

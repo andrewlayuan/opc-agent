@@ -207,3 +207,20 @@ test('POST /ask：额度用完 → 429；POST /answers 存为问答页；GET /gr
     await s.close();
   }
 });
+
+test('GET /pages 每页带 topic 并返回主题列表；GET /pages/:slug 带所属主题', async () => {
+  const s = await setup();
+  try {
+    await s.call('PUT', '/api/wiki/pages/hub', { title: '音箱总览', summary: '', body: '见 [[tuya]]', baseRev: 0, kind: 'overview' });
+    await s.call('PUT', '/api/wiki/pages/tuya', { title: '涂鸦', summary: '', body: '正文', baseRev: 0, kind: 'entity' });
+    await s.call('PUT', '/api/wiki/pages/lone', { title: '孤立', summary: '', body: '正文', baseRev: 0, kind: 'concept' });
+    const list = await s.call('GET', '/api/wiki/pages');
+    assert.deepEqual(list.data.topics, [{ slug: 'hub', title: '音箱总览', count: 2 }]);
+    const t = Object.fromEntries(list.data.pages.map((p: { slug: string; topic: string | null }) => [p.slug, p.topic]));
+    assert.deepEqual(t, { hub: 'hub', tuya: 'hub', lone: null });
+    assert.deepEqual((await s.call('GET', '/api/wiki/pages/tuya')).data.page.topic, { slug: 'hub', title: '音箱总览' });
+    assert.equal((await s.call('GET', '/api/wiki/pages/lone')).data.page.topic, null);
+  } finally {
+    await s.close();
+  }
+});
