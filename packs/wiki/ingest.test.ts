@@ -75,6 +75,22 @@ test('ingestDoc：已有页面的新正文不到旧正文一半 → 保留旧正
   done();
 });
 
+test('ingestDoc：规划更新已有问答页 → 保留 answer 类型，不改成 concept', async () => {
+  const { db, done } = tmpWikiDb();
+  const doc = seedDoc(db, '检索方案', MD);
+  tx(db, () => {
+    const id = createOp(db, 'query_save', { status: 'running' });
+    finishOp(db, id, { status: 'done', pages: writePages(db, id, [{ slug: 'q-rag', kind: 'answer', title: 'RAG 是什么？', summary: '', body: '## 问题\nRAG 是什么？' }]).changes });
+  });
+  const llm = stubLlm([
+    plan([{ slug: 'q-rag', kind: 'concept', title: 'RAG 是什么？', ords: [0] }]),
+    written([{ slug: `src-${doc}`, body: '摘要' }, { slug: 'q-rag', title: 'RAG 是什么？', body: `## 问题\nRAG 是什么？\n\n## 回答\n检索增强生成[^${doc}:0]` }]),
+  ]);
+  await ingestDoc(db, llm, createOp(db, 'ingest', { docId: doc, status: 'running' }), doc);
+  assert.equal(getPage(db, 'q-rag')!.kind, 'answer');
+  done();
+});
+
 test('ingestDoc：第二批撰写失败 → 不写入任何页面，异常向上抛出', async () => {
   const { db, done } = tmpWikiDb();
   const doc = seedDoc(db, '检索方案', MD);

@@ -177,9 +177,14 @@ export async function ingestDoc(db: DB, llm: Llm, opId: number, docId: number, o
     const p = getPageRow(db, slug);
     return p && !p.deleted ? p.body : '';
   };
+  // 规划只能选 entity/concept/compare/overview；已有的问答页等其他类型保留原类型
+  const keepKind = (p: PlanPage): PageKind => {
+    const old = getPageRow(db, p.slug);
+    return old && !old.deleted && !PLAN_KINDS.has(old.kind) ? old.kind : p.kind;
+  };
   const targets: (WriteTarget & { kind: PageKind })[] = [
     { slug: sslug, kind: 'source', title: plan.source.title, reason: '这份资料的摘要页', current: current(sslug), ords: [] },
-    ...plan.pages.map((p) => ({ ...p, current: current(p.slug) })),
+    ...plan.pages.map((p) => ({ ...p, kind: keepKind(p), current: current(p.slug) })),
   ];
   const drafts: PageDraft[] = [];
   for (let i = 0; i < targets.length; i += WIKI_LIMITS.writeBatch) {
