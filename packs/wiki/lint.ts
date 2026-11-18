@@ -225,7 +225,7 @@ export async function runLint(db: DB, llm: Llm, opId: number, o: { maxCalls?: nu
     }
     if (calls.n < maxCalls) {
       const overviews = livePages(db).filter((p) => p.kind === 'overview').slice(0, 20);
-      const missing = issues.filter((i) => i.type === 'missing').slice(0, 20).map((i) => ({ slug: i.target!, refs: i.refs ?? 0 }));
+      const missing = issues.filter((i) => i.type === 'missing' && !i.fixed).slice(0, 20).map((i) => ({ slug: i.target!, refs: i.refs ?? 0 }));
       const nPages = livePages(db).length;
       const nDocs = Number((db.prepare('SELECT count(*) AS n FROM wiki_docs WHERE state = \'done\'').get() as { n: number }).n);
       const out = await calls.json<{ gaps?: unknown }>(gapPrompt(overviews, missing, `${nPages} 个页面，已编入 ${nDocs} 份资料`), 1500);

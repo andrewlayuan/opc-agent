@@ -634,7 +634,7 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
                 h('span', { text: i.detail || '' }),
                 i.fixed ? h('span', { class: 'muted', text: '（已修复）' }) : null,
                 ...[i.slug, ...(i.slugs ?? [])].filter(Boolean).map((s2) => [' ', jump(s2)]).flat(),
-                t === 'missing' && i.target ? [' ', h('button', { type: 'button', class: 'link', text: '生成此页', onclick: () => generate(i.target, i.target) })] : null,
+                t === 'missing' && i.target && !i.fixed ? [' ', h('button', { type: 'button', class: 'link', text: '生成此页', onclick: () => generate(i.target, i.target) })] : null,
               ),
             ),
           ),

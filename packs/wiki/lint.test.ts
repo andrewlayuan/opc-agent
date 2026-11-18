@@ -106,3 +106,15 @@ test('runLint：缺页其实是已有页面的标题时，自动修复把链接�
   assert.ok(!lintChecks(db).some((i) => i.type === 'missing'));
   done();
 });
+
+test('runLint：已被自动修复的缺页不再交给模型做缺口分析', async () => {
+  const { db, done } = tmpWikiDb();
+  put(db, [pg('map', '总览', '见 [[推理模型]] 和 [[真缺页]]', 'overview')]);
+  put(db, [pg('reasoning-models', '推理模型', '定义 [[map]]')]);
+  const llm = stubLlm([JSON.stringify({ conflicts: [] }), JSON.stringify({ gaps: [] })]);
+  await runLint(db, llm, createOp(db, 'lint', { status: 'running' }), { maxCalls: 2 });
+  const gapMsg = String(llm.calls.at(-1)!.at(-1)!.content);
+  assert.match(gapMsg, /- 真缺页（1）/);
+  assert.doesNotMatch(gapMsg, /- 推理模型（/);
+  done();
+});
