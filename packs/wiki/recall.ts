@@ -19,6 +19,18 @@ const hitsOf = (terms: string[], s: string) => {
   return terms.filter((t) => hay.includes(t)).length;
 };
 
+/** 按空行分段；只有小标题的段落并入下一段，避免只截到一行标题 */
+function paragraphs(body: string): string[] {
+  const raw = body.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean);
+  const out: string[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    let s = raw[i];
+    while (/^(#{1,6}\s[^\n]*)$/.test(s) && i + 1 < raw.length) s = `${s}\n${raw[++i]}`;
+    out.push(s);
+  }
+  return out;
+}
+
 interface Hit {
   id: number;
   slug: string;
@@ -58,7 +70,7 @@ export function recallWiki(db: DB, query: string): { text: string; refs: KbRef[]
   const refs: KbRef[] = [];
   let used = 0;
   for (const p of pages) {
-    const paras = p.body.split(/\n{2,}/).filter((s) => s.trim());
+    const paras = paragraphs(p.body);
     let best = paras[0] ?? '';
     let bh = -1;
     for (const s of paras) {

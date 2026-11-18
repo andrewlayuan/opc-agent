@@ -69,3 +69,11 @@ test('recallWiki：页面正文中的 </kb_wiki> 被转义', () => {
   assert.equal((r.text.match(/<\/kb_wiki>/g) ?? []).length, 1);
   done();
 });
+
+test('recallWiki：命中的段落只有小标题时，与下一段正文合并后给出', () => {
+  const { db, done } = tmpWikiDb();
+  put(db, [page('yun', '云听', '云听是广播平台。\n\n## 供应商定位与接入\n\n作为广播冗余来源接入，按年授权，适合老年人收听。\n\n## 其他\n\n无关')]);
+  const r = recallWiki(db, '供应商定位与接入方式');
+  assert.match(r.text, /## 供应商定位与接入\n作为广播冗余来源接入/);
+  done();
+});
