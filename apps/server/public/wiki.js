@@ -129,8 +129,9 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     const status = h('div', { class: 'wiki-status muted' });
     const q = h('input', { type: 'search', class: 'wiki-q', placeholder: '搜索 Wiki', maxlength: '200', autocomplete: 'off' });
     const list = h('div', { class: 'wiki-list' });
-    const scope = h('select', { class: 'kb-select wiki-scope', title: '导出范围' }, h('option', { value: 'all', text: '全部' }), ...KINDS.map(([k, label]) => h('option', { value: `kind:${k}`, text: label })));
-    const exp = h('a', { class: 'wiki-export', href: '/api/wiki/export?scope=all', text: '导出' });
+    const home = h('button', { type: 'button', class: 'wiki-home', text: '知识图谱', onclick: goHome });
+    const scope = h('select', { class: 'wiki-scope', title: '导出范围', 'aria-label': '导出范围' }, h('option', { value: 'all', text: '全部页面' }), ...KINDS.map(([k, label]) => h('option', { value: `kind:${k}`, text: `仅${label}` })));
+    const exp = h('a', { class: 'wiki-btn', href: '/api/wiki/export?scope=all', text: '导出' });
     scope.addEventListener('change', () => exp.setAttribute('href', `/api/wiki/export?scope=${enc(scope.value)}`));
     let qt;
     q.addEventListener('input', () => {
