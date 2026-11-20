@@ -314,7 +314,16 @@ export function initCompliance({ h, api, toast, safeHref, openFeed }) {
       reloadList();
       refreshBadge();
     } catch (e) {
-      if (e.status === 409) st.meta = null;
+      if (e.status === 409) {
+        toast('问卷已更新，已重新载入，请检查后再判定');
+        try {
+          st.meta = await api('/api/compliance/meta');
+          if (st.pid === pid && st.mode === 'product') renderAll();
+        } catch (err) {
+          toast(err.message);
+        }
+        return;
+      }
       const miss = (e.data?.missing ?? []).concat(e.data?.invalid ?? []);
       const titles = miss.map((id) => st.meta?.questions.find((q) => q.id === id)?.title ?? id);
       toast(titles.length ? `${e.message}：${titles.join('、')}` : e.message);
