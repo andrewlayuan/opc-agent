@@ -98,6 +98,14 @@ export const CATALOG: CatalogItem[] = [
 
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 
+/** 单题答案是否合法：单选为选项内字符串；多选为非空、选项内的字符串数组，互斥项不与其他项同选 */
+export function validOption(q: Question, v: unknown): boolean {
+  const allowed = new Set(q.options.map((o) => o.value));
+  if (!q.multi) return typeof v === 'string' && allowed.has(v);
+  if (!Array.isArray(v) || v.length === 0 || !v.every((x) => typeof x === 'string' && allowed.has(x))) return false;
+  return !(q.exclusive && v.includes(q.exclusive) && new Set(v).size > 1);
+}
+
 export function validateAnswers(a: unknown): { ok: true; answers: Answers } | { ok: false; missing: string[]; invalid: string[] } {
   const raw = isObj(a) ? a : {};
   const answers: Answers = {};
@@ -107,16 +115,8 @@ export function validateAnswers(a: unknown): { ok: true; answers: Answers } | { 
     if (q.when && !q.when(answers)) continue;
     const v = raw[q.id];
     if (v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0)) { missing.push(q.id); continue; }
-    const allowed = new Set(q.options.map((o) => o.value));
-    if (q.multi) {
-      if (!Array.isArray(v) || !v.every((x) => typeof x === 'string' && allowed.has(x))) { invalid.push(q.id); continue; }
-      const vals = [...new Set(v as string[])];
-      if (q.exclusive && vals.includes(q.exclusive) && vals.length > 1) { invalid.push(q.id); continue; }
-      answers[q.id] = vals;
-    } else {
-      if (typeof v !== 'string' || !allowed.has(v)) { invalid.push(q.id); continue; }
-      answers[q.id] = v;
-    }
+    if (!validOption(q, v)) { invalid.push(q.id); continue; }
+    answers[q.id] = q.multi ? [...new Set(v as string[])] : (v as string);
   }
   if (missing.length || invalid.length) return { ok: false, missing, invalid };
   return { ok: true, answers };

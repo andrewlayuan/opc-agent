@@ -1,19 +1,29 @@
 // 合规 API：问卷与目录、产品、判定、台账、提醒、AI 预填与解释。调用方已完成登录与同源校验
 import type http from 'node:http';
 import type { DB } from '../../packages/core/db.ts';
-import { LlmError } from '../../packages/core/llm.ts';
 import type { Llm } from '../../packages/core/llm.ts';
 import type { EventInput } from '../../packs/memory/events.ts';
+import { explainItem, prefillAnswers, type ExplainFn, type PrefillFn } from '../../packs/compliance/prefill.ts';
 import { listReminders } from '../../packs/compliance/reminders.ts';
-import { CATALOG, QUESTIONS, RULES_VERSION, validateAnswers, type Answers } from '../../packs/compliance/rules.ts';
+import { CATALOG, QUESTIONS, RULES_VERSION, validateAnswers } from '../../packs/compliance/rules.ts';
 import { CpError, assessAndMerge, createProduct, deleteProduct, getItem, getProduct, listProducts, saveExplain, updateItem, updateProduct } from '../../packs/compliance/store.ts';
 import type { ItemPatch } from '../../packs/compliance/store.ts';
 import { HttpError, readJson, sendJson } from './http.ts';
 
 export const NOTICE = '结果为自查参考，以属地主管部门口径为准。';
 
-export type PrefillFn = (llm: Llm, product: { name: string; description: string }) => Promise<{ answers: Answers; basis: Record<string, string> }>;
-export type ExplainFn = (llm: Llm, input: { item: string; reasons: string[]; product: { name: string; description: string } }) => Promise<string>;
+const NO_LLM = '未配置 DEEPSEEK_API_KEY，无法调用模型';
+const LLM_FAIL = '模型调用失败，请稍后重试或手动填写';
+
+/** 模型调用失败（含输出无法解析）统一 502；原始错误只记日志 */
+async function viaLlm<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    console.error('[compliance] 模型调用失败', err);
+    throw new HttpError(502, LLM_FAIL);
+  }
+}
 
 export interface ComplianceDeps {
   db: DB;
@@ -111,27 +121,29 @@ async function assessRoute(deps: ComplianceDeps, req: http.IncomingMessage, res:
 }
 
 async function prefillRoute(deps: ComplianceDeps, res: http.ServerResponse, id: number): Promise<void> {
-  if (!deps.prefill) throw new HttpError(501, '尚未开放');
   const { product } = getProduct(deps.db, id);
-  if (!deps.llm.enabled) throw new HttpError(400, '未配置模型');
-  const out = await deps.prefill(deps.llm, { name: product.name, description: product.description });
+  if (!deps.llm.enabled) throw new HttpError(400, NO_LLM);
+  const prefill = deps.prefill ?? prefillAnswers;
+  const out = await viaLlm(() => prefill(deps.llm, { name: product.name, description: product.description }));
   sendJson(res, 200, out);
 }
 
 async function explainRoute(deps: ComplianceDeps, res: http.ServerResponse, id: number): Promise<void> {
-  if (!deps.explain) throw new HttpError(501, '尚未开放');
   const it = getItem(deps.db, id);
   if (!it) throw new CpError(404, '事项不存在');
   if (it.level !== 'maybe') throw new CpError(400, '只有「可能需要」的事项可以生成说明');
-  if (!deps.llm.enabled) throw new HttpError(400, '未配置模型');
+  if (!deps.llm.enabled) throw new HttpError(400, NO_LLM);
   const { product, assessment } = getProduct(deps.db, it.product_id);
   const reasons = assessment?.result.items.find((x) => x.id === it.item)?.reasons ?? [];
-  const text = await deps.explain(deps.llm, { item: it.item, reasons, product: { name: product.name, description: product.description } });
+  const item = CATALOG.find((c) => c.id === it.item);
+  if (!item) throw new CpError(400, '未知事项');
+  const explain = deps.explain ?? explainItem;
+  const text = await viaLlm(() => explain(deps.llm, { name: product.name, description: product.description, item, reasons }));
   saveExplain(deps.db, id, text);
   sendJson(res, 200, { item: getItem(deps.db, id) });
 }
 
-/** 处理 /api/compliance 下的接口；不是合规接口时返回 false。CpError 映射为对应状态码（detail 并入响应体），模型错误为 502 */
+/** 处理 /api/compliance 下的接口；不是合规接口时返回 false。CpError 映射为对应状态码（detail 并入响应体）；模型错误在路由内统一为 502 */
 export async function handleComplianceApi(deps: ComplianceDeps, req: http.IncomingMessage, res: http.ServerResponse, method: string, url: URL): Promise<boolean> {
   const p = url.pathname;
   if (p !== '/api/compliance' && !p.startsWith('/api/compliance/')) return false;
@@ -140,7 +152,6 @@ export async function handleComplianceApi(deps: ComplianceDeps, req: http.Incomi
     if (await route(deps, req, res, method, parts)) return true;
   } catch (e) {
     if (e instanceof CpError) return sendJson(res, e.status, { error: e.message, ...e.detail }), true;
-    if (e instanceof LlmError) throw new HttpError(502, e.message);
     throw e;
   }
   throw new HttpError(404, '接口不存在');

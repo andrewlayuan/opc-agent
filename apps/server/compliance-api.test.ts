@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
+import { Llm } from '../../packages/core/llm.ts';
 import type { EventInput } from '../../packs/memory/events.ts';
 import { stubLlm, tmpWikiDb } from '../../packs/wiki/testutil.ts';
 import { handleComplianceApi, type ComplianceDeps } from './compliance-api.ts';
@@ -134,12 +135,61 @@ test('PATCH items：校验 400、不存在 404、成功返回事项；reminders 
   }
 });
 
-test('未接入模型时 prefill、explain 返回 501；非法 id 400；未知路径 404', async () => {
-  const s = await setup();
+const offLlm = () => new Llm({ apiKey: '', baseUrl: 'https://llm.test', model: 'm', concurrency: 1 }, async () => {
+  throw new Error('不应请求');
+});
+
+test('prefill：未配置模型 400；模型出错 502；成功只返回建议不落库', async () => {
+  const off = await setup({ llm: offLlm() });
+  try {
+    const id = (await off.call('POST', '/api/compliance/products', { name: 'p' })).data.product.id;
+    const r = await off.call('POST', `/api/compliance/products/${id}/prefill`, {});
+    assert.deepEqual([r.status, r.data.error], [400, '未配置 DEEPSEEK_API_KEY，无法调用模型']);
+    assert.equal((await off.call('POST', '/api/compliance/products/99/prefill', {})).status, 404);
+  } finally {
+    await off.close();
+  }
+  const bad = await setup({ prefill: async () => { throw new Error('boom'); } });
+  try {
+    const id = (await bad.call('POST', '/api/compliance/products', { name: 'p' })).data.product.id;
+    const r = await bad.call('POST', `/api/compliance/products/${id}/prefill`, {});
+    assert.deepEqual([r.status, r.data.error], [502, '模型调用失败，请稍后重试或手动填写']);
+  } finally {
+    await bad.close();
+  }
+  const ok = await setup({ llm: stubLlm([JSON.stringify({ answers: { ai_use: 'own' }, basis: { ai_use: '自研模型' } })]) });
+  try {
+    const id = (await ok.call('POST', '/api/compliance/products', { name: 'p', description: '自研模型' })).data.product.id;
+    const r = await ok.call('POST', `/api/compliance/products/${id}/prefill`, {});
+    assert.deepEqual(r.data, { answers: { ai_use: 'own' }, basis: { ai_use: '自研模型' } });
+    assert.equal((await ok.call('GET', `/api/compliance/products/${id}`)).data.assessment, null);
+  } finally {
+    await ok.close();
+  }
+});
+
+test('explain：只对可能需要的事项，成功后写入说明', async () => {
+  const s = await setup({ llm: stubLlm(['建议咨询属地网信办 https://x.com']) });
   try {
     const id = (await s.call('POST', '/api/compliance/products', { name: 'p' })).data.product.id;
-    assert.equal((await s.call('POST', `/api/compliance/products/${id}/prefill`, {})).status, 501);
-    assert.equal((await s.call('POST', '/api/compliance/items/1/explain', {})).status, 501);
+    const items = (await s.call('POST', `/api/compliance/products/${id}/assess`, { answers: { ...ANSWERS, ai_output: 'processed' }, version: 1 })).data.items;
+    const req = items.find((x: any) => x.level === 'required');
+    const maybe = items.find((x: any) => x.item === 'genai_filing');
+    assert.equal((await s.call('POST', `/api/compliance/items/${req.id}/explain`, {})).status, 400);
+    assert.equal((await s.call('POST', '/api/compliance/items/9999/explain', {})).status, 404);
+    const r = await s.call('POST', `/api/compliance/items/${maybe.id}/explain`, {});
+    assert.equal(r.status, 200);
+    assert.equal(r.data.item.explain, '建议咨询属地网信办');
+    const again = (await s.call('GET', `/api/compliance/products/${id}`)).data.items.find((x: any) => x.id === maybe.id);
+    assert.equal(again.explain, '建议咨询属地网信办');
+  } finally {
+    await s.close();
+  }
+});
+
+test('非法 id 400；未知路径 404', async () => {
+  const s = await setup();
+  try {
     for (const bad of ['abc', '0', '1.5']) assert.equal((await s.call('GET', `/api/compliance/products/${bad}`)).status, 400, bad);
     const u = await s.call('GET', '/api/compliance/nope');
     assert.deepEqual([u.status, u.data], [404, { error: '接口不存在' }]);

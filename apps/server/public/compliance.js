@@ -8,7 +8,7 @@ export function initCompliance({ h, api, toast, show, safeHref }) {
   const DAY = 86_400_000;
   const REMIND_DAYS = 30;
   /** mode：product 为查看某个产品，new 为新建表单；tabs、drafts 按产品记在内存里 */
-  const st = { meta: null, products: [], pid: null, detail: null, mode: 'product', tabs: new Map(), drafts: new Map(), filter: 'all', seq: 0, badge: null };
+  const st = { meta: null, products: [], pid: null, detail: null, mode: 'product', tabs: new Map(), drafts: new Map(), ai: new Map(), filter: 'all', seq: 0, badge: null };
   const clip = (s, n) => { const a = [...String(s ?? '').replace(/\s+/g, ' ').trim()]; return a.length > n ? a.slice(0, n).join('') + '…' : a.join(''); };
   const when = (ts) => new Date(ts).toLocaleString('zh-CN', { hour12: false });
   const pad = (n) => String(n).padStart(2, '0');
@@ -214,10 +214,16 @@ export function initCompliance({ h, api, toast, show, safeHref }) {
     return st.drafts.get(st.pid);
   }
   const visibleQs = (a) => st.meta.questions.filter((q) => !q.dependsOn || (typeof a[q.dependsOn.q] === 'string' && q.dependsOn.in.includes(a[q.dependsOn.q])));
+  /** AI 预填状态：filled 为 AI 填过的题（判定时上报），pending 为尚未确认的题 → 依据原文 */
+  function aiState() {
+    if (!st.ai.has(st.pid)) st.ai.set(st.pid, { filled: new Set(), pending: new Map() });
+    return st.ai.get(st.pid);
+  }
   const answered = (q, a) => (q.multi ? Array.isArray(a[q.id]) && a[q.id].length > 0 : typeof a[q.id] === 'string' && a[q.id] !== '');
 
   function pick(q, v) {
     const a = draft();
+    aiState().pending.delete(q.id);
     if (q.multi) {
       let cur = Array.isArray(a[q.id]) ? a[q.id] : [];
       if (cur.includes(v)) cur = cur.filter((x) => x !== v);
@@ -231,10 +237,15 @@ export function initCompliance({ h, api, toast, show, safeHref }) {
   function quizView() {
     const a = draft();
     const qs = visibleQs(a);
+    const ai = aiState();
     const left = qs.filter((q) => !answered(q, a)).length;
-    const btn = h('button', { type: 'button', class: 'cp-assess', text: left ? `还有 ${left} 题未答` : '判定', onclick: () => submitAssess() });
-    btn.disabled = left > 0;
+    const pending = qs.filter((q) => ai.pending.has(q.id) && answered(q, a)).length;
+    const label = left ? `还有 ${left} 题未答${pending ? `，${pending} 题待确认` : ''}` : pending ? `还有 ${pending} 题待确认` : '判定';
+    const btn = h('button', { type: 'button', class: 'cp-assess', text: label, onclick: () => submitAssess() });
+    btn.disabled = left + pending > 0;
+    const pre = h('button', { type: 'button', class: 'ghost', text: 'AI 预填', onclick: () => prefill(pre) });
     return h('div', { class: 'cp-quiz' },
+      h('div', { class: 'cp-quiz-bar' }, pre, h('span', { class: 'muted', text: '按产品描述预填未答的题；预填结果需逐题确认，点选任一选项即视为确认' })),
       ...qs.map((q, i) => {
         const cur = a[q.id];
         const on = (v) => (q.multi ? Array.isArray(cur) && cur.includes(v) : cur === v);
@@ -243,10 +254,46 @@ export function initCompliance({ h, api, toast, show, safeHref }) {
           h('div', { class: 'cp-chips' },
             ...q.options.map((o) => h('button', { type: 'button', class: `chip${on(o.value) ? ' on' : ''}`, 'aria-pressed': on(o.value) ? 'true' : 'false', text: o.label, onclick: () => pick(q, o.value) })),
           ),
+          ai.pending.has(q.id)
+            ? h('div', { class: 'cp-ai' },
+                h('span', { class: 'cp-ai-tag', text: 'AI 预填' }),
+                h('span', { class: 'cp-ai-basis', text: `依据：${ai.pending.get(q.id)}` }),
+                h('button', { type: 'button', class: 'link', text: '确认', onclick: () => {
+                  ai.pending.delete(q.id);
+                  renderMain();
+                } }),
+              )
+            : null,
         );
       }),
       h('div', { class: 'cp-actions' }, btn, h('span', { class: 'muted cp-notice', text: st.meta.notice })),
     );
+  }
+
+  async function prefill(btn) {
+    const pid = st.pid;
+    btn.disabled = true;
+    btn.textContent = '预填中…';
+    try {
+      const r = await api(`/api/compliance/products/${pid}/prefill`, { method: 'POST', body: {} });
+      if (st.pid !== pid) return;
+      const a = draft();
+      const ai = aiState();
+      let n = 0;
+      for (const q of st.meta.questions) {
+        if (!(q.id in (r.answers ?? {})) || answered(q, a)) continue;
+        a[q.id] = clone(r.answers[q.id]);
+        ai.filled.add(q.id);
+        ai.pending.set(q.id, String(r.basis?.[q.id] ?? ''));
+        n++;
+      }
+      toast(n ? `已预填 ${n} 题，请逐题确认` : '描述里没有可预填的信息，或相关题已作答');
+      renderMain();
+    } catch (e) {
+      toast(e.message);
+      btn.disabled = false;
+      btn.textContent = 'AI 预填';
+    }
   }
 
   async function submitAssess() {
@@ -254,9 +301,11 @@ export function initCompliance({ h, api, toast, show, safeHref }) {
     const answers = {};
     for (const q of visibleQs(a)) if (answered(q, a)) answers[q.id] = a[q.id];
     const pid = st.pid;
+    const prefilled = [...aiState().filled].filter((id) => id in answers);
     try {
-      const d = await api(`/api/compliance/products/${pid}/assess`, { method: 'POST', body: { answers, version: st.meta.version, prefilled: [] } });
+      const d = await api(`/api/compliance/products/${pid}/assess`, { method: 'POST', body: { answers, version: st.meta.version, prefilled } });
       st.drafts.delete(pid);
+      st.ai.delete(pid);
       st.tabs.set(pid, 'result');
       if (st.pid !== pid) return;
       st.detail = d;
@@ -290,6 +339,30 @@ export function initCompliance({ h, api, toast, show, safeHref }) {
       ),
       it.reasons.length ? h('ul', { class: 'cp-reasons' }, ...it.reasons.map((s) => h('li', { text: s }))) : null,
       links(c),
+      it.level === 'maybe' ? explainBox(it.id) : null,
+    );
+  }
+
+  function explainBox(key) {
+    const li = st.detail.items.find((x) => x.item === key);
+    if (!li) return null;
+    const btn = h('button', { type: 'button', class: 'link', text: li.explain ? '重新解释' : '请顾问解释', onclick: async () => {
+      btn.disabled = true;
+      btn.textContent = '解释中…';
+      try {
+        const { item } = await api(`/api/compliance/items/${li.id}/explain`, { method: 'POST', body: {} });
+        const i = st.detail.items.findIndex((x) => x.id === li.id);
+        if (i >= 0) st.detail.items[i] = item;
+        renderMain();
+      } catch (e) {
+        toast(e.message);
+        btn.disabled = false;
+        btn.textContent = li.explain ? '重新解释' : '请顾问解释';
+      }
+    } });
+    return h('div', { class: 'cp-explain' },
+      li.explain ? h('p', { class: 'cp-explain-text', text: li.explain }) : null,
+      h('div', { class: 'cp-explain-bar' }, btn, li.explain ? h('span', { class: 'muted', text: '模型生成，仅供参考' }) : null),
     );
   }
 
