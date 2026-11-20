@@ -976,6 +976,15 @@ function renderHead(r) {
             },
           }),
           kb.button({ reviewId: r.id }),
+          h('button', {
+            class: 'link',
+            text: '做合规自查',
+            title: '以这次评审的内容新建合规产品',
+            onclick: () => {
+              show('compliance', { skipLoad: true });
+              cp.newFromReview(r.id);
+            },
+          }),
         )
       : null,
   ];
@@ -1896,6 +1905,17 @@ async function init() {
 
 const kb = initKb({ h, api, toast, show, openReview, openItem, renderMarkdown });
 const proto = initProto({ h, api, toast });
-const cp = initCompliance({ h, api, toast, show, safeHref });
+const cp = initCompliance({
+  h,
+  api,
+  toast,
+  show,
+  safeHref,
+  openFeed: (grp) => {
+    show('feed');
+    $('grp').value = grp;
+    loadItems();
+  },
+});
 
 init().catch((e) => toast(e.message));

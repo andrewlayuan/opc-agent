@@ -1,5 +1,5 @@
 // 合规页：产品列表、问卷、判定结果、台账与提醒角标。用户与模型文本只通过 textContent 写入，官方链接只来自事项目录并经 safeHref
-export function initCompliance({ h, api, toast, show, safeHref }) {
+export function initCompliance({ h, api, toast, safeHref, openFeed }) {
   const $ = (id) => document.getElementById(id);
   const TABS = [['quiz', '问卷'], ['result', '判定结果'], ['ledger', '台账']];
   const STATUS = [['todo', '待办'], ['preparing', '准备中'], ['submitted', '已提交'], ['done', '已办结'], ['na', '不适用']];
@@ -85,6 +85,7 @@ export function initCompliance({ h, api, toast, show, safeHref }) {
         h('span', { class: 'cp-side-title', text: '产品' }),
         h('button', { type: 'button', class: 'link', text: '新建产品', onclick: () => openNew() }),
       ),
+      h('button', { type: 'button', class: 'link cp-feed', text: '监管动态', title: '查看网信办发布与政策法规', onclick: () => openFeed('reg') }),
       list.length ? h('ol', { class: 'cp-list' }, ...list) : h('p', { class: 'muted cp-empty', text: '还没有产品，先新建一个。' }),
     );
   }

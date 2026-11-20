@@ -867,3 +867,4 @@ button.link.wiki-topic:hover { text-decoration: underline; color: var(--accent);
 .cp-explain { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
 .cp-explain-text { margin: 0 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .cp-explain-bar { display: flex; gap: 10px; align-items: baseline; font-size: 12.5px; }
+.cp-feed { display: block; margin: 0 8px 10px; font-size: 13px; }
