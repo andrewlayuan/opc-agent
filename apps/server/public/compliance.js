@@ -1,14 +1,17 @@
-// 合规页：产品列表、问卷、判定结果、台账与提醒角标。用户与模型文本只通过 textContent 写入，官方链接只来自事项目录并经 safeHref
-export function initCompliance({ h, api, toast, safeHref, openFeed }) {
+// 合规页：产品列表、问卷、判定结果、台账与提醒角标；资料与材料见 compliance-docs.js。用户与模型文本只通过 textContent 写入，官方链接只来自事项目录并经 safeHref
+import { initComplianceDocs } from './compliance-docs.js';
+
+export function initCompliance({ h, api, toast, safeHref, openFeed, renderMarkdown }) {
   const $ = (id) => document.getElementById(id);
-  const TABS = [['quiz', '问卷'], ['result', '判定结果'], ['ledger', '台账']];
+  const docs = initComplianceDocs({ h, api, toast, safeHref, renderMarkdown });
+  const TABS = [['quiz', '问卷'], ['result', '判定结果'], ['ledger', '台账'], ['facts', '资料'], ['docs', '材料']];
   const STATUS = [['todo', '待办'], ['preparing', '准备中'], ['submitted', '已提交'], ['done', '已办结'], ['na', '不适用']];
   const LEVEL = { required: '必须办', maybe: '可能需要', na: '不适用' };
   const FILTERS = [['all', '全部'], ['open', '未办结'], ['alert', '有提醒']];
   const DAY = 86_400_000;
   const REMIND_DAYS = 30;
-  /** mode：product 为查看某个产品，new 为新建表单；tabs、drafts 按产品记在内存里 */
-  const st = { meta: null, products: [], pid: null, detail: null, mode: 'product', tabs: new Map(), drafts: new Map(), ai: new Map(), filter: 'all', seq: 0, badge: null };
+  /** mode：product 为查看某个产品，new 为新建表单，entity 为主体信息；tabs、drafts 按产品记在内存里；openKind 为台账跳转时要打开的材料 */
+  const st = { meta: null, products: [], pid: null, detail: null, mode: 'product', tabs: new Map(), drafts: new Map(), ai: new Map(), filter: 'all', seq: 0, badge: null, openKind: null };
   const clip = (s, n) => { const a = [...String(s ?? '').replace(/\s+/g, ' ').trim()]; return a.length > n ? a.slice(0, n).join('') + '…' : a.join(''); };
   const when = (ts) => new Date(ts).toLocaleString('zh-CN', { hour12: false });
   const pad = (n) => String(n).padStart(2, '0');
@@ -61,6 +64,7 @@ export function initCompliance({ h, api, toast, safeHref, openFeed }) {
       await ensureMeta();
       await reloadList();
       if (st.mode === 'new') return;
+      if (st.mode === 'entity') return openEntity();
       if (!st.products.some((p) => p.id === st.pid)) st.pid = st.products[0]?.id ?? null;
       if (st.pid) await open(st.pid);
       else await openNew();
@@ -86,6 +90,7 @@ export function initCompliance({ h, api, toast, safeHref, openFeed }) {
         h('button', { type: 'button', class: 'link', text: '新建产品', onclick: () => openNew() }),
       ),
       h('button', { type: 'button', class: 'link cp-feed', text: '监管动态', title: '查看网信办发布与政策法规', onclick: () => openFeed('reg') }),
+      h('button', { type: 'button', class: `link cp-feed${st.mode === 'entity' ? ' on' : ''}`, text: '主体信息', title: '运营主体的公司信息，所有材料共用', onclick: () => openEntity() }),
       list.length ? h('ol', { class: 'cp-list' }, ...list) : h('p', { class: 'muted cp-empty', text: '还没有产品，先新建一个。' }),
     );
   }
@@ -141,6 +146,19 @@ export function initCompliance({ h, api, toast, safeHref, openFeed }) {
     $('cp-main').replaceChildren(form);
   }
 
+  async function openEntity() {
+    st.mode = 'entity';
+    const seq = ++st.seq;
+    renderSide();
+    $('cp-tabs').hidden = true;
+    try {
+      await ensureMeta();
+      if (seq === st.seq) $('cp-main').replaceChildren(docs.entityView(st.meta));
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+
   async function open(pid) {
     st.mode = 'product';
     st.pid = pid;
@@ -179,7 +197,12 @@ export function initCompliance({ h, api, toast, safeHref, openFeed }) {
 
   function renderMain() {
     const tab = st.tabs.get(st.pid) ?? 'quiz';
-    const body = tab === 'quiz' ? quizView() : tab === 'result' ? resultView() : ledgerView();
+    let body;
+    if (tab === 'facts') body = docs.factsView(st.meta, st.detail, () => renderMain());
+    else if (tab === 'docs') {
+      body = docs.docsView(st.meta, st.pid, st.openKind);
+      st.openKind = null;
+    } else body = tab === 'quiz' ? quizView() : tab === 'result' ? resultView() : ledgerView();
     $('cp-main').replaceChildren(headView(), body);
   }
 
@@ -196,7 +219,7 @@ export function initCompliance({ h, api, toast, safeHref, openFeed }) {
 
   async function removeProduct() {
     const p = st.detail.product;
-    if (!confirm(`删除「${p.name}」及其判定和台账？`)) return;
+    if (!confirm(`删除「${p.name}」及其判定、台账和材料？`)) return;
     try {
       await api(`/api/compliance/products/${p.id}`, { method: 'DELETE' });
       st.tabs.delete(p.id);
@@ -470,6 +493,7 @@ export function initCompliance({ h, api, toast, safeHref, openFeed }) {
         h('div', { text: c.name }),
         al ? h('span', { class: `cp-due ${al.kind}`, text: `${al.kind === 'overdue' ? '已逾期' : '快到期'} ${ymd(al.date)}` }) : null,
         it.status === 'na' && it.na_reason ? h('div', { class: 'muted cp-na-reason', text: `不适用：${it.na_reason}` }) : null,
+        docLinks(it),
         stale,
       ),
       h('td', { class: 'cp-level', text: LEVEL[it.level] ?? it.level }),
@@ -479,6 +503,20 @@ export function initCompliance({ h, api, toast, safeHref, openFeed }) {
       h('td', {}, date('due_at', '到期日')),
       h('td', {}, date('remind_at', '提醒日')),
       h('td', {}, text('note', 2000, '备注')),
+    );
+  }
+
+  /** 台账行：对应材料的链接，点击切到「材料」并打开（未起草则停在材料列表） */
+  function docLinks(it) {
+    const kinds = (st.meta.docKinds ?? []).filter((k) => k.items.includes(it.item));
+    if (!kinds.length) return null;
+    return h('div', { class: 'cp-doc-links' },
+      h('span', { class: 'muted', text: '材料：' }),
+      ...kinds.map((k) => h('button', { type: 'button', class: 'link', text: k.name, onclick: () => {
+        st.openKind = k.kind;
+        st.tabs.set(st.pid, 'docs');
+        renderAll();
+      } })),
     );
   }
 

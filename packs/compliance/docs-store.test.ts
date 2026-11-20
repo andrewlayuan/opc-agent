@@ -176,6 +176,9 @@ test('资料变更后用到该字段的章 stale；未生成章不算 stale；�
   writeGenerated(db, id, 'ai', '正文', 'generate', prepareGenerate(db, id, 'ai').hash);
   saveFacts(db, pid, { data_location: '北京', model_name: 'M' });
   assert.equal(sec(db, id, 'ai').stale, true);
+  saveSection(db, id, 'cookies', '手写正文', 0);
+  saveFacts(db, pid, { data_location: '上海' });
+  assert.equal(sec(db, id, 'cookies').stale, false, '从未生成、只手工写过的章没有输入摘要，不算 stale');
   done();
 });
 

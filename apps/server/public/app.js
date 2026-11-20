@@ -1911,6 +1911,7 @@ const cp = initCompliance({
   toast,
   show,
   safeHref,
+  renderMarkdown,
   openFeed: (grp) => {
     show('feed');
     $('grp').value = grp;

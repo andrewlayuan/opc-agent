@@ -136,7 +136,8 @@ function sectionView(t: DocTemplate, r: Row, ctx: Ctx, reasons: string[]): Secti
   return {
     key: String(r.key), title: ch?.title ?? String(r.key), mode: ch?.mode ?? 'model', ord: Number(r.ord), body, rev,
     origin: (r.origin as Origin | null) ?? null,
-    stale: !removed && rev > 0 && inputHash(t, ch!, ctx, reasons) !== r.input_hash,
+    // 只手工写过、从未生成的章没有输入摘要，不算 stale
+    stale: !removed && rev > 0 && typeof r.input_hash === 'string' && inputHash(t, ch!, ctx, reasons) !== r.input_hash,
     removed, placeholders: placeholdersIn(body), updated_at: Number(r.updated_at),
   };
 }
