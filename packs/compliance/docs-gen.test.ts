@@ -28,6 +28,16 @@ test('sanitizeChapter：去围栏与一二级标题，保留三级；资料外�
   assert.throws(() => sanitizeChapter('   ', allowed), /模型没有返回内容/);
 });
 
+test('sanitizeChapter：协议大小写、链接文字中的网址、NUL、截断不留半个占位', () => {
+  const allowed = new Set(['https://a.com/privacy']);
+  assert.equal(sanitizeChapter('见 HTTPS://evil.com/x 与 Http://e.cn 。', allowed), '见 与 。');
+  assert.equal(sanitizeChapter('[去 https://evil.com 看](https://a.com/privacy)', allowed), '[去 看](https://a.com/privacy)');
+  assert.equal(sanitizeChapter('a\u00000\u0000b [x](https://a.com/privacy)', allowed), 'a0b [x](https://a.com/privacy)');
+  const cut = sanitizeChapter('字'.repeat(5995) + '【待填：联系邮箱】', allowed);
+  assert.equal(cut, '字'.repeat(5995));
+  assert.deepEqual([...sanitizeChapter('字'.repeat(5980) + '【待填：联系邮箱】' + '尾'.repeat(30), allowed)].slice(5980, 5989).join(''), '【待填：联系邮箱】');
+});
+
 test('allowedUrls：收集资料与 SDK 中的网址并去尾部标点', () => {
   assert.deepEqual(
     [...allowedUrls(ctxWith({ contact_email: 'a@b.cn' }, { site: '官网 https://a.com。', sdks: [{ name: 's', purpose: '', data: '', policy_url: 'https://u.com/p' }] }))].sort(),

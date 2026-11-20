@@ -33,20 +33,24 @@ export function sanitizeChapter(text: string, allowed: Set<string>): string {
     s = s.replace(/\n?```\s*$/, '');
   }
   s = s.split('\n').filter((l) => !/^\s{0,3}#{1,2}(\s|$)/.test(l)).join('\n');
+  // NUL 用作保留链接的占位符，先从模型输出里去掉
+  s = s.replace(/\u0000/g, '');
+  /** 删除不在资料里的裸网址（协议不区分大小写） */
+  const bare = (x: string) => x.replace(/([ \t]?)(https?:\/\/[^\s<>"'`()\[\]（）【】「」『』，。；、！？]+)/gi, (_m, sp: string, raw: string) => {
+    const url = trimUrl(raw);
+    return allowed.has(url) ? sp + raw : raw.slice(url.length);
+  });
   const keep: string[] = [];
-  s = s.replace(/\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\)/g, (m, label: string, url: string) => {
-    if (!allowed.has(url)) return label;
-    keep.push(m);
+  s = s.replace(/\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\)/gi, (_m, label: string, url: string) => {
+    if (!allowed.has(url)) return bare(label);
+    keep.push(`[${bare(label)}](${url})`);
     return `\u0000${keep.length - 1}\u0000`;
   });
-  s = s.replace(/([ \t]?)(https?:\/\/[^\s<>"'`()\[\]（）【】「」『』，。；、！？]+)/g, (_m, sp: string, raw: string) => {
-    const url = trimUrl(raw);
-    const tail = raw.slice(url.length);
-    return allowed.has(url) ? sp + raw : tail;
-  });
-  s = s.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => keep[Number(i)]);
+  s = bare(s);
+  s = s.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => keep[Number(i)] ?? '');
   s = s.replace(/\n{3,}/g, '\n\n').trim();
-  s = [...s].slice(0, CHAPTER_MAX).join('').trim();
+  // 截断后不留半个占位，否则定稿检查识别不到
+  s = [...s].slice(0, CHAPTER_MAX).join('').replace(/【(待(填(：[^】\n]*)?)?)?$/, '').trim();
   if (!s) throw new Error('模型没有返回内容');
   return s;
 }

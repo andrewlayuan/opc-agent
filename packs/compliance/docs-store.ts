@@ -218,8 +218,10 @@ function sectionRow(db: DB, docId: number, key: string): Row {
   return r;
 }
 
-function editable(db: DB, docId: number, key: string): { doc: Row; sec: Row } {
+function editable(db: DB, docId: number, key: string, createdAt?: number): { doc: Row; sec: Row } {
   const doc = docRow(db, docId);
+  // 材料 id 在删除后可能被复用：调用方给出起草时间时核对，避免迟到的结果写进新建的同 id 材料
+  if (createdAt !== undefined && Number(doc.created_at) !== createdAt) throw new CpError(404, '材料不存在');
   if (doc.status === 'final') throw new CpError(409, FINAL_MSG);
   const sec = sectionRow(db, docId, key);
   if (Number(sec.removed) === 1) throw new CpError(409, '章节已从模板移除');
@@ -249,10 +251,10 @@ function viewOf(db: DB, docId: number, key: string, now: number): SectionView {
   return getDoc(db, docId, now).sections.find((s) => s.key === key)!;
 }
 
-export function writeGenerated(db: DB, docId: number, key: string, body: string, origin: 'fixed' | 'generate', hash: string, now = Date.now()): SectionView {
+export function writeGenerated(db: DB, docId: number, key: string, body: string, origin: 'fixed' | 'generate', hash: string, now = Date.now(), createdAt?: number): SectionView {
   if (len(body) > SECTION_MAX) throw new CpError(400, `正文不超过 ${SECTION_MAX} 字`);
   tx(db, () => {
-    const { sec } = editable(db, docId, key);
+    const { sec } = editable(db, docId, key, createdAt);
     writeRev(db, sec, body, origin, hash, now);
   });
   return viewOf(db, docId, key, now);

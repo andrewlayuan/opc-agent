@@ -160,6 +160,10 @@ test('等模型期间被定稿或删除：写入时 409 / 404', () => {
   deleteDoc(db, id);
   throwsCp(() => writeGenerated(db, id, 'collect', '新', 'generate', g2.hash), 404);
   throwsCp(() => deleteDoc(db, id), 404);
+  const again = createDoc(db, pid, 'privacy_policy', g2.doc.created_at + 1);
+  assert.equal(again.id, id, '删除最大 id 后被复用');
+  throwsCp(() => writeGenerated(db, id, 'collect', '迟到', 'generate', g2.hash, Date.now(), g2.doc.created_at), 404, /材料不存在/);
+  assert.equal(sec(db, id, 'collect').rev, 0, '迟到的结果不写进新材料');
   done();
 });
 

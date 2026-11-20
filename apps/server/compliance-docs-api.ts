@@ -95,7 +95,7 @@ async function generateRoute(deps: ComplianceDeps, res: http.ServerResponse, id:
     }
   }, GEN_FAIL);
   // 等模型期间材料可能被定稿或删除：writeGenerated 在事务内重查，分别 409 / 404
-  sendJson(res, 200, { section: writeGenerated(deps.db, id, key, body, 'generate', g.hash) });
+  sendJson(res, 200, { section: writeGenerated(deps.db, id, key, body, 'generate', g.hash, Date.now(), g.doc.created_at) });
 }
 
 function finalizeRoute(deps: ComplianceDeps, res: http.ServerResponse, id: number): void {

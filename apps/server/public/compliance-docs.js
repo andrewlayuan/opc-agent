@@ -180,7 +180,8 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
   // ---------- 材料 ----------
   function docsView(meta, pid, openKind) {
     const root = h('div', { class: 'cp-docs' }, loading());
-    const ctx = { meta, pid, root, doc: null, cur: null, gen: new Map(), mode: 'view', hist: null, err: null, running: false };
+    /** doc 为当前打开的材料（列表页时为 null）；gen 为各章生成状态；editNode 为编辑中的面板，重绘时原样复用以免丢掉未保存的输入 */
+    const ctx = { meta, pid, root, doc: null, cur: null, gen: new Map(), mode: 'view', hist: null, err: null, running: false, editNode: null };
     (async () => {
       try {
         const { docs } = await api(`/api/compliance/products/${pid}/docs`);
@@ -198,6 +199,10 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
 
   function listView(ctx, docs) {
     opened.delete(ctx.pid);
+    ctx.doc = null;
+    ctx.gen.clear();
+    ctx.editNode = null;
+    ctx.err = null;
     const itemName = (id) => ctx.meta.catalog.find((c) => c.id === id)?.name ?? id;
     const card = (c) => {
       const d = c.doc;
@@ -261,10 +266,17 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
     opened.set(ctx.pid, doc.id);
     if (prev !== doc.id) ctx.gen.clear();
     if (!keep || !doc.sections.some((s) => s.key === ctx.cur)) ctx.cur = doc.sections[0]?.key ?? null;
-    ctx.mode = 'view';
-    ctx.hist = null;
+    setMode(ctx, 'view');
     draw(ctx);
   }
+
+  function setMode(ctx, mode) {
+    ctx.mode = mode;
+    ctx.hist = null;
+    ctx.editNode = null;
+  }
+  /** 异步返回后确认仍在看同一份材料 */
+  const same = (ctx, docId) => ctx.doc?.id === docId;
 
   const secUrl = (ctx, key) => `/api/compliance/docs/${ctx.doc.id}/sections/${enc(key)}`;
   function putSection(ctx, section) {
@@ -305,9 +317,9 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
       const [cls, text] = stateOf(ctx, s);
       return h('li', { class: s.key === ctx.cur ? 'on' : null },
         h('button', { type: 'button', class: `cp-doc-sec ${cls}${s.key === ctx.cur ? ' on' : ''}`, onclick: () => {
+          if (ctx.editNode && s.key !== ctx.cur && !confirm('放弃未保存的修改？')) return;
           ctx.cur = s.key;
-          ctx.mode = 'view';
-          ctx.hist = null;
+          setMode(ctx, 'view');
           draw(ctx);
         } },
           h('span', { class: 'cp-doc-sec-title', text: s.title }),
@@ -346,7 +358,10 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
     if (s.removed) notes.push(h('p', { class: 'cp-doc-note', text: '按最新问卷答案，这一章已不在模板中：不会导出，也不参与定稿检查。' }));
     else if (s.stale) notes.push(h('p', { class: 'cp-doc-note', text: '资料或判定已更新，建议重新生成这一章。' }));
     if (s.placeholders.length && !s.removed) notes.push(h('p', { class: 'cp-doc-note ph', text: `待填：${s.placeholders.join('、')}` }));
-    if (ctx.mode === 'edit' && !final) return h('div', { class: 'cp-doc-panel' }, head, ...notes, editor(ctx, s));
+    if (ctx.mode === 'edit' && !final) {
+      if (ctx.editNode?.docId !== d.id || ctx.editNode.key !== s.key) ctx.editNode = { docId: d.id, key: s.key, node: editor(ctx, s) };
+      return h('div', { class: 'cp-doc-panel' }, head, ...notes, ctx.editNode.node);
+    }
     if (ctx.mode === 'history' && ctx.hist) return h('div', { class: 'cp-doc-panel' }, head, historyView(ctx, s));
     const actions = [];
     if (!final) {
@@ -354,7 +369,7 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
       else {
         actions.push(btn(s.rev ? '重新生成' : '生成本章', () => genOne(ctx, s, true, true), s.rev ? 'ghost' : '', busy || ctx.running));
         actions.push(btn('编辑', () => {
-          ctx.mode = 'edit';
+          setMode(ctx, 'edit');
           draw(ctx);
         }, 'ghost', busy));
       }
@@ -371,12 +386,14 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
   function editor(ctx, s) {
     const ta = h('textarea', { class: 'kb-editor cp-doc-editor', rows: 18, maxlength: 20000, 'aria-label': `${s.title} 正文（Markdown）` });
     ta.value = s.body;
+    const docId = ctx.doc.id;
     const save = btn('保存', async () => {
       save.disabled = true;
       try {
         const { section } = await api(secUrl(ctx, s.key), { method: 'PUT', body: { body: ta.value, baseRev: s.rev } });
+        if (!same(ctx, docId)) return;
         putSection(ctx, section);
-        ctx.mode = 'view';
+        setMode(ctx, 'view');
         ctx.err = null;
         draw(ctx);
         toast('已保存');
@@ -389,7 +406,7 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
       ta,
       h('p', { class: 'muted cp-notice', text: '支持 Markdown：### 小标题、- 列表、| 表格 |。缺的信息可写成【待填：字段名】。' }),
       h('div', { class: 'cp-doc-actions' }, save, btn('取消', () => {
-        ctx.mode = 'view';
+        setMode(ctx, 'view');
         draw(ctx);
       }, 'link')),
     );
@@ -402,9 +419,11 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
     );
 
   async function showHistory(ctx, s) {
+    const docId = ctx.doc.id;
     try {
       const { revisions } = await api(`${secUrl(ctx, s.key)}/revisions`);
-      ctx.mode = 'history';
+      if (!same(ctx, docId) || ctx.cur !== s.key) return;
+      setMode(ctx, 'history');
       ctx.hist = { key: s.key, list: revisions, sel: null };
       draw(ctx);
     } catch (e) {
@@ -414,13 +433,14 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
 
   function historyView(ctx, s) {
     const { list, sel } = ctx.hist;
+    const docId = ctx.doc.id;
     const final = ctx.doc.status === 'final';
     return h('div', { class: 'cp-doc-hist' },
       h('ol', { class: 'cp-doc-revs' }, ...list.map((r) => h('li', {},
         btn(`第 ${r.n} 版 · ${ORIGIN[r.origin] ?? r.origin} · ${when(r.created_at)} · ${r.chars} 字${r.n === s.rev ? '（当前）' : ''}`, async () => {
           try {
             const { revision } = await api(`${secUrl(ctx, s.key)}/revisions?rev=${r.n}`);
-            if (ctx.hist?.key !== s.key) return;
+            if (!same(ctx, docId) || ctx.hist?.key !== s.key) return;
             ctx.hist.sel = revision;
             draw(ctx);
           } catch (e) {
@@ -436,8 +456,7 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
           )
         : h('p', { class: 'muted cp-empty', text: '选一个版本，查看它与当前内容的差异。' }),
       h('div', { class: 'cp-doc-actions' }, btn('返回', () => {
-        ctx.mode = 'view';
-        ctx.hist = null;
+        setMode(ctx, 'view');
         draw(ctx);
       }, 'link')),
     );
@@ -445,11 +464,12 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
 
   async function restore(ctx, s, n) {
     if (!confirm(`回退到第 ${n} 版？当前内容会保留在历史中。`)) return;
+    const docId = ctx.doc.id;
     try {
       const { section } = await api(`${secUrl(ctx, s.key)}/restore`, { method: 'POST', body: { rev: n } });
+      if (!same(ctx, docId)) return;
       putSection(ctx, section);
-      ctx.mode = 'view';
-      ctx.hist = null;
+      setMode(ctx, 'view');
       draw(ctx);
       toast('已回退');
     } catch (e) {
@@ -457,25 +477,26 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
     }
   }
 
-  /** 生成一章；ask 为真时覆盖手改前先确认；loud 为真时失败弹提示 */
+  /** 生成一章，成功返回 null，失败返回错误；ask 为真时覆盖手改前先确认；loud 为真时失败弹提示。
+   *  按材料 id 判断是否仍在看同一份材料（打开、定稿等会换成新对象），切走后不再重绘 */
   async function genOne(ctx, s, ask, loud) {
-    if (ask && s.origin === 'edit' && !confirm('将覆盖你的修改（可在历史中找回），继续？')) return false;
-    const doc = ctx.doc;
+    if (ask && s.origin === 'edit' && !confirm('将覆盖你的修改（可在历史中找回），继续？')) return new Error('已取消');
+    const docId = ctx.doc.id;
     ctx.gen.set(s.key, 'running');
     draw(ctx);
     try {
-      const { section } = await api(`/api/compliance/docs/${doc.id}/sections/${enc(s.key)}/generate`, { method: 'POST', body: {} });
-      if (ctx.doc !== doc) return true;
+      const { section } = await api(`/api/compliance/docs/${docId}/sections/${enc(s.key)}/generate`, { method: 'POST', body: {} });
+      if (!same(ctx, docId)) return null;
       putSection(ctx, section);
       ctx.gen.delete(s.key);
       draw(ctx);
-      return true;
+      return null;
     } catch (e) {
-      if (ctx.doc !== doc) return false;
+      if (!same(ctx, docId)) return e;
       ctx.gen.set(s.key, 'failed');
       if (loud) toast(e.message);
       draw(ctx);
-      return false;
+      return e;
     }
   }
 
@@ -483,20 +504,30 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
     if (ctx.running) return;
     ctx.running = true;
     ctx.err = null;
-    const doc = ctx.doc;
-    const keys = doc.sections.filter((s) => !s.removed && s.rev === 0).map((s) => s.key);
+    const docId = ctx.doc.id;
+    const keys = ctx.doc.sections.filter((s) => !s.removed && s.rev === 0).map((s) => s.key);
     let ok = 0;
     let fail = 0;
+    let stop = null;
     for (const key of keys) {
-      if (ctx.doc !== doc) break;
-      const s = doc.sections.find((x) => x.key === key);
-      if (!s || s.rev > 0) continue;
-      if (await genOne(ctx, s, false, false)) ok++;
-      else fail++;
+      if (!same(ctx, docId)) break;
+      const s = ctx.doc.sections.find((x) => x.key === key);
+      if (!s || s.removed || s.rev > 0) continue;
+      const err = await genOne(ctx, s, false, false);
+      if (!err) ok++;
+      else {
+        fail++;
+        // 400（如未配置模型）、404、409 逐章重试也不会成功，停下并提示原因
+        if ([400, 404, 409].includes(err.status)) {
+          stop = err;
+          break;
+        }
+      }
     }
     ctx.running = false;
-    if (ctx.doc === doc) draw(ctx);
-    toast(`已生成 ${ok} 章，失败 ${fail} 章`);
+    if (!same(ctx, docId)) return;
+    draw(ctx);
+    toast(stop ? stop.message : `已生成 ${ok} 章，失败 ${fail} 章`);
   }
 
   async function finalize(ctx) {
@@ -528,7 +559,6 @@ export function initComplianceDocs({ h, api, toast, safeHref, renderMarkdown }) 
     if (!confirm(`删除「${ctx.doc.name}」及其全部章节和历史版本？`)) return;
     try {
       await api(`/api/compliance/docs/${ctx.doc.id}`, { method: 'DELETE' });
-      ctx.doc = null;
       toast('已删除');
       await reloadList(ctx);
     } catch (e) {
