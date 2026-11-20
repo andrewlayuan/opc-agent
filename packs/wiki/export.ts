@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { DB } from '../../packages/core/db.ts';
 import { UNFILED, folderPath } from '../kb/folders.ts';
+import { escHtml, renderMdHtml, type MdCtx } from '../../packages/core/mdhtml.ts';
 import { convertHtmlToDocx } from '../pm/convert.ts';
 import { CITE_RE, LINK_RE, parseBody, slugify } from './parse.ts';
 import { listOps } from './store.ts';
@@ -110,8 +111,7 @@ export function pageToMarkdown(db: DB, page: PageRow, titles: Map<string, string
 
 // ---------------- HTML（供 LibreOffice 转 docx） ----------------
 
-const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-const esc = (s: string) => String(s).replace(/[&<>"']/g, (c) => ESC[c]);
+const esc = escHtml;
 
 const MIME_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
 const STORAGE_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}(\.[A-Za-z0-9]{1,8})?$/;
@@ -130,85 +130,11 @@ function readAsset(db: DB, dir: string, id: number): { mime: string; ext: string
   }
 }
 
-interface InlineCtx {
-  link(target: string, label: string | undefined): string;
-  cite(doc: number, ord: number): number;
-  img(id: number, alt: string): string;
-}
-
-const INLINE =
-  /!\[([^\]\n]*)\]\(([^)\s]*)\)|\[\[([^[\]|\n]{1,120})(?:\|([^[\]\n]{0,120}))?\]\]|\[\^(\d{1,9}):(\d{1,6})\]|\[([^\]\n]+)\]\(([^)\s]+)\)|`([^`\n]+)`|\*\*([^*\n]+?)\*\*|(?<![\w*])\*([^*\n]+?)\*(?![\w*])|(?<![\p{L}\p{N}_])_([^_\n]+?)_(?![\p{L}\p{N}_])/gu;
-
-/** 行内渲染：先切出语法片段，其余文本一律转义；外部链接和图片只保留文字 */
-function inline(s: string, ctx: InlineCtx): string {
-  let out = '';
-  let last = 0;
-  for (const m of s.matchAll(INLINE)) {
-    out += esc(s.slice(last, m.index));
-    last = m.index! + m[0].length;
-    if (m[1] !== undefined) {
-      const a = /^asset:(\d{1,9})$/.exec(m[2]);
-      out += a ? ctx.img(Number(a[1]), m[1]) : esc(m[1] || '图片');
-    } else if (m[3] !== undefined) out += esc(ctx.link(m[3], m[4]));
-    else if (m[5] !== undefined) out += `[${ctx.cite(Number(m[5]), Number(m[6]))}]`;
-    else if (m[7] !== undefined) out += m[7] === m[8] ? esc(m[7]) : `${inline(m[7], ctx)}（${esc(m[8])}）`;
-    else if (m[9] !== undefined) out += esc(m[9]);
-    else if (m[10] !== undefined) out += `<strong>${inline(m[10], ctx)}</strong>`;
-    else out += `<em>${inline(m[11] ?? m[12], ctx)}</em>`;
-  }
-  return out + esc(s.slice(last));
-}
-
-function renderBlocks(body: string, ctx: InlineCtx): string {
-  const lines = String(body).replace(/\r\n?/g, '\n').split('\n');
-  const out: string[] = [];
-  let para: string[] = [];
-  let quote: string[] = [];
-  let list: { tag: 'ul' | 'ol'; items: string[] } | null = null;
-  const flush = () => {
-    if (para.length) out.push(`<p>${inline(para.join(' '), ctx)}</p>`);
-    if (quote.length) out.push(`<blockquote><p>${inline(quote.join(' '), ctx)}</p></blockquote>`);
-    if (list) out.push(`<${list.tag}>${list.items.map((i) => `<li>${inline(i, ctx)}</li>`).join('')}</${list.tag}>`);
-    para = [];
-    quote = [];
-    list = null;
-  };
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    let m: RegExpExecArray | null;
-    if (/^\s*```/.test(line)) {
-      flush();
-      const code: string[] = [];
-      for (i++; i < lines.length && !/^\s*```/.test(lines[i]); i++) code.push(lines[i]);
-      out.push(`<pre>${esc(code.join('\n'))}</pre>`);
-    } else if (!line.trim() || /^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
-      flush();
-    } else if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) {
-      flush();
-      const h = Math.min(4, Math.max(2, m[1].length));
-      out.push(`<h${h}>${inline(m[2].replace(/\s+#+\s*$/, ''), ctx)}</h${h}>`);
-    } else if ((m = /^\s*>\s?(.*)$/.exec(line))) {
-      if (!quote.length) flush();
-      quote.push(m[1]);
-    } else if ((m = /^\s*(?:([-*+])|\d{1,9}[.)])\s+(.*)$/.exec(line))) {
-      const tag = m[1] ? 'ul' : 'ol';
-      if ((list as { tag: string } | null)?.tag !== tag) flush();
-      list ??= { tag, items: [] };
-      list.items.push(m[2]);
-    } else {
-      if (!para.length) flush();
-      para.push(line.trim());
-    }
-  }
-  flush();
-  return out.join('\n');
-}
-
 /** 导出用 HTML：只生成 h1-h4、p、ul/ol/li、blockquote、pre、strong、em、img；图片以 data: 内嵌，不含任何外部资源 */
 export function pageToHtml(db: DB, page: PageRow, assetsDir: string): string {
   const cites = citeNumbering(db);
   const titleOf = (slug: string) => (db.prepare('SELECT title FROM wiki_pages WHERE slug = ? AND deleted = 0').get(slug) as { title: string } | undefined)?.title;
-  const ctx: InlineCtx = {
+  const ctx: MdCtx = {
     link: (target, label) => oneLine(label ?? '') || (titleOf(slugify(target)) ?? '') || oneLine(target),
     cite: (d, o) => cites.num(d, o),
     img: (id, alt) => {
@@ -216,7 +142,7 @@ export function pageToHtml(db: DB, page: PageRow, assetsDir: string): string {
       return a ? `<img alt="${esc(alt)}" src="data:${a.mime};base64,${a.buf.toString('base64')}">` : esc(`${alt || '图片'}（图片缺失）`);
     },
   };
-  const body = renderBlocks(page.body, ctx);
+  const body = renderMdHtml(page.body, ctx);
   const notes = cites.notes.length ? `\n<h4>出处</h4>\n<ol>${cites.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ol>` : '';
   const title = esc(oneLine(page.title));
   return `<!DOCTYPE html>\n<html><head><meta charset="utf-8"><title>${title}</title></head><body>\n<h1>${title}</h1>\n${body}${notes}\n</body></html>\n`;
