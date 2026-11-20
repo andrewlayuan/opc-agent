@@ -14,6 +14,7 @@
       <nav class="tabs" role="tablist" aria-label="主导航（可拖动排序）">
         <button data-view="intel" class="on" draggable="true" title="拖动排序，或用 Alt+方向键调整">情报</button>
         <button data-view="pm" draggable="true" title="拖动排序，或用 Alt+方向键调整">产品顾问</button>
+        <button data-view="compliance" draggable="true" title="拖动排序，或用 Alt+方向键调整">合规</button>
         <button data-view="kb" draggable="true" title="拖动排序，或用 Alt+方向键调整">知识库</button>
         <button data-view="memory" draggable="true" title="拖动排序，或用 Alt+方向键调整">我的记忆</button>
       </nav>
@@ -143,6 +144,15 @@
       <div id="kb-pane-lint" class="wiki-pane" hidden></div>
     </section>
 
+    <section id="view-compliance" hidden>
+      <div class="cp-layout">
+        <aside class="cp-side" id="cp-side" aria-label="产品"></aside>
+        <div class="cp-body">
+          <div class="pm-tabs kb-tabs" id="cp-tabs" role="tablist" aria-label="合规" hidden></div>
+          <div class="cp-main" id="cp-main"></div>
+        </div>
+      </div>
+    </section>
     <section id="view-memory" hidden>
       <div class="brief-head">
         <span class="muted" id="mem-pending"></span>

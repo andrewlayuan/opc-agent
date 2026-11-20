@@ -1,8 +1,9 @@
 import { initKb } from './kb.js';
 import { initProto } from './proto-panel.js';
+import { initCompliance } from './compliance.js';
 // 所有外部数据只通过 textContent 写入 DOM，链接只接受 http(s)
 const $ = (id) => document.getElementById(id);
-const TAB_VIEWS = ['intel', 'pm', 'kb', 'memory'];
+const TAB_VIEWS = ['intel', 'pm', 'compliance', 'kb', 'memory'];
 /** 「情报」菜单下的子页面：动态、简报、信息源 */
 const INTEL_TABS = [['feed', '动态'], ['brief', '简报'], ['sources', '信息源']];
 const isIntel = (v) => INTEL_TABS.some(([k]) => k === v);
@@ -1788,12 +1789,13 @@ function show(view, opts = {}) {
   }
   $('intel-tabs').hidden = top !== 'intel';
   for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('on', b.dataset.view === top);
-  for (const v of ['feed', 'brief', 'pm', 'kb', 'memory', 'sources']) $(`view-${v}`).hidden = v !== view;
+  for (const v of ['feed', 'brief', 'pm', 'compliance', 'kb', 'memory', 'sources']) $(`view-${v}`).hidden = v !== view;
   $('q').hidden = view !== 'feed';
   if (view === 'kb' && !opts.skipLoad) kb.load();
   if (view === 'brief') loadBrief();
   if (view === 'sources') loadSources();
   if (view === 'memory') loadMemory();
+  if (view === 'compliance' && !opts.skipLoad) cp.load();
   if (view === 'pm') {
     initPm();
     loadPmHistory();
@@ -1889,9 +1891,11 @@ async function init() {
   loadItems();
   refreshStatus();
   setInterval(refreshStatus, 30000);
+  cp.refreshBadge();
 }
 
 const kb = initKb({ h, api, toast, show, openReview, openItem, renderMarkdown });
 const proto = initProto({ h, api, toast });
+const cp = initCompliance({ h, api, toast, show, safeHref });
 
 init().catch((e) => toast(e.message));
