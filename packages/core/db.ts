@@ -447,6 +447,45 @@ const MIGRATIONS: string[] = [
     UNIQUE (product_id, item)
   );
   `,
+  // 12：合规材料起草——全局主体（单行）、产品资料列、材料、章、章版本
+  `
+  CREATE TABLE cp_entity (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL, updated_at INTEGER NOT NULL);
+  ALTER TABLE cp_products ADD COLUMN facts TEXT NOT NULL DEFAULT '{}';
+  CREATE TABLE cp_docs (
+    id INTEGER PRIMARY KEY,
+    product_id INTEGER NOT NULL REFERENCES cp_products(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    template_version INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'final')),
+    finalized_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (product_id, kind)
+  );
+  CREATE TABLE cp_doc_sections (
+    id INTEGER PRIMARY KEY,
+    doc_id INTEGER NOT NULL REFERENCES cp_docs(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    ord INTEGER NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    rev INTEGER NOT NULL DEFAULT 0,
+    origin TEXT,
+    input_hash TEXT,
+    removed INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (doc_id, key)
+  );
+  CREATE TABLE cp_doc_revisions (
+    id INTEGER PRIMARY KEY,
+    section_id INTEGER NOT NULL REFERENCES cp_doc_sections(id) ON DELETE CASCADE,
+    n INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    input_hash TEXT,
+    created_at INTEGER NOT NULL,
+    UNIQUE (section_id, n)
+  );
+  `,
 ];
 
 export type DB = DatabaseSync;

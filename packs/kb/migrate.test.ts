@@ -8,7 +8,7 @@ const count = (db: DB, sql: string, ...a: (string | number)[]) => (db.prepare(sq
 
 test('迁移 7：知识库四张表、分块写入 kb_fts（含标题）、删条目级联清索引', () => {
   const { db, done } = tmpKbDb();
-  assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 11);
+  assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 12);
   for (const t of ['kb_folders', 'kb_docs', 'kb_chunks', 'kb_fts']) {
     assert.equal(count(db, "SELECT count(*) AS n FROM sqlite_master WHERE name = ?", t), 1, t);
   }
