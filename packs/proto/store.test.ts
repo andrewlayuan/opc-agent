@@ -24,7 +24,7 @@ const throws409 = (fn: () => unknown, msg: string) =>
 
 test('迁移 8：user_version、UNIQUE(review_id, n)、删除评审级联', () => {
   const db = setup();
-  assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 10);
+  assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 11);
   const row = createVersion(db, 1, v1);
   assert.throws(() => db.prepare("INSERT INTO pm_prototypes(review_id, n, created_at, base_version_n) VALUES (1, ?, 1, 1)").run(row.n), /UNIQUE/);
   db.prepare('DELETE FROM pm_reviews WHERE id = 1').run();

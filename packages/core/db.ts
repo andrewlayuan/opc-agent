@@ -407,6 +407,46 @@ const MIGRATIONS: string[] = [
 
   // 10：追问时追加的框架，记在该轮 user 消息上
   `ALTER TABLE pm_messages ADD COLUMN skills TEXT;`,
+
+  // 11：合规台账。产品 → 判定快照 → 事项；重新判定只增补，不覆盖手填字段
+  `
+  CREATE TABLE cp_products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    review_id INTEGER REFERENCES pm_reviews(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE cp_assessments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL REFERENCES cp_products(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    rules_version INTEGER NOT NULL,
+    answers TEXT NOT NULL,
+    prefilled TEXT,
+    result TEXT NOT NULL
+  );
+  CREATE INDEX cp_assessments_product ON cp_assessments(product_id, id);
+  CREATE TABLE cp_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL REFERENCES cp_products(id) ON DELETE CASCADE,
+    item TEXT NOT NULL,
+    level TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'todo',
+    stale INTEGER NOT NULL DEFAULT 0,
+    ref_no TEXT,
+    done_at INTEGER,
+    due_at INTEGER,
+    remind_at INTEGER,
+    note TEXT,
+    na_reason TEXT,
+    explain TEXT,
+    assessment_id INTEGER REFERENCES cp_assessments(id) ON DELETE SET NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (product_id, item)
+  );
+  `,
 ];
 
 export type DB = DatabaseSync;
