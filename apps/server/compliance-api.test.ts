@@ -149,9 +149,13 @@ test('prefill：未配置模型 400；模型出错 502；成功只返回建议�
   } finally {
     await off.close();
   }
-  const bad = await setup({ prefill: async () => { throw new Error('boom'); } });
+  let calls = 0;
+  const bad = await setup({ prefill: async () => { calls++; throw new Error('boom'); } });
   try {
-    const id = (await bad.call('POST', '/api/compliance/products', { name: 'p' })).data.product.id;
+    const empty = (await bad.call('POST', '/api/compliance/products', { name: 'e', description: '  ' })).data.product.id;
+    const e = await bad.call('POST', `/api/compliance/products/${empty}/prefill`, {});
+    assert.deepEqual([e.status, e.data.error, calls], [400, '请先填写产品描述，再用 AI 预填', 0]);
+    const id = (await bad.call('POST', '/api/compliance/products', { name: 'p', description: '自研模型' })).data.product.id;
     const r = await bad.call('POST', `/api/compliance/products/${id}/prefill`, {});
     assert.deepEqual([r.status, r.data.error], [502, '模型调用失败，请稍后重试或手动填写']);
   } finally {

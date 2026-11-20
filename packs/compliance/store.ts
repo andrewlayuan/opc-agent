@@ -108,9 +108,16 @@ function itemsOf(db: DB, productId: number): ItemView[] {
 
 export function listProducts(db: DB, now = Date.now()): (ProductView & { required: number; open: number; alerts: number })[] {
   const rows = db.prepare('SELECT * FROM cp_products ORDER BY updated_at DESC, id DESC').all() as Record<string, unknown>[];
+  const byProduct = new Map<number, ItemView[]>();
+  for (const r of db.prepare('SELECT * FROM cp_items').all() as Record<string, unknown>[]) {
+    const pid = Number(r.product_id);
+    const list = byProduct.get(pid) ?? [];
+    list.push(toItem(r));
+    byProduct.set(pid, list);
+  }
   return rows.map((r) => {
     const p = toProduct(r);
-    const items = itemsOf(db, p.id);
+    const items = byProduct.get(p.id) ?? [];
     return {
       ...p,
       required: items.filter((i) => i.level === 'required').length,
@@ -202,7 +209,14 @@ export function updateItem(db: DB, itemId: number, patch: ItemPatch, now = Date.
     stale: cur.stale,
   };
   if (next.status === 'na' && !next.na_reason) throw new CpError(400, '标为不适用需填写原因');
-  if (patch.status === 'done') {
+  // 续期：已办结过且提醒已触发（快到期或逾期）的事项重新标为办结，视为新一轮——办结日取本次（未填为今天），按其重算到期与提醒（本次显式填的日期优先）
+  const renew = patch.status === 'done' && cur.status !== 'done' && cur.done_at !== null && alertOf(cur, now) !== null;
+  if (renew) {
+    if (patch.done_at === undefined || patch.done_at === null) next.done_at = now;
+    const d = nextDates(cur.item, next.done_at!);
+    if (patch.due_at === undefined && d.due_at !== null) next.due_at = d.due_at;
+    if (patch.remind_at === undefined && d.remind_at !== null) next.remind_at = d.remind_at;
+  } else if (patch.status === 'done') {
     next.done_at ??= now;
     if (next.due_at === null && next.remind_at === null) Object.assign(next, nextDates(cur.item, next.done_at));
   }
@@ -216,7 +230,7 @@ export function updateItem(db: DB, itemId: number, patch: ItemPatch, now = Date.
   });
 }
 
-export function saveExplain(db: DB, itemId: number, text: string): void {
+export function saveExplain(db: DB, itemId: number, text: string, now = Date.now()): void {
   const s = [...text.trim()].slice(0, EXPLAIN_MAX).join('');
-  db.prepare('UPDATE cp_items SET "explain" = ? WHERE id = ?').run(s || null, itemId);
+  db.prepare('UPDATE cp_items SET "explain" = ?, updated_at = ? WHERE id = ?').run(s || null, now, itemId);
 }

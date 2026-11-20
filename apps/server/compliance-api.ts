@@ -123,6 +123,7 @@ async function assessRoute(deps: ComplianceDeps, req: http.IncomingMessage, res:
 async function prefillRoute(deps: ComplianceDeps, res: http.ServerResponse, id: number): Promise<void> {
   const { product } = getProduct(deps.db, id);
   if (!deps.llm.enabled) throw new HttpError(400, NO_LLM);
+  if (!product.description.trim()) throw new CpError(400, '请先填写产品描述，再用 AI 预填');
   const prefill = deps.prefill ?? prefillAnswers;
   const out = await viaLlm(() => prefill(deps.llm, { name: product.name, description: product.description }));
   sendJson(res, 200, out);

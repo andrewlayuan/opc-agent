@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { openDb } from '../../packages/core/db.ts';
 import type { DB } from '../../packages/core/db.ts';
 import type { Answers } from './rules.ts';
-import { CpError, assessAndMerge, createProduct, deleteProduct, getProduct, listProducts, updateItem, updateProduct } from './store.ts';
+import { CpError, assessAndMerge, createProduct, deleteProduct, getProduct, listProducts, saveExplain, updateItem, updateProduct } from './store.ts';
 import { REMIND_DAYS, listReminders } from './reminders.ts';
 
 const DAY = 86_400_000;
@@ -146,6 +146,39 @@ test('办结推算：ICP 许可 5 年到期、次年提醒；手填过到期日�
   updateItem(db, lic2.id, { due_at: Date.UTC(2030, 5, 1) });
   const m = updateItem(db, lic2.id, { status: 'done', done_at: Date.UTC(2026, 0, 1) });
   assert.deepEqual([m.due_at, m.remind_at], [Date.UTC(2030, 5, 1), null]);
+  done();
+});
+
+test('续期：提醒已触发的事项重新办结，按新办结日重算到期与提醒；未触发的保留原日期', () => {
+  const { db, done } = tmp();
+  const id = createProduct(db, { name: 'p', description: '' });
+  assessAndMerge(db, id, writer(), []);
+  const lic = itemOf(db, id, 'icp_license');
+  updateItem(db, lic.id, { status: 'done', done_at: Date.UTC(2026, 0, 1) });
+  const early = Date.UTC(2026, 2, 1);
+  updateItem(db, lic.id, { status: 'preparing' }, early);
+  const kept = updateItem(db, lic.id, { status: 'done' }, early);
+  assert.deepEqual([kept.done_at, kept.due_at, kept.remind_at], [Date.UTC(2026, 0, 1), Date.UTC(2031, 0, 1), Date.UTC(2027, 0, 1)]);
+  const now = Date.UTC(2026, 11, 15);
+  updateItem(db, lic.id, { status: 'preparing' }, now);
+  const r = updateItem(db, lic.id, { status: 'done' }, now);
+  assert.deepEqual([r.done_at, r.due_at, r.remind_at], [now, Date.UTC(2031, 11, 15), Date.UTC(2027, 11, 15)]);
+  const later = Date.UTC(2027, 11, 20);
+  updateItem(db, lic.id, { status: 'submitted' }, later);
+  const g = updateItem(db, lic.id, { status: 'done', done_at: Date.UTC(2027, 11, 18) }, later);
+  assert.deepEqual([g.done_at, g.due_at, g.remind_at], [Date.UTC(2027, 11, 18), Date.UTC(2032, 11, 18), Date.UTC(2028, 11, 18)]);
+  done();
+});
+
+test('saveExplain 截断并更新事项 updated_at', () => {
+  const { db, done } = tmp();
+  const id = createProduct(db, { name: 'p', description: '' });
+  assessAndMerge(db, id, writer(), [], 1);
+  const it = itemOf(db, id, 'icp_filing');
+  saveExplain(db, it.id, '  ' + '说'.repeat(700) + ' ', 77);
+  const got = itemOf(db, id, 'icp_filing');
+  assert.equal(got.updated_at, 77);
+  assert.equal([...got.explain!].length, 600);
   done();
 });
 
