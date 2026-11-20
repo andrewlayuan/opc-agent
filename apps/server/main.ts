@@ -32,6 +32,7 @@ import { handleMemoryApi } from './memory-api.ts';
 import { handleKbApi } from './kb-api.ts';
 import { handleWikiApi } from './wiki-api.ts';
 import { handleProtoApi } from './proto-api.ts';
+import { handleComplianceApi } from './compliance-api.ts';
 
 const cfg = loadConfig({ requireAuth: true });
 const db = openDb(cfg.dbPath);
@@ -348,6 +349,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   if (await handleKbApi({ db, files: kbFiles, llm: radar.llm }, req, res, method, url)) return;
   if (await handleWikiApi({ db, llm: radar.llm, queue: wikiQueue, assets: wikiAssets, tmpDir: wikiTmp }, req, res, method, url)) return;
   if (await handleProtoApi({ db, runner: protoRunner }, req, res, method, url)) return;
+  if (await handleComplianceApi({ db, llm: radar.llm, record }, req, res, method, url)) return;
 
   // ---------- 产品顾问（pm-skills） ----------
   if (p === '/api/pm/meta' && method === 'GET') {

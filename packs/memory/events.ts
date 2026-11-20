@@ -13,7 +13,8 @@ export type EventKind =
   | 'turn_revise'
   | 'version_manual'
   | 'proto_create'
-  | 'proto_revise';
+  | 'proto_revise'
+  | 'compliance_assess';
 
 /** 产品顾问类事件：每条内容不同，不合并；整理延迟更短 */
 export const PM_EVENT_KINDS: ReadonlySet<EventKind> = new Set<EventKind>([
@@ -27,7 +28,7 @@ export const PM_EVENT_KINDS: ReadonlySet<EventKind> = new Set<EventKind>([
 
 export interface EventInput {
   kind: EventKind;
-  refType?: 'item' | 'review' | 'brief' | 'prefs';
+  refType?: 'item' | 'review' | 'brief' | 'prefs' | 'product';
   refId?: number;
   summary: string;
   payload?: Record<string, unknown>;
