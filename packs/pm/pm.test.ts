@@ -810,3 +810,57 @@ test('知识库：Wiki 引用的 wiki 字段写入 context_refs 并原样读回'
   assert.deepEqual(advisor.get(id)!.context_refs, { memories: [], reviews: [], kb: refs });
   done();
 });
+
+test('追加框架：校验、空文本默认说明、成功后并入评审框架，下一轮仍然生效', async () => {
+  const systems: string[] = [];
+  const events: AdvisorEvent[] = [];
+  const { db, advisor, done } = setup({ chat: (m) => (systems.push(m[0].content), fakeTurn(m)) }, { onEvent: (e) => events.push(e) });
+  const id = await doneReview(advisor);
+  assert.deepEqual(statusOf(() => advisor.ask(id, '问题问题', 'auto', undefined, ['../x'])), { status: 400, message: '包含无效的框架' });
+  assert.deepEqual(statusOf(() => advisor.ask(id, '问题问题', 'auto', undefined, ['pre-mortem'])), { status: 400, message: '所选框架已在本评审中' });
+  assert.deepEqual(statusOf(() => advisor.ask(id, '问题问题', 'auto', undefined, ['lean-canvas', 'swot-analysis', 'pricing-strategy', 'create-prd'])), {
+    status: 400,
+    message: '一次最多追加 3 个框架',
+  });
+  // 非数组按未追加处理；没追加框架时仍要求至少 2 字
+  assert.deepEqual(statusOf(() => advisor.ask(id, '问', 'auto', undefined, 'lean-canvas')), { status: 400, message: '请输入 2–8000 字' });
+  advisor.ask(id, '  ', 'auto', undefined, ['lean-canvas', 'pre-mortem', 'lean-canvas']);
+  await waitTurn(advisor, id);
+  const r = advisor.get(id)!;
+  assert.deepEqual(r.messages[0].skills, ['lean-canvas']);
+  assert.equal(r.messages[0].content, '用新追加的框架补充评审：精益画布');
+  assert.deepEqual(r.messages[1].skills, []);
+  assert.deepEqual(r.skills, ['value-proposition', 'identify-assumptions-new', 'pre-mortem', 'lean-canvas']);
+  const s1 = systems.at(-1)!;
+  assert.match(s1, /<skill name="lean-canvas">/);
+  assert.match(s1, /<skill name="pre-mortem">/);
+  assert.match(s1, /## 本轮新追加的框架\n- 精益画布（lean-canvas）/);
+  assert.deepEqual(events.at(-1)!.payload.skills, ['lean-canvas']);
+  advisor.ask(id, '为什么选这个市场？', 'auto');
+  await waitTurn(advisor, id);
+  const s2 = systems.at(-1)!;
+  assert.match(s2, /<skill name="lean-canvas">/);
+  assert.doesNotMatch(s2, /本轮新追加的框架/);
+  assert.equal(events.at(-1)!.payload.skills, undefined);
+  assert.equal((db.prepare('SELECT skills FROM pm_messages WHERE id=?').get(advisor.get(id)!.messages[2].id) as { skills: unknown }).skills, null);
+  done();
+});
+
+test('追加框架：该轮失败时不并入评审框架；评审合计上限 12 个', async () => {
+  let fail = false;
+  const { db, advisor, done } = setup({ chat: (m) => (fail && m.length > 2 ? Promise.reject(new Error('模型超时')) : fakeTurn(m)) });
+  const id = await doneReview(advisor);
+  fail = true;
+  advisor.ask(id, '用新框架看看', 'auto', undefined, ['swot-analysis']);
+  await waitTurn(advisor, id);
+  const r = advisor.get(id)!;
+  assert.equal(r.messages[1].status, 'error');
+  assert.deepEqual(r.messages[0].skills, ['swot-analysis']);
+  assert.deepEqual(r.skills, ['value-proposition', 'identify-assumptions-new', 'pre-mortem']);
+  db.prepare('UPDATE pm_reviews SET skills=? WHERE id=?').run(JSON.stringify(Array.from({ length: 10 }, (_, i) => `old-${i}`)), id);
+  assert.deepEqual(statusOf(() => advisor.ask(id, '问题问题', 'auto', undefined, ['lean-canvas', 'swot-analysis', 'pricing-strategy'])), {
+    status: 400,
+    message: '一个评审最多使用 12 个框架（已有 10 个）',
+  });
+  done();
+});

@@ -27,8 +27,14 @@ export const INPUT_MIN = 10;
 export const INPUT_MAX = 8000;
 /** 单次评审最多组合的框架数；框架说明按数量均分总预算，避免提示词过长、输出过散 */
 export const MAX_SELECTED = 6;
+/** 追问时每轮最多追加的框架数，以及一个评审累计可用的框架数 */
+export const MAX_ADD = 3;
+export const MAX_REVIEW_SKILLS = 12;
 const SKILLS_TOTAL_CHARS = 40000;
 const TURN_SKILLS_CHARS = 20000;
+/** 有追加框架的一轮：新框架说明优先，原有框架压缩 */
+const TURN_ADD_CHARS = 20000;
+const TURN_KEEP_CHARS = 10000;
 const TURN_MIN = 2;
 const DOC_MAX = 80000;
 /** 续写后仍被长度截断时的统一说明 */
@@ -156,6 +162,16 @@ function parseRefs(raw: unknown): ContextRefs | null {
   }
 }
 
+function parseNames(raw: unknown): string[] {
+  if (typeof raw !== 'string' || !raw) return [];
+  try {
+    const v = JSON.parse(raw) as unknown;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 export interface MessageView {
   id: number;
   created_at: number;
@@ -167,6 +183,8 @@ export interface MessageView {
   error: string | null;
   context_refs: ContextRefs | null;
   attachments: AttachmentView[];
+  /** 该轮追加的框架（只在 user 消息上） */
+  skills: string[];
 }
 
 export interface VersionMeta {
@@ -471,9 +489,19 @@ ${input}
       .map((x, i) => ({ n: i + 1, id: x.id, title: x.title, url: x.url, source: x.source }));
   }
 
-  private systemPrompt(chosen: string[], total = SKILLS_TOTAL_CHARS, turn = false, ctx = ''): string {
+  /** 追问轮的系统提示词；有追加框架时新框架说明给足篇幅，并说明要怎么用 */
+  private turnSystem(have: string[], added: string[], mode: TurnMode, ctx?: string): string {
+    if (!added.length) return this.systemPrompt(have, TURN_SKILLS_CHARS, true, ctx);
+    const base = this.systemPrompt(have, TURN_KEEP_CHARS, true, ctx);
+    const list = added.map((n) => `- ${skillLabel(n)}（${n}）`).join('\n');
+    const sec = '在「## 框架分析」中为每个新框架新增一个小节（以「### 框架中文名」开头），并据此更新一句话结论、风险、行动清单等受影响的部分';
+    const how = mode === 'revise' ? `按 [改写] 输出：${sec}。` : `除非用户明确只是提问，否则按 [改写] 输出：${sec}；如果用户只是提问，就用新框架来回答。`;
+    return `${base}\n\n## 本轮新追加的框架\n${list}\n用户希望用这些框架补充评审。${how}\n\n${this.skillBlocks(added, TURN_ADD_CHARS)}`;
+  }
+
+  private skillBlocks(chosen: string[], total: number): string {
     const perSkill = Math.min(SKILL_MAX_CHARS, Math.floor(total / Math.max(1, chosen.length)));
-    const blocks = chosen
+    return chosen
       .map((n) => this.byName.get(n))
       .filter((s): s is PmSkill => Boolean(s))
       .map((s) => {
@@ -481,6 +509,10 @@ ${input}
         return `<skill name="${s.name}">\n${body}\n</skill>`;
       })
       .join('\n\n');
+  }
+
+  private systemPrompt(chosen: string[], total = SKILLS_TOTAL_CHARS, turn = false, ctx = ''): string {
+    const blocks = this.skillBlocks(chosen, total);
     const about = ctx ? `## 关于你服务的用户\n${ctx}\n结合用户背景与偏好；如与其过去的决定矛盾，明确指出。\n\n` : '';
     return `你是一位资深的商业化产品经理顾问，有 10 年以上 B2B、B2C 与 AI 产品从 0 到 1 和商业化经验，判断直接、务实。
 ${about}下面 <skill> 中是你本次要运用的专业方法框架（来自开源 pm-skills 技能库）。把它们当作方法论使用，而不是逐字照做：
@@ -566,6 +598,7 @@ ${structure}
       error: (m.error as string) ?? null,
       context_refs: parseRefs(m.context_refs),
       attachments: [] as AttachmentView[],
+      skills: parseNames(m.skills),
     }));
     const atts = this.attachmentsOf(id);
     for (const m of messages) m.attachments = atts.filter((a) => a.message_id === m.id).map(toView);
@@ -608,30 +641,31 @@ ${structure}
   }
 
   /** 发起一轮追问；返回 assistant 消息 id，模型调用在后台进行 */
-  ask(id: number, text: string, modeIn: unknown, attachmentIds?: unknown): number {
-    const r = this.db.prepare('SELECT status FROM pm_reviews WHERE id=?').get(id) as Row | undefined;
+  ask(id: number, text: string, modeIn: unknown, attachmentIds?: unknown, skillsIn?: unknown): number {
+    const r = this.db.prepare('SELECT status, skills FROM pm_reviews WHERE id=?').get(id) as Row | undefined;
     if (!r) throw new PmError(404, '评审不存在');
     if (!this.llm.enabled) throw new PmError(400, '未配置 DEEPSEEK_API_KEY，无法调用模型');
     if (r.status !== 'done') throw new PmError(400, '首版评审完成后才能继续对话');
+    const added = this.addable(parseNames(r.skills), skillsIn);
     const rows = this.checkAttachments(attachmentIds, id);
     let t = typeof text === 'string' ? text.trim() : '';
     const len = [...t].length;
-    if ((!rows.length && len < TURN_MIN) || len > INPUT_MAX) throw new PmError(400, `请输入 ${TURN_MIN}–${INPUT_MAX} 字`);
-    if (!t) t = '（见附件）';
+    if ((!rows.length && !added.length && len < TURN_MIN) || len > INPUT_MAX) throw new PmError(400, `请输入 ${TURN_MIN}–${INPUT_MAX} 字`);
+    if (!t) t = added.length ? `用新追加的框架补充评审：${added.map(skillLabel).join('、')}` : '（见附件）';
     if (this.busy(id)) throw new PmError(409, '上一轮还在进行中');
     if (this.running >= MAX_RUNNING) throw new PmError(400, `同时最多进行 ${MAX_RUNNING} 个评审，请稍后再试`);
     const mode = normMode(modeIn);
     const now = Date.now();
     const ids = this.tx(() => {
-      const ins = this.db.prepare('INSERT INTO pm_messages(review_id, created_at, finished_at, role, kind, content, status) VALUES (?, ?, ?, ?, ?, ?, ?)');
-      const userId = Number(ins.run(id, now, now, 'user', mode === 'revise' ? 'revise' : 'ask', t, 'done').lastInsertRowid);
-      const mid = Number(ins.run(id, now, null, 'assistant', 'ask', '', 'running').lastInsertRowid);
+      const ins = this.db.prepare('INSERT INTO pm_messages(review_id, created_at, finished_at, role, kind, content, status, skills) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      const userId = Number(ins.run(id, now, now, 'user', mode === 'revise' ? 'revise' : 'ask', t, 'done', added.length ? JSON.stringify(added) : null).lastInsertRowid);
+      const mid = Number(ins.run(id, now, null, 'assistant', 'ask', '', 'running', null).lastInsertRowid);
       if (rows.length) this.files!.claim(rows, id, userId);
       this.db.prepare('UPDATE pm_reviews SET updated_at=? WHERE id=?').run(now, id);
       return { userId, mid };
     });
     this.running++;
-    void this.runTurn(id, ids.userId, ids.mid, t, mode)
+    void this.runTurn(id, ids.userId, ids.mid, t, mode, added)
       .catch((e) => {
         const msg = (e instanceof Error ? e.message : String(e)).slice(0, 300);
         this.log(`[pm] 评审 #${id} 追问失败：${msg}`);
@@ -639,6 +673,17 @@ ${structure}
       })
       .finally(() => this.running--);
     return ids.mid;
+  }
+
+  /** 校验本轮要追加的框架：去重、去掉评审里已有的；非数组按未追加处理 */
+  private addable(have: string[], skillsIn: unknown): string[] {
+    if (!Array.isArray(skillsIn) || !skillsIn.length) return [];
+    if (skillsIn.length > 70 || skillsIn.some((x) => typeof x !== 'string' || !this.byName.has(x))) throw new PmError(400, '包含无效的框架');
+    const fresh = [...new Set(skillsIn as string[])].filter((s) => !have.includes(s));
+    if (!fresh.length) throw new PmError(400, '所选框架已在本评审中');
+    if (fresh.length > MAX_ADD) throw new PmError(400, `一次最多追加 ${MAX_ADD} 个框架`);
+    if (have.length + fresh.length > MAX_REVIEW_SKILLS) throw new PmError(400, `一个评审最多使用 ${MAX_REVIEW_SKILLS} 个框架（已有 ${have.length} 个）`);
+    return fresh;
   }
 
   /** 保存手动编辑的新版本；baseN 必须是当前最新版本号 */
@@ -671,9 +716,9 @@ ${structure}
     return v ? { n: Number(v.n), content: String(v.content) } : null;
   }
 
-  private async runTurn(id: number, userId: number, mid: number, text: string, mode: TurnMode): Promise<void> {
+  private async runTurn(id: number, userId: number, mid: number, text: string, mode: TurnMode, added: string[] = []): Promise<void> {
     const r = this.db.prepare('SELECT input, skills FROM pm_reviews WHERE id=?').get(id) as Row;
-    const skills = JSON.parse(String(r.skills || '[]')) as string[];
+    const skills = parseNames(r.skills).filter((s) => !added.includes(s));
     const latest = this.latestVersion(id);
     if (!latest) throw new Error('当前没有可继续的文档');
     const atts = this.attachmentsOf(id);
@@ -692,7 +737,7 @@ ${structure}
     const current = byMsg(userId);
     const ctx = this.userContext({ query: `${text}\n${clip(String(r.input), 200)}`, excludeReview: id });
     const messages: ChatMessage[] = buildTurnMessages({
-      system: `${this.systemPrompt(skills, TURN_SKILLS_CHARS, true, ctx?.text)}\n\n${TURN_PROTOCOL}`,
+      system: `${this.turnSystem(skills, added, mode, ctx?.text)}\n\n${TURN_PROTOCOL}`,
       input: `<request>\n${String(r.input)}\n</request>` + (first.length ? `\n${renderAttachments(first.map(attText), ATT_FIRST_IN_TURN)}` : ''),
       refsText: this.refs(id).map((x) => this.refLine(x)).join('\n'),
       latestN: latest.n,
@@ -717,14 +762,19 @@ ${structure}
       } else {
         this.db.prepare("UPDATE pm_messages SET kind='ask', content=?, context_refs=?, status='done', finished_at=? WHERE id=?").run(res.answer, refs, now, mid);
       }
+      if (added.length) {
+        const cur = parseNames((this.db.prepare('SELECT skills FROM pm_reviews WHERE id=?').get(id) as Row).skills);
+        this.db.prepare('UPDATE pm_reviews SET skills=? WHERE id=?').run(JSON.stringify([...new Set([...cur, ...added])]), id);
+      }
       this.db.prepare('UPDATE pm_reviews SET updated_at=? WHERE id=?').run(now, id);
     });
     this.markUsed(ctx);
+    const extra = added.length ? { skills: added } : {};
     const brief = clip(text.replace(/\s+/g, ' '), 80);
     this.emit(
       res.kind === 'revise'
-        ? { kind: 'turn_revise', refId: id, summary: `要求改写：${brief}`, payload: { text: clip(text, 800), note: res.note, ...attPayload(current) } }
-        : { kind: 'turn_ask', refId: id, summary: `追问：${brief}`, payload: { text: clip(text, 800), answer: clip(res.answer, 400), ...attPayload(current) } },
+        ? { kind: 'turn_revise', refId: id, summary: `要求改写：${brief}`, payload: { text: clip(text, 800), note: res.note, ...attPayload(current), ...extra } }
+        : { kind: 'turn_ask', refId: id, summary: `追问：${brief}`, payload: { text: clip(text, 800), answer: clip(res.answer, 400), ...attPayload(current), ...extra } },
     );
   }
 

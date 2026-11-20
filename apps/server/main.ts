@@ -17,7 +17,7 @@ import { hasSensitive } from '../../packs/memory/sensitive.ts';
 import { analyzeItem, generateBrief, latestBrief, translateItem } from '../../packs/radar/analyze.ts';
 import { GROUPS, collectOnce } from '../../packs/radar/collect.ts';
 import { enrichItem } from '../../packs/radar/enrich.ts';
-import { MAX_SELECTED, PmAdvisor, PmError } from '../../packs/pm/advisor.ts';
+import { MAX_ADD, MAX_REVIEW_SKILLS, MAX_SELECTED, PmAdvisor, PmError } from '../../packs/pm/advisor.ts';
 import type { AdvisorEvent } from '../../packs/pm/advisor.ts';
 import { AttachmentError, AttachmentStore, LIMITS } from '../../packs/pm/attachments.ts';
 import { exportMarkdown, renderPrintHtml } from '../../packs/pm/render.ts';
@@ -358,6 +358,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       presets: pm.presets(),
       skills: pm.catalog(),
       maxSelected: MAX_SELECTED,
+      maxAdd: MAX_ADD,
+      maxReviewSkills: MAX_REVIEW_SKILLS,
     });
   }
   if (p === '/api/pm/uploads' && method === 'POST') {
@@ -423,7 +425,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const id = idFrom(m);
     // 8000 字上限按 UTF-8 最坏 4 字节/字计，另留 JSON 转义余量
     const body = await readJson(req, 64 * 1024);
-    const messageId = pmCall(() => pm.ask(id, typeof body.text === 'string' ? body.text : '', body.mode, body.attachmentIds));
+    const messageId = pmCall(() => pm.ask(id, typeof body.text === 'string' ? body.text : '', body.mode, body.attachmentIds, body.skills));
     return sendJson(res, 202, { messageId });
   }
   m = p.match(/^\/api\/pm\/reviews\/(\d+)\/versions$/);

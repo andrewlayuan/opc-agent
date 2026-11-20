@@ -14,7 +14,7 @@ const V5_DROP = `
   DROP TABLE IF EXISTS events; DROP TABLE IF EXISTS memories; DROP TABLE IF EXISTS profile;
   DROP TABLE IF EXISTS memory_changes; DROP TABLE IF EXISTS history_fts;
   ALTER TABLE items DROP COLUMN relevance; ALTER TABLE items DROP COLUMN relevance_zh;
-  ALTER TABLE pm_reviews DROP COLUMN context_refs; ALTER TABLE pm_messages DROP COLUMN context_refs;
+  ALTER TABLE pm_reviews DROP COLUMN context_refs; ALTER TABLE pm_messages DROP COLUMN context_refs; ALTER TABLE pm_messages DROP COLUMN skills;
   PRAGMA user_version = 4;
 `;
 
@@ -36,7 +36,7 @@ test('迁移 5：新表、profile 单行、history_fts 触发器与回填', () =
   const count = (where: string) => Number(get(`SELECT count(*) AS n FROM ${where}`).n);
   const run = (sql: string) => db.prepare(sql).run();
 
-  assert.equal(get('PRAGMA user_version').user_version, 9);
+  assert.equal(get('PRAGMA user_version').user_version, 10);
   assert.deepEqual({ ...get('SELECT id, content, manual FROM profile') }, { id: 1, content: '', manual: 0 });
   for (const t of ['events', 'memories', 'memory_changes']) assert.equal(count(t), 0);
   assert.equal(count('history_fts WHERE review_id = 1'), 3);

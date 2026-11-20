@@ -610,7 +610,7 @@ const pm = {
   edit: null,
   att: { form: [], reply: [], replyFor: 0, replyEl: null, replySync: null },
   tabs: new Map(),
-  draft: { id: 0, text: '', revise: false },
+  draft: { id: 0, text: '', revise: false, skills: [], pick: false },
   dom: null,
   sig: {},
 };
@@ -1284,7 +1284,7 @@ function renderThread(r) {
     { class: 'pm-thread' },
     msgs.map((m, i) => {
       if (m.role === 'user') {
-        return h('div', { class: 'pm-msg user' }, h('div', { class: 'bubble', text: m.content }), attList(m.attachments), m.kind === 'revise' ? h('small', { class: 'muted', text: '要求改写文档' }) : null);
+        return h('div', { class: 'pm-msg user' }, h('div', { class: 'bubble', text: m.content }), attList(m.attachments), m.skills?.length ? h('small', { class: 'pm-add-note', text: `追加框架：${m.skills.map(skillLabel).join('、')}` }) : null, m.kind === 'revise' ? h('small', { class: 'muted', text: '要求改写文档' }) : null);
       }
       if (m.status === 'running') return h('div', { class: 'pm-msg assistant' }, h('p', { class: 'muted', text: '思考中…改写文档一般需要 1-2 分钟' }));
       if (m.status === 'error') {
@@ -1298,7 +1298,7 @@ function renderThread(r) {
           prev && last && !busy
             ? prev.attachments?.length
               ? h('small', { class: 'muted', text: '请重新上传附件后再发送' })
-              : h('button', { type: 'button', class: 'link', text: '重试', onclick: () => sendTurn(r.id, prev.content, prev.kind === 'revise' ? 'revise' : 'auto') })
+              : h('button', { type: 'button', class: 'link', text: '重试', onclick: () => sendTurn(r.id, prev.content, prev.kind === 'revise' ? 'revise' : 'auto', [], prev.skills || []) })
             : null,
         );
       }
@@ -1320,7 +1320,7 @@ function renderReply(r) {
   const busy = hasRunningTurn(r);
   const ta = h('textarea', { rows: '3', maxlength: '8000', 'aria-label': '继续对话', placeholder: '继续追问，或说明要怎么改（如：定价部分按 To B 年费重写）· Ctrl/⌘+Enter 发送' });
   const chk = h('input', { type: 'checkbox', 'aria-label': '改写文档', onchange: () => (pm.draft.revise = chk.checked) });
-  if (pm.draft.id !== r.id) pm.draft = { id: r.id, text: '', revise: false };
+  if (pm.draft.id !== r.id) pm.draft = { id: r.id, text: '', revise: false, skills: [], pick: false };
   ta.value = pm.draft.text;
   chk.checked = pm.draft.revise;
   const count = h('span', { class: 'muted', text: `${[...pm.draft.text].length}/8000` });
@@ -1352,13 +1352,13 @@ function renderReply(r) {
     if (blocked || sending) return;
     const list = pm.att.reply;
     const text = ta.value.trim();
-    if (!list.length && [...text].length < 2) return toast('请至少输入 2 个字');
+    if (!list.length && !pm.draft.skills.length && [...text].length < 2) return toast('请至少输入 2 个字');
     const gate = attGate(list);
     if (gate) return toast(gate);
     if (btn.disabled) return;
     sending = true;
     btn.disabled = true;
-    const ok = await sendTurn(r.id, text, chk.checked ? 'revise' : 'auto', attIds(list));
+    const ok = await sendTurn(r.id, text, chk.checked ? 'revise' : 'auto', attIds(list), [...pm.draft.skills]);
     sending = false;
     if (!ok) sync();
   };
@@ -1378,8 +1378,9 @@ function renderReply(r) {
       e.target.value = '';
     },
   });
-  const attRow = h('div', { class: 'att-row' }, h('button', { type: 'button', class: 'link', text: '添加附件', disabled: blocked, onclick: () => file.click() }), file, bar);
-  const form = h('form', { class: 'pm-reply', autocomplete: 'off' }, ta, attRow, h('div', { class: 'row' }, h('label', { class: 'check', title: '不勾选时由顾问判断：提问就回答，提出修改就出新版' }, chk, ' 改写文档'), count, btn));
+  const picker = skillAdder(r, blocked);
+  const attRow = h('div', { class: 'att-row' }, h('button', { type: 'button', class: 'link', text: '添加附件', disabled: blocked, onclick: () => file.click() }), picker.btn, file, bar);
+  const form = h('form', { class: 'pm-reply', autocomplete: 'off' }, ta, attRow, picker.box, h('div', { class: 'row' }, h('label', { class: 'check', title: '不勾选时由顾问判断：提问就回答，提出修改就出新版' }, chk, ' 改写文档'), count, btn));
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     send();
@@ -1388,11 +1389,82 @@ function renderReply(r) {
   return form;
 }
 
-async function sendTurn(id, text, mode, attachmentIds = []) {
+/** 追问区的「追加框架」：给历史评审补用新的框架，已在评审中的不能再选 */
+function skillAdder(r, blocked) {
+  const have = new Set(r.skills);
+  const maxAdd = pm.meta?.maxAdd ?? 3;
+  const maxAll = pm.meta?.maxReviewSkills ?? 12;
+  const btn = h('button', { type: 'button', class: 'link', disabled: blocked || !pm.meta?.skills.length, 'aria-expanded': 'false' });
+  const box = h('div', { class: 'pm-add-wrap' });
+  const groups = h('div', { class: 'pm-add-groups' });
+  const q = h('input', { type: 'search', class: 'pm-add-q', placeholder: '搜索框架（中文名或英文名）', 'aria-label': '搜索框架' });
+  q.addEventListener('input', () => drawGroups());
+  const toggle = (name) => {
+    if (blocked || have.has(name)) return;
+    const sel = pm.draft.skills;
+    if (sel.includes(name)) pm.draft.skills = sel.filter((x) => x !== name);
+    else if (sel.length >= maxAdd) return toast(`一次最多追加 ${maxAdd} 个框架`);
+    else if (have.size + sel.length + 1 > maxAll) return toast(`一个评审最多使用 ${maxAll} 个框架（已有 ${have.size} 个）`);
+    else pm.draft.skills = [...sel, name];
+    draw();
+  };
+  function drawGroups() {
+    const kw = q.value.trim().toLowerCase();
+    const map = new Map();
+    for (const s of pm.meta?.skills ?? []) {
+      if (kw && !`${s.label || ''} ${s.name}`.toLowerCase().includes(kw)) continue;
+      if (!map.has(s.group)) map.set(s.group, []);
+      map.get(s.group).push(s);
+    }
+    groups.replaceChildren(
+      ...(map.size ? [] : [h('p', { class: 'muted', text: '没有匹配的框架' })]),
+      ...[...map].map(([g, list]) =>
+        h('div', { class: 'pm-skill-group' }, h('div', { class: 'pm-skill-title', text: g }), h('div', { class: 'chips wrap-chips' }, list.map((s) => {
+          const used = have.has(s.name);
+          const on = pm.draft.skills.includes(s.name);
+          return h('button', {
+            type: 'button',
+            class: `chip${on ? ' on' : ''}${used ? ' via' : ''}`,
+            'aria-pressed': on ? 'true' : 'false',
+            disabled: used || blocked,
+            title: `${s.name}\n${used ? '已在本评审中\n' : ''}${s.description}`,
+            onclick: () => toggle(s.name),
+          }, s.label || s.name, s.label && s.label !== s.name ? h('span', { class: 'chip-en', text: s.name }) : null);
+        }))),
+      ),
+    );
+  }
+  function draw() {
+    const sel = pm.draft.skills;
+    btn.textContent = sel.length ? `追加框架（${sel.length}）` : '追加框架';
+    btn.setAttribute('aria-expanded', pm.draft.pick ? 'true' : 'false');
+    const parts = [];
+    if (sel.length) {
+      parts.push(h('div', { class: 'pm-add-sel' }, h('span', { text: `本轮追加：${sel.map(skillLabel).join('、')}` }), h('span', { class: 'muted', text: '不写文字也可以直接发送，顾问会用新框架补充评审' }), h('button', { type: 'button', class: 'link', text: '清空', disabled: blocked, onclick: () => ((pm.draft.skills = []), draw()) })));
+    }
+    if (pm.draft.pick) {
+      drawGroups();
+      parts.push(h('div', { class: 'pm-add' }, h('div', { class: 'pm-add-top' }, q, h('span', { class: 'muted', text: `已用 ${have.size}/${maxAll} 个 · 每轮最多追加 ${maxAdd} 个` })), groups));
+    }
+    box.replaceChildren(...parts);
+  }
+  btn.addEventListener('click', () => {
+    pm.draft.pick = !pm.draft.pick;
+    draw();
+    if (pm.draft.pick) q.focus();
+  });
+  draw();
+  return { btn, box };
+}
+
+async function sendTurn(id, text, mode, attachmentIds = [], skills = []) {
   try {
-    await api(`/api/pm/reviews/${id}/messages`, { method: 'POST', body: attachmentIds.length ? { text, mode, attachmentIds } : { text, mode } });
+    const body = { text, mode };
+    if (attachmentIds.length) body.attachmentIds = attachmentIds;
+    if (skills.length) body.skills = skills;
+    await api(`/api/pm/reviews/${id}/messages`, { method: 'POST', body });
     if (attachmentIds.length) pm.att.reply = [];
-    if (pm.draft.id === id) pm.draft = { id, text: '', revise: false };
+    if (pm.draft.id === id) pm.draft = { id, text: '', revise: false, skills: [], pick: false };
     await openReview(id);
     return true;
   } catch (e) {

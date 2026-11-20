@@ -404,6 +404,9 @@ const MIGRATIONS: string[] = [
     INSERT INTO wiki_fts(rowid, title, summary, body) SELECT new.id, new.title, new.summary, new.body WHERE new.deleted = 0;
   END;
   `,
+
+  // 10：追问时追加的框架，记在该轮 user 消息上
+  `ALTER TABLE pm_messages ADD COLUMN skills TEXT;`,
 ];
 
 export type DB = DatabaseSync;
