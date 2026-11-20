@@ -12,12 +12,10 @@
     <div class="wrap bar-in">
       <a class="brand" href="/" aria-label="天枢 Tianshu"><span class="brand-mark" aria-hidden="true"></span><span class="brand-zh">天枢</span><span class="brand-en">Tianshu</span></a>
       <nav class="tabs" role="tablist" aria-label="主导航（可拖动排序）">
-        <button data-view="feed" class="on" draggable="true" title="拖动排序，或用 Alt+方向键调整">动态</button>
-        <button data-view="brief" draggable="true" title="拖动排序，或用 Alt+方向键调整">简报</button>
+        <button data-view="intel" class="on" draggable="true" title="拖动排序，或用 Alt+方向键调整">情报</button>
         <button data-view="pm" draggable="true" title="拖动排序，或用 Alt+方向键调整">产品顾问</button>
         <button data-view="kb" draggable="true" title="拖动排序，或用 Alt+方向键调整">知识库</button>
         <button data-view="memory" draggable="true" title="拖动排序，或用 Alt+方向键调整">我的记忆</button>
-        <button data-view="sources" draggable="true" title="拖动排序，或用 Alt+方向键调整">信息源</button>
       </nav>
       <div class="bar-right">
         <input id="q" type="search" placeholder="搜索" autocomplete="off" maxlength="200">
@@ -28,6 +26,7 @@
   </header>
 
   <main class="wrap">
+    <div class="pm-tabs kb-tabs kb-top-tabs" id="intel-tabs" role="tablist" aria-label="情报"></div>
     <section id="view-feed">
       <div class="chips" id="topics"></div>
       <div class="focus-bar" id="focus-bar" hidden></div>

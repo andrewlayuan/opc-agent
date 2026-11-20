@@ -183,5 +183,5 @@ DSH 通过 `.dsh/skills/agent-reach` 加载它的 skill，会话中的 Agent 可
 
 ## 自定义
 
-- 信息源：编辑 `packs/radar/sources.json`，也可以在界面的「信息源」页添加任意 https RSS 地址。`kind` 可以是 `feed`、`hf-models` 或 `github-releases`。
+- 信息源：编辑 `packs/radar/sources.json`，也可以在界面「情报 → 信息源」里添加任意 https RSS 地址。`kind` 可以是 `feed`、`hf-models` 或 `github-releases`。
 - 关注主题：编辑 `packs/radar/topics.json`，其中的关键词同时用于过滤和打标签；`hint` 帮助模型判断归类边界。修改后重启服务生效。

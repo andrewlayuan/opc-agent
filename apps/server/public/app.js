@@ -2,7 +2,11 @@ import { initKb } from './kb.js';
 import { initProto } from './proto-panel.js';
 // 所有外部数据只通过 textContent 写入 DOM，链接只接受 http(s)
 const $ = (id) => document.getElementById(id);
-const TAB_VIEWS = ['feed', 'brief', 'pm', 'kb', 'memory', 'sources'];
+const TAB_VIEWS = ['intel', 'pm', 'kb', 'memory'];
+/** 「情报」菜单下的子页面：动态、简报、信息源 */
+const INTEL_TABS = [['feed', '动态'], ['brief', '简报'], ['sources', '信息源']];
+const isIntel = (v) => INTEL_TABS.some(([k]) => k === v);
+let intelTab = 'feed';
 const TAB_ORDER_KEY = 'opc.tabOrder';
 
 function savedTabOrder() {
@@ -10,7 +14,8 @@ function savedTabOrder() {
   try { saved = JSON.parse(localStorage.getItem(TAB_ORDER_KEY) || '[]'); } catch { saved = []; }
   if (!Array.isArray(saved)) saved = [];
   const known = new Set(TAB_VIEWS);
-  const clean = [...new Set(saved.filter((v) => known.has(v)))];
+  // 旧版本把动态/简报/信息源存成三个菜单，迁移为「情报」并取第一次出现的位置
+  const clean = [...new Set(saved.map((v) => (isIntel(v) ? 'intel' : v)).filter((v) => known.has(v)))];
   return [...clean, ...TAB_VIEWS.filter((v) => !clean.includes(v))];
 }
 
@@ -1765,8 +1770,24 @@ async function clearAllMemory(e) {
 }
 
 // ---------------- 视图切换与事件 ----------------
+function renderIntelTabs() {
+  $('intel-tabs').replaceChildren(
+    ...INTEL_TABS.map(([k, label]) =>
+      h('button', { type: 'button', role: 'tab', class: `pm-tab${k === intelTab ? ' on' : ''}`, 'aria-selected': k === intelTab ? 'true' : 'false', text: label, onclick: () => show(k) }),
+    ),
+  );
+}
+
+/** view 可以是顶部菜单（intel 回到上次的子页面），也可以直接是情报下的子页面 */
 function show(view, opts = {}) {
-  for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('on', b.dataset.view === view);
+  if (view === 'intel') view = intelTab;
+  const top = isIntel(view) ? 'intel' : view;
+  if (top === 'intel') {
+    intelTab = view;
+    renderIntelTabs();
+  }
+  $('intel-tabs').hidden = top !== 'intel';
+  for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('on', b.dataset.view === top);
   for (const v of ['feed', 'brief', 'pm', 'kb', 'memory', 'sources']) $(`view-${v}`).hidden = v !== view;
   $('q').hidden = view !== 'feed';
   if (view === 'kb' && !opts.skipLoad) kb.load();
@@ -1782,6 +1803,7 @@ function show(view, opts = {}) {
 async function init() {
   applyTabOrder();
   bindTabDrag();
+  renderIntelTabs();
   const [meta, prefs] = await Promise.all([api('/api/meta'), api('/api/prefs/interests')]);
   state.meta = meta;
   state.interests = prefs.interests;
