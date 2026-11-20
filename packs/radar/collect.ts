@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DB } from '../../packages/core/db.ts';
-import { parseFeed, parseGithubReleases, parseHfModels } from '../../packages/core/feed.ts';
+import { parseFeed, parseGithubReleases, parseHfModels, parsePageList } from '../../packages/core/feed.ts';
 import type { FeedEntry } from '../../packages/core/feed.ts';
 import { allowHost, politeFetch } from '../../packages/core/net.ts';
 import type { Reach } from '../../packages/core/reach.ts';
@@ -15,7 +15,7 @@ export interface SourceDef {
   id: string;
   name: string;
   url: string;
-  kind?: 'feed' | 'hf-models' | 'github-releases' | 'reach';
+  kind?: 'feed' | 'hf-models' | 'github-releases' | 'reach' | 'page-list';
   /** kind=reach 时的 Agent-Reach 命令，例如 ["v2ex", "node", "openai"]；url 仅用于展示 */
   reach?: string[];
   grp?: string;
@@ -52,8 +52,23 @@ export const GROUPS: Record<string, string> = {
   paper: '论文',
   media: '媒体',
   release: '开源发布',
+  reg: '合规监管',
   custom: '自定义',
 };
+
+/** 按信息源类型解析响应正文；解析结果异常时抛出可读的原因 */
+export function parseEntries(src: Pick<SourceRow, 'kind' | 'url'>, text: string): FeedEntry[] {
+  if (src.kind === 'hf-models') return parseHfModels(text);
+  if (src.kind === 'github-releases') return parseGithubReleases(text, src.url);
+  if (src.kind === 'page-list') {
+    const entries = parsePageList(text, src.url);
+    if (!entries.length) throw new Error('页面结构可能已变化（未解析到文章链接）');
+    return entries;
+  }
+  const entries = parseFeed(text, src.url);
+  if (src.kind === 'feed' && !entries.length && !/<(rss|feed|rdf)/i.test(text)) throw new Error('响应不是 RSS/Atom（站点可能拒绝了自动访问）');
+  return entries;
+}
 
 export function loadSourceDefs(): SourceDef[] {
   return (JSON.parse(fs.readFileSync(path.join(HERE, 'sources.json'), 'utf8')) as { sources: SourceDef[] }).sources;
@@ -199,9 +214,7 @@ export async function collectOnce(
           continue;
         }
         if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
-        const entries =
-          src.kind === 'hf-models' ? parseHfModels(res.text) : src.kind === 'github-releases' ? parseGithubReleases(res.text, src.url) : parseFeed(res.text, src.url);
-        if (src.kind === 'feed' && !entries.length && !/<(rss|feed|rdf)/i.test(res.text)) throw new Error('响应不是 RSS/Atom（站点可能拒绝了自动访问）');
+        const entries = parseEntries(src, res.text);
         const ids = insertEntries(db, src, entries, matcher, opts.maxAgeDays);
         upd.run(res.etag ?? null, res.lastModified ?? null, now, now, null, ids.length, src.id);
         stats.okSources++;

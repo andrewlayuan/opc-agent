@@ -1,6 +1,8 @@
 {
-  "$comment": "信息源登记。只采集公开 RSS/Atom/API；遵守 robots.txt（明确拒绝爬虫的站点如 Reddit、36氪 不采集）；每域名限速 1 次/秒；不绕过付费墙。filter=true 表示只保留命中关注主题的条目。kind: feed | hf-models | github-releases | reach（经 Agent-Reach 采集，reach 为命令参数）。grp: lab 官方 | model 模型发布 | blog 大牛博客 | community 社区 | paper 论文 | media 媒体 | release 开源发布。",
+  "$comment": "信息源登记。只采集公开 RSS/Atom/API；遵守 robots.txt（明确拒绝爬虫的站点如 Reddit、36氪 不采集）；每域名限速 1 次/秒；不绕过付费墙。filter=true 表示只保留命中关注主题的条目。kind: feed | hf-models | github-releases | reach（经 Agent-Reach 采集，reach 为命令参数）| page-list（政府网站文章列表页，只取同域名文章链接）。grp: lab 官方 | model 模型发布 | blog 大牛博客 | community 社区 | paper 论文 | media 媒体 | release 开源发布 | reg 合规监管。",
   "sources": [
+    { "id": "cac-wxfb", "name": "网信办·网信发布", "url": "https://www.cac.gov.cn/wxzw/wxfb/A093702index_1.htm", "kind": "page-list", "grp": "reg", "lang": "zh", "maxItems": 20 },
+    { "id": "cac-zcfg", "name": "网信办·政策法规", "url": "https://www.cac.gov.cn/wxzw/zcfg/A093703index_1.htm", "kind": "page-list", "grp": "reg", "lang": "zh", "maxItems": 20 },
     { "id": "openai", "name": "OpenAI News", "url": "https://openai.com/news/rss.xml", "grp": "lab", "maxItems": 20 },
     { "id": "deepmind", "name": "Google DeepMind", "url": "https://deepmind.google/blog/rss.xml", "grp": "lab", "maxItems": 15 },
     { "id": "google-ai", "name": "Google AI Blog", "url": "https://blog.google/technology/ai/rss/", "grp": "lab", "maxItems": 15 },

@@ -201,3 +201,43 @@ export function parseGithubReleases(json: string, apiUrl: string): FeedEntry[] {
   }
   return out;
 }
+
+const ATTR = (name: string) => new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i');
+const attrOf = (attrs: string, name: string): string | null => {
+  const m = ATTR(name).exec(attrs);
+  return m ? (m[1] ?? m[2] ?? m[3] ?? '') : null;
+};
+const ARTICLE_PATH = /^\/\d{4}-\d{2}\/\d{2}\/c_\d+\.htm$/;
+
+/**
+ * 政府网站文章列表页（如网信办栏目页）：逐个 <li> 取第一个链接。
+ * 只保留与列表页同域名、路径形如 /YYYY-MM/DD/c_数字.htm 的文章链接；日期取 <li> 内第一个 YYYY-MM-DD，按东八区零点。
+ */
+export function parsePageList(html: string, pageUrl: string): FeedEntry[] {
+  const base = new URL(pageUrl);
+  const seen = new Set<string>();
+  const out: FeedEntry[] = [];
+  for (const li of html.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)) {
+    const a = /<a\b([^>]*)>([\s\S]*?)<\/a>/i.exec(li[1]);
+    if (!a) continue;
+    const href = attrOf(a[1], 'href');
+    if (!href) continue;
+    let u: URL;
+    try {
+      u = new URL(decodeEntities(href.trim()), base);
+    } catch {
+      continue;
+    }
+    if ((u.protocol !== 'https:' && u.protocol !== 'http:') || u.hostname !== base.hostname || !ARTICLE_PATH.test(u.pathname)) continue;
+    const url = `${base.protocol}//${u.host}${u.pathname}`;
+    if (seen.has(url)) continue;
+    const norm = (s: string) => decodeEntities(s.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+    const title = norm(attrOf(a[1], 'title') ?? '') || norm(a[2]);
+    if (!title) continue;
+    seen.add(url);
+    const d = /(\d{4})-(\d{2})-(\d{2})/.exec(li[1].replace(/<a\b[^>]*>/gi, ''));
+    const publishedAt = d ? Date.UTC(+d[1], +d[2] - 1, +d[3]) - 8 * 3600_000 : undefined;
+    out.push({ title, url, ...(publishedAt !== undefined ? { publishedAt } : {}), content: '' });
+  }
+  return out;
+}

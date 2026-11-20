@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { test } from 'node:test';
 import { hashPassword, verifyPassword } from './auth.ts';
-import { decodeEntities, htmlToText, parseFeed, parseHfModels } from './feed.ts';
+import { decodeEntities, htmlToText, parseFeed, parseHfModels, parsePageList } from './feed.ts';
 import { isBlockedIp, isHostAllowed, allowHost, parseRobots, robotsAllows, politeFetch } from './net.ts';
 
 test('scrypt 哈希可往返校验，错误密码失败', () => {
@@ -87,4 +87,25 @@ test('解析 Hugging Face 模型列表', () => {
   assert.equal(out.length, 1);
   assert.equal(out[0].url, 'https://huggingface.co/deepseek-ai/X');
   assert.match(out[0].content, /moe/);
+});
+
+test('parsePageList：网信办列表页，无引号 href、title 属性、东八区日期', () => {
+  const page = 'https://www.cac.gov.cn/wxzw/wxfb/A093702index_1.htm';
+  const html = `<ul class="list">
+    <li><h5><a href=//www.cac.gov.cn/2026-11/10/c_1796065949954025.htm target="_blank" title="国家网信办部署开展&ldquo;清朗&rdquo;专项行动">国家网信办部署…</a></h5><div class="times">2026-11-10</div></li>
+    <li><a href="javascript:void(0);">更多</a></li>
+    <li><a href="https://evil.example/2026-11/10/c_1.htm" title="站外">站外</a> 2026-11-09</li>
+    <li><a href="//www.cac.gov.cn/wxzw/A0937index_1.htm">栏目页</a></li>
+    <li><h5><a href="../../2026-11/08/c_1795.htm">  关于 印发
+      办法的通知 </a></h5><span>2026-11-08</span></li>
+    <li><a href=//www.cac.gov.cn/2026-11/10/c_1796065949954025.htm title="重复">重复</a></li>
+    <li><a href=//www.cac.gov.cn/2026-11/07/c_1794.htm title="">   </a></li>
+  </ul>`;
+  const r = parsePageList(html, page);
+  assert.deepEqual(r.map((e) => e.url), ['https://www.cac.gov.cn/2026-11/10/c_1796065949954025.htm', 'https://www.cac.gov.cn/2026-11/08/c_1795.htm']);
+  assert.equal(r[0].title, '国家网信办部署开展“清朗”专项行动');
+  assert.equal(r[0].publishedAt, Date.UTC(2026, 10, 9, 16));
+  assert.equal(r[0].content, '');
+  assert.equal(r[1].title, '关于 印发 办法的通知');
+  assert.equal(r[1].publishedAt, Date.UTC(2026, 10, 7, 16));
 });

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { openDb } from '../../packages/core/db.ts';
-import { syncSources } from './collect.ts';
+import { parseEntries, syncSources } from './collect.ts';
 import { getItem, listItems } from './query.ts';
 import { TopicMatcher, detectLang, loadTopics, normTitle, normalizeUrl, titleSimilarity } from './text.ts';
 
@@ -63,4 +63,23 @@ test('全文补全判定：短摘要的博客/媒体需要，论文/Release/长�
   assert.equal(needsFulltext({ content: 'short', kind: 'feed', grp: 'paper', fulltext_at: null }), false);
   assert.equal(needsFulltext({ content: 'short', kind: 'github-releases', grp: 'release', fulltext_at: null }), false);
   assert.equal(needsFulltext({ content: 'short', kind: 'reach', grp: 'community', fulltext_at: null }), false);
+});
+
+test('parseEntries：page-list 解析为 0 条时报结构变化；feed 非 XML 仍报不是 RSS/Atom', () => {
+  const url = 'https://www.cac.gov.cn/wxzw/wxfb/A093702index_1.htm';
+  assert.throws(() => parseEntries({ kind: 'page-list', url }, '<ul><li>无链接</li></ul>'), /页面结构可能已变化/);
+  const ok = parseEntries({ kind: 'page-list', url }, '<li><a href=//www.cac.gov.cn/2026-11/10/c_1.htm title="t">t</a>2026-11-10</li>');
+  assert.equal(ok.length, 1);
+  assert.throws(() => parseEntries({ kind: 'feed', url: 'https://a.example/feed' }, '<html>blocked</html>'), /不是 RSS\/Atom/);
+  assert.equal(parseEntries({ kind: 'feed', url: 'https://a.example/feed' }, '<rss><channel></channel></rss>').length, 0);
+});
+
+test('sources.json：网信办两个栏目登记为 page-list、合规监管分组', () => {
+  const defs = JSON.parse(fs.readFileSync(new URL('./sources.json', import.meta.url), 'utf8')).sources;
+  for (const id of ['cac-wxfb', 'cac-zcfg']) {
+    const d = defs.find((x: { id: string }) => x.id === id);
+    assert.ok(d, id);
+    assert.deepEqual([d.kind, d.grp, d.lang], ['page-list', 'reg', 'zh']);
+    assert.equal(new URL(d.url).hostname, 'www.cac.gov.cn');
+  }
 });
