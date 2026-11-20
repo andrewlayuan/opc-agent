@@ -144,6 +144,16 @@ test('目录：17 项、14 题，每项有依据、时点与白名单 https 链�
   }
 });
 
+test('网信办备案统一入口（2026-11-09 起）：大模型备案、算法备案都指向新技术新应用备案系统，不再出现已停用的旧系统名', () => {
+  const linksOf = (id: string) => CATALOG.find((c) => c.id === id)!.links;
+  for (const id of ['genai_filing', 'algo_filing']) {
+    const l = linksOf(id).find((x) => new URL(x.url).hostname === 'beian.cac.gov.cn');
+    assert.equal(l?.label, '互联网新技术新应用信息服务备案系统', id);
+  }
+  assert.ok(linksOf('algo_filing').some((x) => x.url === 'https://www.cac.gov.cn/2026-11/09/c_1795978604463007.htm'));
+  assert.ok(!JSON.stringify(CATALOG).includes('互联网信息服务算法备案系统'));
+});
+
 test('每个事项至少被一个画像触发，结果含全部事项且按时点排序', () => {
   const results = Object.values(P).map(run);
   for (const c of CATALOG) assert.ok(results.some((r) => r.items.some((x) => x.id === c.id && x.level !== 'na')), c.id);

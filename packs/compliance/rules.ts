@@ -52,7 +52,9 @@ export interface CatalogItem {
 
 const L = {
   miitBeian: { label: 'ICP/IP 地址/域名信息备案管理系统', url: 'https://beian.miit.gov.cn/' },
-  cacBeian: { label: '互联网信息服务算法备案系统', url: 'https://beian.cac.gov.cn/' },
+  // 2026-11-09 起生成式人工智能、算法、深度合成、区块链备案统一在此系统办理，原算法备案系统停用
+  cacBeian: { label: '互联网新技术新应用信息服务备案系统', url: 'https://beian.cac.gov.cn/' },
+  cacBeianNotice: { label: '网信办：新技术新应用备案系统上线通告', url: 'https://www.cac.gov.cn/2026-11/09/c_1795978604463007.htm' },
   genaiNotice: { label: '网信办：生成式人工智能服务已备案信息公告', url: 'https://www.cac.gov.cn/2026-01/09/c_1769688009588554.htm' },
   genaiRules: { label: '生成式人工智能服务管理暂行办法', url: 'https://www.gov.cn/zhengce/zhengceku/202307/content_6891752.htm' },
   anthro: { label: '人工智能拟人化互动服务管理暂行办法', url: 'https://www.cac.gov.cn/2026-04/10/c_1777558395078289.htm' },
@@ -73,9 +75,9 @@ export const CATALOG: CatalogItem[] = [
   { id: 'genai_register', name: '大模型登记', authority: '属地省级网信办', basis: '国家网信办生成式人工智能服务已备案信息公告（直接调用已备案模型能力的应用或功能，由地方网信办登记）', timing: '上线前', timingOrder: 0,
     links: [L.genaiNotice, L.genaiRules] },
   { id: 'genai_filing', name: '大模型备案', authority: '属地省级网信办 / 国家网信办', basis: '《生成式人工智能服务管理暂行办法》第二条、第十七条', timing: '上线前', timingOrder: 0,
-    links: [L.genaiRules, L.genaiNotice] },
+    links: [L.cacBeian, L.genaiRules, L.genaiNotice] },
   { id: 'algo_filing', name: '算法备案', authority: '国家网信办', basis: '《互联网信息服务算法推荐管理规定》第二十四条（提供服务之日起十个工作日内）；《生成式人工智能服务管理暂行办法》第十七条', timing: '提供服务之日起 10 个工作日内', timingOrder: 2,
-    links: [L.cacBeian] },
+    links: [L.cacBeian, L.cacBeianNotice] },
   { id: 'security_assess', name: '双新安全评估', authority: '属地网信办、公安机关', basis: '《具有舆论属性或社会动员能力的互联网信息服务安全评估规定》第二条、第三条', timing: '上线前 / 功能重大变更时', timingOrder: 0,
     links: [{ label: '安全评估规定', url: 'https://www.cac.gov.cn/2018-11/15/c_1123716072.htm' }] },
   { id: 'model_disclosure', name: '公示所用模型与备案号', authority: '属地网信办', basis: '国家网信办生成式人工智能服务已备案信息公告（已上线应用应公示模型名称、备案号或上线编号）', timing: '上线时', timingOrder: 1,
