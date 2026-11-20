@@ -8,20 +8,25 @@ import { listReminders } from '../../packs/compliance/reminders.ts';
 import { CATALOG, QUESTIONS, RULES_VERSION, validateAnswers } from '../../packs/compliance/rules.ts';
 import { CpError, assessAndMerge, createProduct, deleteProduct, getItem, getProduct, listProducts, saveExplain, updateItem, updateProduct } from '../../packs/compliance/store.ts';
 import type { ItemPatch } from '../../packs/compliance/store.ts';
+import { getFacts, ENTITY_FIELDS, FACT_FIELDS } from '../../packs/compliance/facts.ts';
+import type { GenerateFn } from '../../packs/compliance/docs-gen.ts';
+import { TEMPLATES } from '../../packs/compliance/templates.ts';
+import { routeDocs } from './compliance-docs-api.ts';
 import { HttpError, readJson, sendJson } from './http.ts';
 
 export const NOTICE = '结果为自查参考，以属地主管部门口径为准。';
 
-const NO_LLM = '未配置 DEEPSEEK_API_KEY，无法调用模型';
+export const NO_LLM = '未配置 DEEPSEEK_API_KEY，无法调用模型';
 const LLM_FAIL = '模型调用失败，请稍后重试或手动填写';
 
-/** 模型调用失败（含输出无法解析）统一 502；原始错误只记日志 */
-async function viaLlm<T>(fn: () => Promise<T>): Promise<T> {
+/** 模型调用失败（含输出无法解析）统一 502；原始错误只记日志。已是 HttpError 的原样抛出 */
+export async function viaLlm<T>(fn: () => Promise<T>, fail = LLM_FAIL): Promise<T> {
   try {
     return await fn();
   } catch (err) {
+    if (err instanceof HttpError) throw err;
     console.error('[compliance] 模型调用失败', err);
-    throw new HttpError(502, LLM_FAIL);
+    throw new HttpError(502, fail);
   }
 }
 
@@ -31,12 +36,14 @@ export interface ComplianceDeps {
   record?: (e: EventInput) => void;
   prefill?: PrefillFn;
   explain?: ExplainFn;
+  generate?: GenerateFn;
+  convert?: (html: string) => Promise<Buffer>;
 }
 
 const QIDS = new Set(QUESTIONS.map((q) => q.id));
 const NAME = new Map(CATALOG.map((c) => [c.id, c.name]));
 
-function idOf(s: string): number {
+export function idOf(s: string): number {
   const id = Number(s);
   if (!/^\d+$/.test(s) || !Number.isSafeInteger(id) || id <= 0) throw new HttpError(400, '非法 id');
   return id;
@@ -48,8 +55,17 @@ function meta() {
     questions: QUESTIONS.map((q) => ({ id: q.id, title: q.title, multi: q.multi, options: q.options, ...(q.exclusive ? { exclusive: q.exclusive } : {}), ...(q.dependsOn ? { dependsOn: q.dependsOn } : {}) })),
     catalog: CATALOG,
     notice: NOTICE,
+    entityFields: ENTITY_FIELDS,
+    factFields: FACT_FIELDS,
+    docKinds: TEMPLATES.map((t) => ({
+      kind: t.kind, name: t.name, usage: t.usage, items: t.items,
+      chapters: t.chapters.map((c) => ({ key: c.key, title: c.title, mode: c.mode, uses: c.uses })),
+    })),
   };
 }
+
+/** 产品详情：第一期内容 + 产品资料 */
+const detailOf = (db: DB, id: number) => ({ ...getProduct(db, id), facts: getFacts(db, id) });
 
 function reviewIdOf(v: unknown): number | null {
   if (v === undefined || v === null) return null;
@@ -67,25 +83,25 @@ async function route(deps: ComplianceDeps, req: http.IncomingMessage, res: http.
     if (method === 'POST') {
       const body = await readJson(req);
       const id = createProduct(db, { name: body.name, description: body.description }, reviewIdOf(body.reviewId));
-      return sendJson(res, 200, getProduct(db, id)), true;
+      return sendJson(res, 200, detailOf(db, id)), true;
     }
     return false;
   }
   if (a === 'products' && b !== undefined) {
     const id = idOf(b);
     if (parts.length === 2) {
-      if (method === 'GET') return sendJson(res, 200, getProduct(db, id)), true;
+      if (method === 'GET') return sendJson(res, 200, detailOf(db, id)), true;
       if (method === 'PATCH') {
         const body = await readJson(req);
         updateProduct(db, id, { name: body.name, description: body.description });
-        return sendJson(res, 200, getProduct(db, id)), true;
+        return sendJson(res, 200, detailOf(db, id)), true;
       }
       if (method === 'DELETE') return deleteProduct(db, id), sendJson(res, 200, { ok: true }), true;
       return false;
     }
     if (parts.length === 3 && c === 'assess' && method === 'POST') return await assessRoute(deps, req, res, id), true;
     if (parts.length === 3 && c === 'prefill' && method === 'POST') return await prefillRoute(deps, res, id), true;
-    return false;
+    return routeDocs(deps, req, res, method, parts);
   }
   if (a === 'items' && b !== undefined) {
     const id = idOf(b);
@@ -94,8 +110,9 @@ async function route(deps: ComplianceDeps, req: http.IncomingMessage, res: http.
       return sendJson(res, 200, { item: updateItem(db, id, body as ItemPatch) }), true;
     }
     if (parts.length === 3 && c === 'explain' && method === 'POST') return await explainRoute(deps, res, id), true;
+    return false;
   }
-  return false;
+  return routeDocs(deps, req, res, method, parts);
 }
 
 async function assessRoute(deps: ComplianceDeps, req: http.IncomingMessage, res: http.ServerResponse, id: number): Promise<void> {
@@ -105,7 +122,7 @@ async function assessRoute(deps: ComplianceDeps, req: http.IncomingMessage, res:
   if (!v.ok) throw new CpError(400, '问卷未答完或有非法选项', { missing: v.missing, invalid: v.invalid });
   const prefilled = Array.isArray(body.prefilled) ? [...new Set(body.prefilled.filter((x): x is string => typeof x === 'string' && QIDS.has(x)))] : [];
   const { result } = assessAndMerge(deps.db, id, v.answers, prefilled);
-  const detail = getProduct(deps.db, id);
+  const detail = detailOf(deps.db, id);
   try {
     deps.record?.({
       kind: 'compliance_assess',

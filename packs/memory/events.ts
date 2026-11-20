@@ -14,7 +14,8 @@ export type EventKind =
   | 'version_manual'
   | 'proto_create'
   | 'proto_revise'
-  | 'compliance_assess';
+  | 'compliance_assess'
+  | 'compliance_doc_final';
 
 /** 产品顾问类事件：每条内容不同，不合并；整理延迟更短 */
 export const PM_EVENT_KINDS: ReadonlySet<EventKind> = new Set<EventKind>([
