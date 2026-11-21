@@ -682,6 +682,16 @@ input:focus, select:focus, textarea:focus {
 .wiki-diff .add { background: color-mix(in srgb, var(--accent-2) 16%, transparent); }
 .wiki-diff .del { background: color-mix(in srgb, var(--err) 14%, transparent); }
 .wiki-diff .same { color: var(--muted); }
+.wiki-diff mark.chg { color: inherit; border-radius: 2px; }
+.wiki-diff .add mark.chg { background: color-mix(in srgb, var(--accent-2) 38%, transparent); }
+.wiki-diff .del mark.chg { background: color-mix(in srgb, var(--err) 34%, transparent); }
+.wiki-diff .fold { padding: 2px 4px; }
+.wiki-diff .fold button.link { font-size: 12px; color: var(--muted); }
+.wiki-diff .fold button.link:hover { color: var(--accent); }
+.pm-diff .wiki-diff pre { max-height: none; line-height: 1.7; }
+.pm-diff-stats { font-size: 12.5px; }
+.pm-diff-hint { margin: 0 0 8px; font-size: 12px; }
+.pm-saved button.link { margin-left: 8px; color: var(--accent); }
 .wiki-revs { padding-left: 20px; }
 .wiki-ask { max-width: var(--page-w, 760px); }
 .wiki-ask-input { width: 100%; box-sizing: border-box; }

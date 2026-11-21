@@ -1,5 +1,6 @@
 import { initKb } from './kb.js';
 import { initProto } from './proto-panel.js';
+import { initPmDiff } from './pm-diff.js';
 import { initCompliance } from './compliance.js';
 // 所有外部数据只通过 textContent 写入 DOM，链接只接受 http(s)
 const $ = (id) => document.getElementById(id);
@@ -614,6 +615,8 @@ const pm = {
   view: { id: 0, n: 0 },
   verCache: new Map(),
   edit: null,
+  diff: null,
+  saved: null,
   att: { form: [], reply: [], replyFor: 0, replyEl: null, replySync: null },
   tabs: new Map(),
   draft: { id: 0, text: '', revise: false, skills: [], pick: false },
@@ -662,6 +665,7 @@ function newPmReview() {
   pm.current = null;
   pm.review = null;
   pm.edit = null;
+  pm.diff = pm.saved = null;
   proto.leave();
   pmShowMode(null);
   markPmHistory();
@@ -1037,6 +1041,23 @@ async function gotoDoc(id, n) {
   pm.dom?.tabs.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
 }
 
+/** 进入版本对比：默认 v(n-1) → vn；会切到文档页 */
+function startDiff(id, n, base = n - 1) {
+  if (pm.edit) return toast('请先保存或取消编辑');
+  if (!pm.review || pm.review.id !== id || n < 2) return;
+  pm.tabs.set(id, 'doc');
+  pm.saved = null;
+  pm.diff = { id, n, base };
+  renderReview(pm.review);
+  pm.dom?.tabs.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+}
+
+function renderSaved(r) {
+  const s = pm.saved;
+  if (!s || s.id !== r.id || s.n !== pm.view.n || s.n < 2) return null;
+  return h('p', { class: 'ver-note pm-saved' }, `已保存为 v${s.n}。`, h('button', { type: 'button', class: 'link', text: '查看改动', onclick: () => startDiff(r.id, s.n) }));
+}
+
 /** 局部刷新：各区块按内容签名判断是否重建，未变化的区块（滚动位置、焦点、草稿）保持原样 */
 function renderReview(r) {
   pm.review = r;
@@ -1072,10 +1093,25 @@ function renderReview(r) {
   const busy = hasRunningTurn(r);
   const content = viewedContent(r);
   const cur = r.versions.find((v) => v.n === pm.view.n);
-  const sigDoc = JSON.stringify([r.id, r.latest, pm.view.n, busy, pm.edit ? pm.edit.base : null, content == null ? -1 : content.length, r.versions.length, cur?.note ?? null]);
+  const diff = pm.diff?.id === r.id ? pm.diff : null;
+  const saved = pm.saved?.id === r.id ? pm.saved.n : 0;
+  const sigDoc = JSON.stringify([r.id, r.latest, pm.view.n, busy, pm.edit ? pm.edit.base : null, content == null ? -1 : content.length, r.versions.length, cur?.note ?? null, diff && [diff.n, diff.base], saved]);
   if (pm.sig.doc !== sigDoc) {
     pm.sig.doc = sigDoc;
-    d.panes.doc.replaceChildren(...[contextNote(r.context), renderVersions(r), renderVerNote(cur), renderDoc(r)].filter(Boolean));
+    const onExit = () => {
+      pm.diff = null;
+      renderReview(pm.review);
+    };
+    const onChange = (n, base) => {
+      pm.diff = { id: r.id, n, base };
+      renderReview(pm.review);
+    };
+    d.panes.doc.replaceChildren(
+      ...(diff
+        ? [contextNote(r.context), pmDiff.view(r, diff, { onChange, onExit })]
+        : [contextNote(r.context), renderVersions(r), renderSaved(r), renderVerNote(cur), renderDoc(r)]
+      ).filter(Boolean),
+    );
   }
 
   const sigThread = JSON.stringify([r.id, busy, (r.messages || []).map((m) => [m.id, m.status, m.kind, m.version_n, (m.content || '').length, m.error, (m.attachments || []).length])]);
@@ -1185,6 +1221,9 @@ function renderVersions(r) {
     h(
       'div',
       { class: 'ver-actions' },
+      n >= 2
+        ? h('button', { type: 'button', class: 'link', text: '对比上一版', title: `查看 v${n - 1} → v${n} 改了什么`, disabled: pm.edit != null, onclick: () => startDiff(r.id, n) })
+        : null,
       h('button', {
         type: 'button',
         class: 'link',
@@ -1255,6 +1294,7 @@ function renderDoc(r) {
         const { n } = await api(`/api/pm/reviews/${r.id}/versions`, { method: 'POST', body: { content: ta.value, baseN: r.latest } });
         pm.edit = null;
         pm.view = { id: r.id, n };
+        pm.saved = { id: r.id, n };
         toast(`已保存为 v${n}`);
         await openReview(r.id);
       } catch (e) {
@@ -1323,6 +1363,7 @@ function renderThread(r) {
           { class: 'pm-event' },
           h('span', { class: 'pm-event-text', text: `已生成 v${m.version_n}：${m.content}` }),
           h('button', { type: 'button', class: 'link', text: '查看文档', onclick: () => gotoDoc(r.id, m.version_n) }),
+          m.version_n >= 2 ? h('button', { type: 'button', class: 'link', text: '查看改动', onclick: () => startDiff(r.id, m.version_n) }) : null,
           contextNote(m.context, true),
         );
       }
@@ -1498,6 +1539,7 @@ async function openReview(id) {
     const prev = pm.review?.id === id ? pm.review : null;
     if (!prev) {
       pm.edit = null;
+      pm.diff = pm.saved = null;
       pm.sig = {};
       pm.view = { id, n: review.latest };
     } else if (review.latest > prev.latest || pm.view.n < 1 || pm.view.n > review.latest) {
@@ -1905,6 +1947,7 @@ async function init() {
 
 const kb = initKb({ h, api, toast, show, openReview, openItem, renderMarkdown });
 const proto = initProto({ h, api, toast });
+const pmDiff = initPmDiff({ h, api, verName: (v) => `v${v.n} · ${SOURCE_LABEL[v.source] ?? v.source}` });
 const cp = initCompliance({
   h,
   api,

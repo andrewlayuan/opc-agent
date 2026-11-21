@@ -320,6 +320,30 @@ test('多轮：首版未完成或失败、长度、并发都会被拒绝；进�
   done();
 });
 
+test('版本对比：默认上一版、指定基准、统计与参数校验', async () => {
+  const { advisor, done } = setup({ chat: () => '# 结论\n' + '正文'.repeat(150) + '\n## 风险\n要注意的点' });
+  const id = await doneReview(advisor);
+  const v1 = advisor.version(id, 1)!.content;
+  advisor.saveManual(id, `${v1}\n\n补充一段`, 1);
+  advisor.saveManual(id, '# 全新\n只剩这行', 2);
+  const d = advisor.versionDiff(id, 2);
+  assert.equal(d.n, 2);
+  assert.equal(d.base, 1);
+  assert.deepEqual(d.stats, { add: 2, del: 0 });
+  assert.deepEqual(d.diff.lines.filter((l) => l.t === '+').map((l) => l.s), ['', '补充一段']);
+  assert.equal(d.diff.clipped, false);
+  const d31 = advisor.versionDiff(id, 3, 1);
+  assert.equal(d31.base, 1);
+  assert.deepEqual(d31.diff.lines.filter((l) => l.t === '+').map((l) => l.s), ['# 全新', '只剩这行']);
+  assert.equal(d31.stats.del, v1.split('\n').length);
+  assert.deepEqual(statusOf(() => advisor.versionDiff(id, 1)), { status: 400, message: 'v1 没有上一版' });
+  assert.deepEqual(statusOf(() => advisor.versionDiff(id, 2, 2)), { status: 400, message: '只能和更早的版本对比' });
+  assert.deepEqual(statusOf(() => advisor.versionDiff(id, 2, 0)), { status: 400, message: '只能和更早的版本对比' });
+  assert.deepEqual(statusOf(() => advisor.versionDiff(id, 9)), { status: 404, message: '版本不存在' });
+  assert.deepEqual(statusOf(() => advisor.versionDiff(9999, 2)), { status: 404, message: '版本不存在' });
+  done();
+});
+
 test('多轮：手动版本、冲突、内容未变化，之后的追问基于手动版', async () => {
   const seen: string[] = [];
   const { advisor, done } = setup({ chat: (m) => (seen.push(m.map((x) => x.content).join('\n')), fakeTurn(m)) });

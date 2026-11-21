@@ -440,6 +440,13 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     record(() => ({ kind: 'version_manual', refType: 'review', refId: id, summary: `手动编辑 v${n}`, payload: paragraphDiff(pm.version(id, n - 1)?.content ?? '', content.trim()) }));
     return sendJson(res, 201, { n });
   }
+  m = p.match(/^\/api\/pm\/reviews\/(\d+)\/versions\/(\d+)\/diff$/);
+  if (m && method === 'GET') {
+    const id = idFrom(m);
+    const n = versionNo(m[2]);
+    const b = url.searchParams.get('base');
+    return sendJson(res, 200, pmCall(() => pm.versionDiff(id, n, b == null || b === '' ? undefined : Number(b))));
+  }
   m = p.match(/^\/api\/pm\/reviews\/(\d+)\/versions\/(\d+)(\/download)?$/);
   if (m && method === 'GET') {
     const id = idFrom(m);

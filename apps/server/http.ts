@@ -16,6 +16,7 @@ const STATIC: Record<string, { file: string; type: string }> = {
   '/compliance.js': { file: 'compliance.js', type: 'text/javascript; charset=utf-8' },
   '/compliance-docs.js': { file: 'compliance-docs.js', type: 'text/javascript; charset=utf-8' },
   '/proto-panel.js': { file: 'proto-panel.js', type: 'text/javascript; charset=utf-8' },
+  '/pm-diff.js': { file: 'pm-diff.js', type: 'text/javascript; charset=utf-8' },
   '/proto-full.js': { file: 'proto-full.js', type: 'text/javascript; charset=utf-8' },
   '/proto-full.html': { file: 'proto-full.html', type: 'text/html; charset=utf-8' },
   '/login.js': { file: 'login.js', type: 'text/javascript; charset=utf-8' },

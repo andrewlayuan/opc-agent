@@ -2,6 +2,8 @@ import type { DB } from '../../packages/core/db.ts';
 import type { ChatMessage, ContentPart, Llm } from '../../packages/core/llm.ts';
 import type { KbRef } from '../kb/types.ts';
 import { listItems } from '../radar/query.ts';
+import { lineDiff } from '../wiki/diff.ts';
+import type { DiffLine } from '../wiki/diff.ts';
 import { placeholderInput, renderAttachments } from './attach-prompt.ts';
 import type { AttText } from './attach-prompt.ts';
 import { AttachmentError, toView } from './attachments.ts';
@@ -196,6 +198,13 @@ export interface VersionMeta {
 
 export interface VersionView extends VersionMeta {
   content: string;
+}
+
+export interface VersionDiff {
+  n: number;
+  base: number;
+  diff: { lines: DiffLine[]; clipped: boolean };
+  stats: { add: number; del: number };
 }
 
 /** 带 HTTP 语义的业务错误，由服务端映射为对应状态码 */
@@ -619,6 +628,24 @@ ${structure}
     const v = this.db.prepare('SELECT n, source, created_at, note, content FROM pm_versions WHERE review_id=? AND n=?').get(id, n) as Row | undefined;
     if (!v) return null;
     return { n: Number(v.n), source: String(v.source) as VersionMeta['source'], created_at: Number(v.created_at), note: (v.note as string) ?? null, content: String(v.content) };
+  }
+
+  /** 版本 n 相对更早版本 base（默认上一版）的逐行差异 */
+  versionDiff(id: number, n: number, base?: number): VersionDiff {
+    const to = this.version(id, n);
+    if (!to) throw new PmError(404, '版本不存在');
+    if (base === undefined && n <= 1) throw new PmError(400, 'v1 没有上一版');
+    const b = base ?? n - 1;
+    if (!Number.isSafeInteger(b) || b < 1 || b >= n) throw new PmError(400, '只能和更早的版本对比');
+    const from = this.version(id, b);
+    if (!from) throw new PmError(404, '版本不存在');
+    const diff = lineDiff(from.content, to.content);
+    const stats = { add: 0, del: 0 };
+    for (const l of diff.lines) {
+      if (l.t === '+') stats.add++;
+      else if (l.t === '-') stats.del++;
+    }
+    return { n, base: b, diff, stats };
   }
 
   refs(id: number): ReviewRef[] {
