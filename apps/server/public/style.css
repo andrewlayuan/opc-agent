@@ -678,6 +678,7 @@ input:focus, select:focus, textarea:focus {
 .wiki-img { max-width: 100%; border-radius: 6px; }
 .wiki-editor { width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .wiki-diff pre { margin: 0; padding: 8px; overflow: auto; max-height: 480px; border: 1px solid var(--line); border-radius: 6px; font-size: 12.5px; white-space: pre-wrap; }
+.wiki-diff pre > div { display: block; padding: 0 4px; font-size: inherit; }
 .wiki-diff .add { background: color-mix(in srgb, var(--accent-2) 16%, transparent); }
 .wiki-diff .del { background: color-mix(in srgb, var(--err) 14%, transparent); }
 .wiki-diff .same { color: var(--muted); }

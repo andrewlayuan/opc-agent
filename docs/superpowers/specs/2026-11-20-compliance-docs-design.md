@@ -113,7 +113,7 @@ interface DocTemplate { kind: string; name: string; usage: 'public' | 'filing'; 
 ### 4.1 流程
 
 1. `POST products/:id/docs {kind}`：校验可起草，在事务内建 `cp_docs` 与当前模板下全部章（受 `when` 过滤）；固定章当场渲染并写版本 1（origin `fixed`），模型章 `rev = 0`（未生成）。
-2. 前端对 `rev = 0` 的模型章依次调用 `POST docs/:id/sections/:key/generate`（「生成剩余章节」），逐章显示进度；单章失败标红可重试，不中断后续章。
+2. 前端对 `rev = 0` 的模型章依次调用 `POST docs/:id/sections/:key/generate`（「生成剩余章节」），逐章显示进度；单章失败（如 502 模型调用失败）标红可重试，不中断后续章；遇到 400（如未配置模型）、404、409 时逐章重试也不会成功，停下并提示原因。
 3. `generate` 对固定章：重新渲染（不需要模型）；对模型章：调用模型，清洗后写新版本（origin `generate`）。
 
 ### 4.2 模型调用
