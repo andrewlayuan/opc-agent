@@ -486,6 +486,47 @@ const MIGRATIONS: string[] = [
     UNIQUE (section_id, n)
   );
   `,
+  // 13: 运营——投放、平台文案、文案版本
+  `
+  CREATE TABLE gr_campaigns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    product_id INTEGER REFERENCES cp_products(id) ON DELETE SET NULL,
+    product_name TEXT NOT NULL,
+    product_desc TEXT NOT NULL DEFAULT '',
+    points TEXT NOT NULL,
+    audience TEXT NOT NULL DEFAULT '',
+    offer TEXT NOT NULL DEFAULT '',
+    tone TEXT NOT NULL DEFAULT 'warm',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE gr_copies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL REFERENCES gr_campaigns(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL,
+    rev INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'draft',
+    kept TEXT NOT NULL DEFAULT '{}',
+    gen_hash TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (campaign_id, platform)
+  );
+  CREATE TABLE gr_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    copy_id INTEGER NOT NULL REFERENCES gr_copies(id) ON DELETE CASCADE,
+    n INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    origin TEXT NOT NULL,
+    fields TEXT NOT NULL,
+    review TEXT,
+    review_base INTEGER,
+    reviewed_at INTEGER,
+    UNIQUE (copy_id, n)
+  );
+  CREATE INDEX gr_copies_campaign ON gr_copies(campaign_id);
+  `,
 ];
 
 export type DB = DatabaseSync;
