@@ -76,9 +76,9 @@ input, select {
 input:focus, select:focus { border-color: var(--fg); }
 .muted { color: var(--muted); }
 .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px; }
-/* 宽版页面（产品顾问、知识库）：随屏幕变宽，最大 1600px；顶栏与之对齐。100vw 含滚动条宽度，多留出 24px 避免出现横向滚动 */
+/* 宽版页面（产品顾问、知识库、运营）：随屏幕变宽，最大 1600px；顶栏与之对齐。100vw 含滚动条宽度，多留出 24px 避免出现横向滚动 */
 :root { --page-w: min(1600px, calc(100vw - 64px)); }
-#view-pm, #view-kb {
+#view-pm, #view-kb, #view-growth {
   --w: max(100%, var(--page-w));
   width: var(--w);
   margin-left: calc((100% - var(--w)) / 2);
@@ -953,4 +953,113 @@ mark.cp-ph { background: #ffeb3b; color: #222; border-radius: 3px; padding: 0 2p
   .cp-doc-layout { grid-template-columns: minmax(0, 1fr); }
   .cp-doc-side { position: static; max-height: none; }
   .cp-doc-gap { display: none; }
+}
+/* 运营 */
+:root { --gr-warn: #f0b44c; }
+@media (prefers-color-scheme: light) { :root { --gr-warn: #b7791f; } }
+.gr-camp .cp-prod-meta { width: 100%; justify-content: space-between; }
+.gr-camp-prod { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gr-dots { display: inline-flex; gap: 4px; flex: none; }
+.gr-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-hi); }
+.gr-dot.s-must { background: var(--err); }
+.gr-dot.s-warn { background: var(--gr-warn); }
+.gr-dot.s-ok { background: var(--ok); }
+.gr-dot.s-final { background: var(--accent); }
+.gr-form { max-width: 720px; }
+.gr-form-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 140px; gap: 0 14px; }
+.gr-hint { margin: 0; font-size: 12px; font-weight: 400; }
+.gr-points { display: flex; flex-direction: column; gap: 6px; }
+.gr-point { display: flex; gap: 8px; align-items: center; }
+.gr-point .kb-input { flex: 1; min-width: 0; }
+.gr-plats { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 14px 0 0; padding: 8px 14px 12px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 13.5px; }
+.gr-plats legend { padding: 0 6px; font-size: 13px; font-weight: 500; }
+.gr-check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.gr-info { margin: 0 0 12px; padding: 2px 16px 14px; border: 1px solid var(--line); border-radius: var(--radius); }
+.gr-sub { margin: 12px 0 0; font-size: 15px; }
+.gr-head-actions { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 14px; font-size: 13px; }
+.gr-export { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+button.link.gr-danger { color: var(--err); }
+.gr-ctx { margin-top: 2px; font-size: 12px; }
+.gr-tabs { align-items: center; overflow-x: auto; scrollbar-width: thin; }
+.gr-tab { flex: none; white-space: nowrap; }
+.gr-tab::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--line-hi); vertical-align: 1px; }
+.gr-tab.s-must::before, .gr-tab.s-fail::before { background: var(--err); }
+.gr-tab.s-warn::before { background: var(--gr-warn); }
+.gr-tab.s-ok::before { background: var(--ok); }
+.gr-tab.s-final::before { background: var(--accent); }
+.gr-tab.s-run::before { background: var(--accent-2); }
+.gr-tab.s-fail { color: var(--err); }
+.gr-add { display: inline-flex; flex: none; align-items: center; gap: 6px; margin-left: auto; padding-left: 12px; font-size: 13px; }
+.gr-add .kb-select { width: auto; padding: 3px 8px; font-size: 13px; }
+.gr-panel { padding-top: 14px; }
+.gr-blank { padding: 24px 0; }
+.gr-note { margin: 0 0 8px; padding: 6px 12px; border-radius: 8px; background: var(--soft); font-size: 13px; }
+.gr-note.warn { color: var(--err); background: color-mix(in srgb, var(--err) 8%, transparent); }
+.gr-note button.link { color: var(--accent); }
+.gr-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 380px); gap: 20px; align-items: start; }
+.gr-fields { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.gr-field { padding: 10px 14px 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+.gr-field-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 6px; font-size: 12.5px; }
+.gr-field-head > * { white-space: nowrap; }
+.gr-field-label { font-weight: 600; }
+.gr-count { margin-left: auto; font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.gr-count.over { color: var(--gr-warn); }
+.gr-text { font-size: 14.5px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.gr-text.long { max-height: 560px; overflow: auto; }
+.gr-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.gr-tag { padding: 1px 9px; border-radius: 999px; background: var(--soft); font-size: 13px; }
+.gr-items { display: flex; flex-direction: column; gap: 8px; margin: 0; padding-left: 22px; }
+.gr-item-row { display: flex; align-items: baseline; gap: 8px; }
+.gr-item-label { flex: none; min-width: 2.5em; font-size: 12px; }
+.gr-len { margin: 6px 0 0; font-size: 12px; color: var(--gr-warn); }
+mark.gr-hit { color: inherit; border-radius: 3px; padding: 0 1px; }
+mark.gr-hit.must { background: color-mix(in srgb, var(--err) 26%, transparent); box-shadow: inset 0 -2px 0 var(--err); }
+mark.gr-hit.warn { background: color-mix(in srgb, var(--gr-warn) 26%, transparent); box-shadow: inset 0 -2px 0 var(--gr-warn); }
+mark.gr-hit.kept { background: none; box-shadow: inset 0 -1px 0 var(--muted); }
+mark.gr-hit.flash { outline: 2px solid var(--accent); outline-offset: 1px; }
+.gr-checks { position: sticky; top: 80px; max-height: calc(100vh - 100px); overflow: auto; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 13px; }
+.gr-notice { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; background: var(--wash); font-size: 12.5px; line-height: 1.6; }
+.gr-check-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.gr-check-bar button { padding: 4px 10px; font-size: 12.5px; }
+.gr-pass { margin: 0 0 8px; color: var(--ok); }
+.gr-group { margin-top: 12px; }
+.gr-group h4 { margin: 0 0 6px; font-size: 13px; }
+.gr-group.must h4 { color: var(--err); }
+.gr-group.warn h4 { color: var(--gr-warn); }
+.gr-group.kept h4 { color: var(--muted); }
+.gr-group > p { margin: 0; }
+.gr-hit-item { margin-bottom: 8px; padding: 6px 0 6px 10px; border-left: 3px solid var(--line-hi); }
+.gr-hit-item.must { border-left-color: var(--err); }
+.gr-hit-item.warn { border-left-color: var(--gr-warn); }
+.gr-hit-item.review { border-left-color: var(--accent-2); }
+.gr-hit-item.kept { border-left-color: var(--line-hi); }
+.gr-hit-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.gr-hit-label { font-weight: 600; }
+.gr-quote { overflow-wrap: anywhere; }
+.gr-where { font-size: 12px; }
+.gr-reason, .gr-basis, .gr-kept, .gr-hit-item.review p { margin: 3px 0 0; overflow-wrap: anywhere; }
+.gr-basis { font-size: 12px; }
+.gr-kept { font-size: 12.5px; }
+.gr-hit-actions { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; font-size: 12.5px; }
+.gr-hit-actions button.link { color: var(--accent); }
+.gr-actions .gr-gap { flex: 1; }
+.gr-edit { max-width: 860px; }
+.gr-edit-hint { margin: 0; font-size: 12.5px; }
+.gr-edit-field .gr-field-head { margin: 0; font-size: 13px; }
+.gr-area { resize: vertical; line-height: 1.7; }
+.gr-area.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+.gr-edit-items { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.gr-edit-item { display: grid; grid-template-columns: 20px minmax(0, 1fr) minmax(0, 2fr) 24px; align-items: center; gap: 6px; width: 100%; }
+.gr-edit-n { font-size: 12px; text-align: right; }
+.gr-hist-bar, .gr-rev-bar { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin: 0 0 8px; font-size: 13px; }
+.gr-revs { max-height: 220px; }
+@media (max-width: 900px) {
+  .gr-grid { grid-template-columns: minmax(0, 1fr); }
+  .gr-checks { position: static; max-height: none; }
+}
+@media (max-width: 640px) {
+  .gr-form-row { grid-template-columns: minmax(0, 1fr); }
+  .gr-head { flex-direction: column; gap: 8px; }
+  .gr-edit-item { grid-template-columns: 20px minmax(0, 1fr) 24px; }
+  .gr-edit-item .kb-input + .kb-input { grid-column: 2; }
 }

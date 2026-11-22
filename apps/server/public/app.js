@@ -1,10 +1,11 @@
 import { initKb } from './kb.js';
 import { initProto } from './proto-panel.js';
-import { initPmDiff } from './pm-diff.js';
+import { diffNodes, initPmDiff } from './pm-diff.js';
 import { initCompliance } from './compliance.js';
+import { initGrowth } from './growth.js';
 // 所有外部数据只通过 textContent 写入 DOM，链接只接受 http(s)
 const $ = (id) => document.getElementById(id);
-const TAB_VIEWS = ['intel', 'pm', 'compliance', 'kb', 'memory'];
+const TAB_VIEWS = ['intel', 'pm', 'compliance', 'growth', 'kb', 'memory'];
 /** 「情报」菜单下的子页面：动态、简报、信息源 */
 const INTEL_TABS = [['feed', '动态'], ['brief', '简报'], ['sources', '信息源']];
 const isIntel = (v) => INTEL_TABS.some(([k]) => k === v);
@@ -1840,13 +1841,14 @@ function show(view, opts = {}) {
   }
   $('intel-tabs').hidden = top !== 'intel';
   for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('on', b.dataset.view === top);
-  for (const v of ['feed', 'brief', 'pm', 'compliance', 'kb', 'memory', 'sources']) $(`view-${v}`).hidden = v !== view;
+  for (const v of ['feed', 'brief', 'pm', 'compliance', 'growth', 'kb', 'memory', 'sources']) $(`view-${v}`).hidden = v !== view;
   $('q').hidden = view !== 'feed';
   if (view === 'kb' && !opts.skipLoad) kb.load();
   if (view === 'brief') loadBrief();
   if (view === 'sources') loadSources();
   if (view === 'memory') loadMemory();
   if (view === 'compliance' && !opts.skipLoad) cp.load();
+  if (view === 'growth' && !opts.skipLoad) gr.load();
   if (view === 'pm') {
     initPm();
     loadPmHistory();
@@ -1948,6 +1950,7 @@ async function init() {
 const kb = initKb({ h, api, toast, show, openReview, openItem, renderMarkdown });
 const proto = initProto({ h, api, toast });
 const pmDiff = initPmDiff({ h, api, verName: (v) => `v${v.n} · ${SOURCE_LABEL[v.source] ?? v.source}` });
+const gr = initGrowth({ h, api, toast, diffNodes });
 const cp = initCompliance({
   h,
   api,
