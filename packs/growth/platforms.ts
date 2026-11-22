@@ -189,6 +189,16 @@ export function validateFields(p: Platform, raw: unknown, factor: number): Field
   return out;
 }
 
+/** 字段路径的中文名：`points.0.desc` → 「卖点 1 说明」 */
+export function pathLabel(p: Platform, path: string): string {
+  const [k, i, sub] = path.split('.');
+  const d = p.fields.find((x) => x.key === k);
+  if (!d) return path;
+  if (i === undefined) return d.label;
+  const head = `${d.label} ${Number(i) + 1}`;
+  return sub === undefined ? head : `${head} ${d.item?.find((x) => x.key === sub)?.label ?? sub}`;
+}
+
 const tooLong = (label: string, n: number, max: number) => `${label} ${n} 字，超过 ${max} 字`;
 const tooShort = (label: string, n: number, min: number) => `${label} ${n} 字，少于 ${min} 字`;
 
