@@ -1116,3 +1116,17 @@ mark.gr-hit.flash { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* 知识库智能搜索 */
 .kb-smart-terms { margin: 4px 0 10px; font-size: 13px; }
 .kb-smart-btn { display: block; margin: 12px auto 4px; }
+
+/* 知识库批量导入 */
+.kb-imp { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card, transparent); }
+.kb-imp-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.kb-imp-stat { font-size: 13px; }
+.kb-imp-ops { margin-left: auto; display: flex; gap: 8px; }
+.kb-imp-fails { margin: 8px 0 0; padding-left: 18px; max-height: 180px; overflow: auto; font-size: 13px; color: var(--err); }
+.kb-imp-sum { line-height: 1.6; }
+.kb-imp-hint { font-size: 13px; }
+.kb-imp-dup { display: flex; gap: 6px; align-items: center; font-size: 13px; margin: 6px 0; }
+#kb-pane-docs.kb-drop-files { outline: 2px dashed var(--accent); outline-offset: -6px; }
+@media (max-width: 640px) {
+  .kb-imp-ops { margin-left: 0; width: 100%; }
+}

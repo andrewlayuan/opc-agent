@@ -134,8 +134,11 @@
             <input id="kb-q" type="search" placeholder="搜索知识库" autocomplete="off" maxlength="200">
             <button type="button" id="kb-upload">上传</button>
             <input type="file" id="kb-file" multiple hidden accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.doc,.docx,.docm,.rtf,.odt,.wps,.xls,.xlsx,.xlsm,.ods,.et,.ppt,.pptx,.pptm,.odp,.dps,.html,.htm,.xhtml,.txt,.md,.markdown,.csv,.tsv,.json,.log,.yaml,.yml,.xml">
+            <button type="button" class="ghost" id="kb-import-dir" title="选一个文件夹，按原来的目录结构导入；也可以把文件或文件夹直接拖进来">导入文件夹</button>
+            <input type="file" id="kb-dir" webkitdirectory multiple hidden>
             <button type="button" class="ghost" id="kb-new-note">新建笔记</button>
           </div>
+          <div class="kb-imp" id="kb-import" hidden></div>
           <div class="kb-body" id="kb-body"></div>
         </div>
       </div>

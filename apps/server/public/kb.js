@@ -1,6 +1,47 @@
 // 知识库页：顶部标签（资料 / Wiki / 问 Wiki / 体检与日志）、目录树、条目列表与搜索、条目详情、上传、笔记、入库与归类弹窗。外部数据只通过 textContent 写入 DOM
 import { initWiki } from './wiki.js';
 
+const KB_IMPORT_MAX = 500;
+const KB_IMG_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
+const KB_SKIP_LABEL = [
+  ['hidden', '隐藏文件'],
+  ['type', '不支持'],
+  ['big', '超过 10MB'],
+  ['empty', '空文件'],
+  ['dupe', '重复'],
+  ['over', '超出数量上限'],
+];
+const kbExt = (n) => (/\.([^./]+)$/.exec(n)?.[1] ?? '').toLowerCase();
+const kbHidden = (dir, name) => [...dir.split('/'), name].some((x) => x.startsWith('.') || x === '__MACOSX') || name === 'Thumbs.db' || name === 'desktop.ini';
+
+/**
+ * 批量导入预检（纯函数）：entries 为 { name, size, dir, file }，dir 是相对目录（'' 为根部）。
+ * existing：相对目录 → Set(`${文件名}\0${大小}`)，同目录同名同大小视为重复。
+ * 按 隐藏 → 类型 → 空 → 过大 → 重复 → 数量上限 依次过滤
+ */
+export function planImport(entries, { existing, allowDupes, remaining, accept, fileMax }) {
+  const skipped = { hidden: 0, type: 0, big: 0, empty: 0, dupe: 0, over: 0 };
+  const take = [];
+  const limit = Math.max(0, Math.min(KB_IMPORT_MAX, remaining));
+  for (const e of entries) {
+    if (kbHidden(e.dir, e.name)) skipped.hidden++;
+    else if (!accept.has(kbExt(e.name))) skipped.type++;
+    else if (e.size === 0) skipped.empty++;
+    else if (e.size > fileMax) skipped.big++;
+    else if (!allowDupes && existing.get(e.dir)?.has(`${e.name}\u0000${e.size}`)) skipped.dupe++;
+    else if (take.length >= limit) skipped.over++;
+    else take.push(e);
+  }
+  return { take, skipped, images: take.filter((e) => KB_IMG_EXT.has(kbExt(e.name))).length };
+}
+
+/** 预检摘要文案 */
+export function importSummary(plan, target) {
+  const n = Object.values(plan.skipped).reduce((a, b) => a + b, 0);
+  const why = KB_SKIP_LABEL.filter(([k]) => plan.skipped[k]).map(([k, t]) => `${t} ${plan.skipped[k]}`);
+  return `将导入 ${plan.take.length} 个到〔${target}〕${n ? `，跳过 ${n} 个（${why.join('、')}）` : ''}${plan.images ? `，其中 ${plan.images} 张图片需要模型识别` : ''}`;
+}
+
 export function initKb({ h, api, toast, show, openReview, openItem, renderMarkdown }) {
   const $ = (id) => document.getElementById(id);
   const KIND = { upload: '上传', review: '评审', item: '资讯', note: '笔记' };
@@ -812,6 +853,282 @@ export function initKb({ h, api, toast, show, openReview, openItem, renderMarkdo
     }
   }
 
+  // ---------- 批量导入：多文件、整个文件夹、拖入 ----------
+  const DOCS_MAX = 2000;
+  const IMPORT_CONC = 3;
+  const COLLECT_MAX = 5000;
+  const FAIL_SHOW = 50;
+  const ACCEPT = new Set(
+    String($('kb-file').getAttribute('accept') ?? '')
+      .split(',')
+      .map((x) => x.trim().replace(/^\./, '').toLowerCase())
+      .filter(Boolean),
+  );
+  /** items：{ e, folder, state: wait | up | proc | ok | fail, error, docId } */
+  const imp = { running: false, uploading: false, stopped: false, items: [] };
+  const fromFile = (f) => ({ name: f.name, size: f.size, dir: String(f.webkitRelativePath || '').split('/').slice(0, -1).join('/'), file: f });
+  const segClean = (x) =>
+    // eslint-disable-next-line no-control-regex
+    [...x.replace(/[\u0000-\u001f\u007f\\]/g, ' ').replace(/\s+/g, ' ').trim()].slice(0, 40).join('').trim();
+  const dirSegs = (dir) => dir.split('/').map(segClean).filter((x) => x && x !== '.' && x !== '..');
+
+  /** 用已加载的目录树把相对目录解析成已有目录 id（与服务端 ensureFolders 的规则一致）；不存在时返回 undefined */
+  function resolveDir(base, dir) {
+    const folders = st.tree?.folders ?? [];
+    let depth = 0;
+    for (let cur = base; cur != null && depth <= 10; cur = folders.find((f) => f.id === cur)?.parent_id ?? null) depth++;
+    let cur = base;
+    for (const seg of dirSegs(dir)) {
+      if (depth >= 5) break;
+      const f = folders.find((x) => (x.parent_id ?? null) === cur && x.name === seg);
+      if (!f) return undefined;
+      cur = f.id;
+      depth++;
+    }
+    return cur;
+  }
+
+  /** 已有目录里的上传文件（名称 + 大小），用于查重；确认前不建任何目录 */
+  async function existingFiles(entries, base) {
+    const byFolder = new Map();
+    const out = new Map();
+    for (const dir of new Set(entries.map((e) => e.dir))) {
+      const id = resolveDir(base, dir);
+      if (id === undefined) continue;
+      if (!byFolder.has(id)) {
+        byFolder.set(
+          id,
+          api(`/api/kb/docs?folder=${id ?? 'none'}`).then(
+            (r) => new Set((r.docs ?? []).filter((d) => d.kind === 'upload' && d.file_name).map((d) => `${d.file_name}\u0000${d.file_size}`)),
+            () => new Set(),
+          ),
+        );
+      }
+      out.set(dir, await byFolder.get(id));
+    }
+    return out;
+  }
+
+  /** 摘要弹窗：返回要导入的条目，取消返回 null */
+  async function confirmImport(entries, base) {
+    await loadTree().catch(() => {});
+    const existing = await existingFiles(entries, base);
+    const remaining = Math.max(0, DOCS_MAX - (st.tree?.total ?? 0));
+    const target = base == null ? '顶层（未归类）' : (paths().find((p) => p.id === base)?.path ?? '目录');
+    return dialog((close) => {
+      let allowDupes = false;
+      let plan;
+      const sum = h('p', { class: 'kb-imp-sum' });
+      const hint = h('p', { class: 'muted kb-imp-hint' });
+      const start = h('button', { type: 'button', text: '开始导入', onclick: () => close(plan.take) });
+      const paint = () => {
+        plan = planImport(entries, { existing, allowDupes, remaining, accept: ACCEPT, fileMax: FILE_MAX });
+        sum.textContent = importSummary(plan, target);
+        hint.textContent = plan.skipped.over ? `一次最多导入 ${KB_IMPORT_MAX} 个，知识库最多 ${DOCS_MAX} 个条目（还能放 ${remaining} 个）。` : '';
+        hint.hidden = !plan.skipped.over;
+        start.disabled = !plan.take.length;
+      };
+      paint();
+      const dup = plan.skipped.dupe
+        ? h(
+            'label',
+            { class: 'kb-imp-dup' },
+            h('input', { type: 'checkbox', onchange: (e) => ((allowDupes = Boolean(e.target.checked)), paint()) }),
+            '仍然导入重复文件（同一目录里已有同名、同大小的文件）',
+          )
+        : null;
+      return [
+        h('h3', { text: '批量导入' }),
+        sum,
+        hint,
+        dup,
+        h('p', { class: 'muted kb-imp-hint', text: '会按原来的文件夹结构建目录；导入时不逐个弹出归类。' }),
+        h('div', { class: 'actions' }, start, h('button', { type: 'button', class: 'ghost', text: '取消', onclick: () => close(null) })),
+      ];
+    }, null);
+  }
+
+  async function startImport(entries) {
+    if (imp.running) return toast('上一批还在导入，请等它结束');
+    if (!entries.length) return;
+    const base = typeof st.folder === 'number' ? st.folder : null;
+    try {
+      const take = await confirmImport(entries, base);
+      if (!take?.length) return;
+      const dirs = [...new Set(take.map((e) => e.dir))];
+      let map = { '': base };
+      if (dirs.some(Boolean)) {
+        const r = await api('/api/kb/folders/ensure', { method: 'POST', body: { parentId: base, paths: dirs } });
+        map = r.map;
+        if (r.capped) toast('目录数量已达上限，部分文件放在了上级目录');
+        loadTree().catch(() => {});
+      }
+      imp.items = take.map((e) => ({ e, folder: e.dir in map ? map[e.dir] : base, state: 'wait', error: null, docId: null }));
+      await pumpImport();
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+
+  function applyDoc(it, doc) {
+    it.docId = doc.id;
+    if (doc.status === 'processing') it.state = 'proc';
+    else if (doc.status === 'ready') it.state = 'ok';
+    else ((it.state = 'fail'), (it.error = doc.error || '处理失败'));
+  }
+
+  async function uploadOne(it) {
+    const fail = (msg) => ((it.state = 'fail'), (it.error = msg));
+    let res;
+    try {
+      res = await fetch(`/api/kb/uploads${it.folder != null ? `?folder=${it.folder}` : ''}`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/octet-stream', 'x-file-name': encodeURIComponent(it.e.name) },
+        body: it.e.file,
+      });
+    } catch {
+      return fail('上传失败，请检查网络');
+    }
+    if (res.status === 401) {
+      imp.stopped = true;
+      location.replace('/login');
+      return fail('登录已过期');
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.doc) return fail(data.error || `上传失败（${res.status}）`);
+    applyDoc(it, data.doc);
+  }
+
+  async function pollImport() {
+    const ids = imp.items.filter((x) => x.state === 'proc').map((x) => x.docId);
+    for (let i = 0; i < ids.length; i += 100) {
+      let docs;
+      try {
+        docs = (await api(`/api/kb/docs?ids=${ids.slice(i, i + 100).join(',')}`)).docs ?? [];
+      } catch {
+        continue;
+      }
+      const byId = new Map(docs.map((d) => [d.id, d]));
+      for (const it of imp.items) {
+        if (it.state !== 'proc' || !ids.includes(it.docId)) continue;
+        const d = byId.get(it.docId);
+        if (d) applyDoc(it, d);
+        else ((it.state = 'fail'), (it.error = '条目已被删除'));
+      }
+    }
+    paintImport();
+  }
+
+  async function pumpImport() {
+    imp.running = true;
+    imp.uploading = true;
+    imp.stopped = false;
+    paintImport();
+    const worker = async () => {
+      for (;;) {
+        if (imp.stopped) return;
+        const it = imp.items.find((x) => x.state === 'wait');
+        if (!it) return;
+        it.state = 'up';
+        paintImport();
+        await uploadOne(it);
+        paintImport();
+      }
+    };
+    // 上传期间每 2 秒轮询一次；上传全部结束时立即醒来，没有处理中的就结束，不再多等一轮
+    let wake;
+    const woke = new Promise((r) => (wake = r));
+    const polling = (async () => {
+      while (imp.uploading || imp.items.some((x) => x.state === 'proc')) {
+        await (imp.uploading ? Promise.race([sleep(POLL_MS), woke]) : sleep(POLL_MS));
+        if (imp.items.some((x) => x.state === 'proc')) await pollImport();
+      }
+    })();
+    await Promise.all(Array.from({ length: IMPORT_CONC }, worker));
+    imp.uploading = false;
+    wake();
+    for (const it of imp.items) if (it.state === 'wait') ((it.state = 'fail'), (it.error = '已停止，未上传'));
+    paintImport();
+    await polling;
+    imp.running = false;
+    paintImport();
+    loadTree().catch(() => {});
+    if (visible() && st.view === 'list') refresh().catch(() => {});
+  }
+
+  function paintImport() {
+    const box = $('kb-import');
+    const n = (s) => imp.items.filter((x) => x.state === s).length;
+    const fails = imp.items.filter((x) => x.state === 'fail');
+    const uploaded = imp.items.filter((x) => x.docId != null).length;
+    const btn = (text, onclick, cls = 'ghost') => h('button', { type: 'button', class: cls, text, onclick });
+    const actions = imp.running
+      ? [btn(imp.stopped ? '正在停止…' : '停止', () => ((imp.stopped = true), paintImport()))]
+      : [
+          fails.length
+            ? btn('重试失败的', () => {
+                for (const it of fails) ((it.state = 'wait'), (it.error = null), (it.docId = null));
+                pumpImport().catch((e) => toast(e.message));
+              })
+            : null,
+          btn('关闭', () => ((box.hidden = true), (imp.items = []), box.replaceChildren())),
+        ];
+    if (imp.running && imp.stopped) actions[0].disabled = true;
+    const name = (it) => (it.e.dir ? `${it.e.dir}/${it.e.name}` : it.e.name);
+    box.replaceChildren(
+      ...[
+      h(
+        'div',
+        { class: 'kb-imp-head' },
+        h('strong', { text: `${imp.running ? '正在导入' : '导入结束'}：共 ${imp.items.length} 个` }),
+        h('span', { class: 'kb-imp-stat muted', text: `已上传 ${uploaded} · 处理中 ${n('proc')} · 成功 ${n('ok')} · 失败 ${fails.length}` }),
+        h('span', { class: 'kb-imp-ops' }, ...actions.filter(Boolean)),
+      ),
+      fails.length
+        ? h(
+            'ul',
+            { class: 'kb-imp-fails' },
+            ...fails.slice(0, FAIL_SHOW).map((it) => h('li', { text: `${name(it)}：${it.error}` })),
+            fails.length > FAIL_SHOW ? h('li', { class: 'muted', text: `还有 ${fails.length - FAIL_SHOW} 个` }) : null,
+          )
+        : null,
+      ].filter(Boolean),
+    );
+    box.hidden = false;
+  }
+
+  /** 拖入：DataTransfer 只在事件同步阶段可用，先取出 entry，再异步递归读取 */
+  async function dropImport(roots, plain) {
+    if (!roots.length) {
+      if (plain.length > 1) return startImport(plain.map(fromFile));
+      if (plain.length) return upload(plain);
+      return;
+    }
+    const out = [];
+    const walkEntry = async (en) => {
+      if (out.length >= COLLECT_MAX) return;
+      if (en.isFile) {
+        const f = await new Promise((res, rej) => en.file(res, rej));
+        out.push({ name: f.name, size: f.size, dir: String(en.fullPath || '').replace(/^\/+/, '').split('/').slice(0, -1).join('/'), file: f });
+      } else if (en.isDirectory) {
+        const reader = en.createReader();
+        for (;;) {
+          const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+          if (!batch.length) break;
+          for (const c of batch) await walkEntry(c);
+        }
+      }
+    };
+    try {
+      for (const r of roots) await walkEntry(r);
+    } catch (e) {
+      return toast(`读取拖入的文件失败：${e?.message ?? e}`);
+    }
+    if (out.length === 1 && !out[0].dir) return upload([out[0].file]);
+    return startImport(out);
+  }
+
   /** 每 2 秒轮询到处理结束；成功后弹出归类，目录有变化时才 PATCH */
   async function afterUpload(doc) {
     let d = doc;
@@ -860,7 +1177,34 @@ export function initKb({ h, api, toast, show, openReview, openItem, renderMarkdo
   $('kb-file').addEventListener('change', (e) => {
     const files = [...(e.target.files ?? [])];
     e.target.value = '';
-    upload(files);
+    if (files.length > 1) startImport(files.map(fromFile));
+    else upload(files);
+  });
+  $('kb-import-dir').addEventListener('click', () => $('kb-dir').click());
+  $('kb-dir').addEventListener('change', (e) => {
+    const files = [...(e.target.files ?? [])];
+    e.target.value = '';
+    startImport(files.map(fromFile));
+  });
+  const pane = $('kb-pane-docs');
+  const hasFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files');
+  pane.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    pane.classList.toggle('kb-drop-files', true);
+  });
+  pane.addEventListener('dragleave', () => pane.classList.toggle('kb-drop-files', false));
+  pane.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    pane.classList.toggle('kb-drop-files', false);
+    const roots = [...(e.dataTransfer.items ?? [])].map((it) => (it.kind === 'file' ? it.webkitGetAsEntry?.() : null)).filter(Boolean);
+    void dropImport(roots, [...(e.dataTransfer.files ?? [])]);
+  });
+  window.addEventListener('beforeunload', (e) => {
+    if (!imp.running) return;
+    e.preventDefault();
+    e.returnValue = '';
   });
   wiki.mount({ wiki: $('kb-pane-wiki'), ask: $('kb-pane-ask'), lint: $('kb-pane-lint') });
   $('kb-dialog').addEventListener('keydown', (e) => {
