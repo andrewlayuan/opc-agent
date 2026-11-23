@@ -3,6 +3,7 @@ import { initProto } from './proto-panel.js';
 import { diffNodes, initPmDiff } from './pm-diff.js';
 import { initCompliance } from './compliance.js';
 import { initGrowth } from './growth.js';
+import { initSkills } from './skills.js';
 // 所有外部数据只通过 textContent 写入 DOM，链接只接受 http(s)
 const $ = (id) => document.getElementById(id);
 const TAB_VIEWS = ['intel', 'pm', 'compliance', 'growth', 'kb', 'memory'];
@@ -1146,17 +1147,18 @@ function renderVerNote(v) {
   return h('p', { class: `ver-note${v.note === TRUNC_NOTE ? ' warn' : ''}`, text: `本版说明：${v.note}` });
 }
 
-/** 「参考了 N 条记忆、M 次历史讨论、K 段知识库」：展开后列出记忆内容、可跳转的历史会话与知识库段落 */
+/** 「参考了 N 条记忆、M 次历史讨论、K 段知识库、J 个技能」：展开后列出记忆内容、可跳转的历史会话、知识库段落与技能名称 */
 function contextNote(c, inline = false) {
   const ms = c?.memories ?? [];
   const rs = c?.reviews ?? [];
   const ks = c?.kb ?? [];
-  if (!ms.length && !rs.length && !ks.length) return null;
+  const ss = c?.skills ?? [];
+  if (!ms.length && !rs.length && !ks.length && !ss.length) return null;
   const kbLabel = (k) => (k.wiki ? `Wiki：${k.title}` : `知识库：${k.title}${k.heading ? ` › ${k.heading}` : ''}`);
   return h(
     'details',
     { class: `pm-ctx${inline ? ' inline' : ''}` },
-    h('summary', { text: `参考了 ${ms.length} 条记忆、${rs.length} 次历史讨论${ks.length ? `、${ks.length} 段知识库` : ''}` }),
+    h('summary', { text: `参考了 ${ms.length} 条记忆、${rs.length} 次历史讨论${ks.length ? `、${ks.length} 段知识库` : ''}${ss.length ? `、${ss.length} 个技能` : ''}` }),
     ms.length ? h('ul', {}, ms.map((m) => h('li', { text: `${MEM_LABEL[m.kind] ? `[${MEM_LABEL[m.kind]}] ` : ''}${m.content}` }))) : null,
     rs.length
       ? h(
@@ -1194,6 +1196,7 @@ function contextNote(c, inline = false) {
           ),
         )
       : null,
+    ss.length ? h('ul', {}, ss.map((s) => h('li', { text: `技能：${s.name}` }))) : null,
   );
 }
 
@@ -1643,7 +1646,7 @@ const MEM_KINDS = ['fact', 'preference', 'decision', 'interest'];
 const MEM_LABEL = { fact: '事实', preference: '偏好', decision: '决定', interest: '关注' };
 const OP_LABEL = { add: '新增', update: '修改', delete: '删除', profile: '画像' };
 const SRC_LABEL = { auto: '自动整理', manual: '手动', undo: '撤销', evict: '超出上限淘汰' };
-const mem = { data: null, editProfile: false, editItem: null, addKind: null, pollTimer: null, profileDraft: null, itemDraft: null };
+const mem = { data: null, editProfile: false, editItem: null, addKind: null, pollTimer: null, profileDraft: null, itemDraft: null, tab: 'mem' };
 
 const clipText = (s, n = 200) => ([...s].length > n ? `${[...s].slice(0, n).join('')}…` : s);
 
@@ -1673,9 +1676,39 @@ async function memDo(btn, fn, after) {
   await loadMemory();
 }
 
+function renderMemTabs() {
+  const n = mem.data?.skills?.candidate ?? 0;
+  const pend = mem.data?.skills?.pending ?? 0;
+  const tabs = [
+    ['mem', '记忆', 0],
+    ['skills', '技能', n + pend],
+  ];
+  $('mem-tabs').replaceChildren(
+    ...tabs.map(([k, label, badge]) =>
+      h(
+        'button',
+        { type: 'button', role: 'tab', class: `pm-tab${k === mem.tab ? ' on' : ''}`, 'aria-selected': k === mem.tab ? 'true' : 'false', title: k === 'skills' && badge ? '有待你处理的候选或新版本' : null, onclick: () => showMemTab(k) },
+        label,
+        badge ? h('span', { class: 'pm-tab-n', text: String(badge) }) : null,
+      ),
+    ),
+  );
+}
+
+function showMemTab(k) {
+  mem.tab = k;
+  renderMemTabs();
+  $('mem-main').hidden = k !== 'mem';
+  $('mem-skills').hidden = k !== 'skills';
+  if (k === 'skills') sk.load();
+  else sk.hide();
+}
+
 function renderMemory(keepEditors = false) {
   const d = mem.data;
   if (!d) return;
+  renderMemTabs();
+  sk.renderProfileHistory(d.profileVersions ?? 0);
   const pend = d.running ? '正在整理…' : d.pending ? `还有 ${d.pending} 条交互待整理` : '交互都已整理';
   $('mem-pending').textContent = d.llm ? pend : `${pend} · 未配置模型，暂不自动整理`;
   $('mem-run').disabled = !d.llm || d.running;
@@ -1846,7 +1879,10 @@ function show(view, opts = {}) {
   if (view === 'kb' && !opts.skipLoad) kb.load();
   if (view === 'brief') loadBrief();
   if (view === 'sources') loadSources();
-  if (view === 'memory') loadMemory();
+  if (view === 'memory') {
+    loadMemory();
+    if (mem.tab === 'skills') sk.load();
+  } else sk.hide();
   if (view === 'compliance' && !opts.skipLoad) cp.load();
   if (view === 'growth' && !opts.skipLoad) gr.load();
   if (view === 'pm') {
@@ -1951,6 +1987,7 @@ const kb = initKb({ h, api, toast, show, openReview, openItem, renderMarkdown })
 const proto = initProto({ h, api, toast });
 const pmDiff = initPmDiff({ h, api, verName: (v) => `v${v.n} · ${SOURCE_LABEL[v.source] ?? v.source}` });
 const gr = initGrowth({ h, api, toast, diffNodes });
+const sk = initSkills({ h, api, toast, diffNodes, onProfileChange: () => loadMemory() });
 const cp = initCompliance({
   h,
   api,

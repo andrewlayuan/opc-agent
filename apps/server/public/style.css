@@ -1063,3 +1063,50 @@ mark.gr-hit.flash { outline: 2px solid var(--accent); outline-offset: 1px; }
   .gr-edit-item { grid-template-columns: 20px minmax(0, 1fr) 24px; }
   .gr-edit-item .kb-input + .kb-input { grid-column: 2; }
 }
+
+/* ---------------- 我的记忆 · 技能与画像历史 ---------------- */
+#mem-main[hidden], .sk-pane[hidden] { display: none; }
+.sk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0 4px; }
+.sk-status { flex: 1 1 240px; min-width: 0; font-size: 13px; }
+.sk-status.warn { color: var(--err); }
+.sk-empty { font-size: 13px; margin: 16px 0; }
+.sk-card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--glass); padding: 12px 14px; margin: 8px 0; font-size: 14px; }
+.sk-card.off { opacity: .6; }
+.sk-card.editing { padding: 0; border: 0; background: none; }
+.sk-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.sk-name { font-weight: 600; margin-right: 4px; word-break: break-word; }
+.sk-head .info { margin-left: auto; font-size: 12px; color: var(--muted); }
+.sk-scene { margin: 6px 0 2px; word-break: break-word; }
+.sk-steps { margin: 4px 0; padding-left: 22px; }
+.sk-steps li, .sk-cautions li { margin: 2px 0; word-break: break-word; }
+.sk-cautions ul { margin: 2px 0; padding-left: 20px; }
+.sk-example { margin: 4px 0; font-size: 13px; }
+.sk-example summary { cursor: pointer; color: var(--muted); }
+.sk-example-body { white-space: pre-wrap; word-break: break-word; padding: 4px 0 0 14px; }
+.sk-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin-top: 8px; font-size: 13px; }
+.sk-pending { margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--wash); }
+.sk-pending-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 13px; }
+.sk-badge { font-size: 12px; font-weight: 600; color: var(--accent); }
+.sk-diff { margin-top: 8px; }
+.sk-diff > p { font-size: 12.5px; margin: 0 0 6px; }
+.sk-diff-bar { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin: 0 0 8px; font-size: 13px; }
+.sk-hist { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.sk-hint { font-size: 12.5px; margin: 0 0 6px; }
+.sk-revs { list-style: none; margin: 0 0 8px; padding: 0; max-height: 220px; overflow: auto; font-size: 13px; }
+.sk-revs li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 3px 0; }
+.sk-revs button.link.on { color: var(--fg); font-weight: 600; }
+.sk-reason { font-size: 12px; word-break: break-word; }
+.sk-form { border: 1px solid var(--line-hi); border-radius: var(--radius); background: var(--glass); padding: 12px 14px; margin: 8px 0; display: flex; flex-direction: column; gap: 10px; }
+.sk-form-title { font-weight: 600; }
+.sk-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.sk-label { display: flex; align-items: baseline; gap: 8px; font-weight: 500; }
+.sk-label small { font-weight: 400; font-size: 12px; }
+.sk-list { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.sk-list-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%; }
+.sk-n { font-size: 12px; text-align: right; }
+.sk-ph { margin: 4px 0 0; font-size: 13px; }
+.sk-ph .sk-hist { border-top: 0; padding-top: 4px; margin-top: 4px; }
+@media (max-width: 640px) {
+  .sk-head .info { margin-left: 0; width: 100%; }
+  .sk-card, .sk-form { padding: 10px 12px; }
+}

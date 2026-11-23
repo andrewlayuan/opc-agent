@@ -147,6 +147,14 @@ export async function handleMemoryApi(deps: MemoryApiDeps, req: http.IncomingMes
     sendJson(res, 200, { diff: lineDiff(skillText(v.skill), skillText(cur)) });
     return true;
   }
+  m = p.match(/^\/api\/memory\/skills\/(\d+)\/pending\/diff$/);
+  if (m && method === 'GET') {
+    const id = idOf(m[1]);
+    const cur = call(() => getSkill(db, id));
+    if (!cur.pending) throw new HttpError(404, '没有待采用的新版本');
+    sendJson(res, 200, { diff: lineDiff(skillText(cur), skillText(cur.pending)) });
+    return true;
+  }
   if (p === '/api/memory/profile/restore' && method === 'POST') {
     const body = await readJson(req, BODY_MAX);
     sendJson(res, 200, call(() => restoreProfile(db, body.rev)));

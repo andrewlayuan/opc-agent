@@ -192,5 +192,9 @@ test('差异：技能某版与当前、画像某版与当前；版本不存在 4
   const pd = (await s.call('GET', `/api/memory/profile/versions/${rev}/diff`)).data.diff;
   assert.deepEqual(pd.lines, [{ t: ' ', s: '独立开发者' }, { t: '+', s: '在做律所合同审查工具' }]);
   assert.equal((await s.call('GET', '/api/memory/profile/versions/999/diff')).status, 404);
+  assert.equal((await s.call('GET', `${S}/${id}/pending/diff`)).status, 404);
+  setPending(s.db, id, { ...SKILL, cautions: ['数字要和看板一致', '投资人版去掉内部代号'] });
+  const pdl = (await s.call('GET', `${S}/${id}/pending/diff`)).data.diff.lines.filter((l: { t: string }) => l.t !== ' ');
+  assert.deepEqual(pdl, [{ t: '-', s: '3. 最后核对数字再发送' }, { t: '+', s: '- 投资人版去掉内部代号' }]);
   await s.close();
 });

@@ -164,21 +164,27 @@
       </div>
     </section>
     <section id="view-memory" hidden>
-      <div class="brief-head">
-        <span class="muted" id="mem-pending"></span>
+      <div class="pm-tabs kb-tabs" id="mem-tabs" role="tablist" aria-label="我的记忆"></div>
+      <div id="mem-main">
+        <div class="brief-head">
+          <span class="muted" id="mem-pending"></span>
+        </div>
+        <p class="mem-intro muted">根据你在雷达和产品顾问里的操作自动整理，用来个性化分析、简报和评审。可以随时修改、撤销或清空。</p>
+        <div class="grp-title">画像</div>
+        <div class="mem-profile" id="mem-profile"></div>
+        <div class="sk-ph" id="mem-profile-hist"></div>
+        <div class="grp-title">记忆条目</div>
+        <div id="mem-items"></div>
+        <div class="grp-title">最近变化</div>
+        <ol class="mem-changes" id="mem-changes"></ol>
+        <div class="actions mem-actions">
+          <button type="button" id="mem-run">立即整理</button>
+          <a class="link" id="mem-export" href="/api/memory/export" download>导出</a>
+          <a class="link" id="mem-export-zip" href="/api/memory/export?format=zip" download title="记忆、技能与版本历史、画像与画像历史">打包导出</a>
+          <button type="button" class="ghost" id="mem-clear">清空</button>
+        </div>
       </div>
-      <p class="mem-intro muted">根据你在雷达和产品顾问里的操作自动整理，用来个性化分析、简报和评审。可以随时修改、撤销或清空。</p>
-      <div class="grp-title">画像</div>
-      <div class="mem-profile" id="mem-profile"></div>
-      <div class="grp-title">记忆条目</div>
-      <div id="mem-items"></div>
-      <div class="grp-title">最近变化</div>
-      <ol class="mem-changes" id="mem-changes"></ol>
-      <div class="actions mem-actions">
-        <button type="button" id="mem-run">立即整理</button>
-        <a class="link" id="mem-export" href="/api/memory/export" download>导出</a>
-        <button type="button" class="ghost" id="mem-clear">清空</button>
-      </div>
+      <div class="sk-pane" id="mem-skills" hidden></div>
     </section>
 
     <section id="view-sources" hidden>
