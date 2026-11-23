@@ -79,10 +79,10 @@ test('lengthNotes：标题超限、标签不足、口播合计、条数超出', 
   assert.deepEqual(land, [{ path: 'points.0.title', text: '卖点 1 标题 13 字，超过 12 字' }]);
 });
 
-test('missingPaths：空字段与数量不足', () => {
+test('missingPaths：空字段与空数组；条数不足只在 lengthNotes 里提示，不算缺失', () => {
   assert.deepEqual(missingPaths(getPlatform('xhs'), { title: '', body: 'b', tags: [] }), ['title', 'tags']);
   assert.deepEqual(missingPaths(getPlatform('landing'), { slogan: 's', subtitle: 's', points: [{ title: 't', desc: '' }, { title: 't', desc: 'd' }, { title: 't', desc: 'd' }], store_desc: 'x' }), ['points.0.desc']);
-  assert.deepEqual(missingPaths(getPlatform('landing'), { slogan: 's', subtitle: 's', points: [{ title: 't', desc: 'd' }], store_desc: 'x' }), ['points']);
+  assert.deepEqual(missingPaths(getPlatform('landing'), { slogan: 's', subtitle: 's', points: [{ title: 't', desc: 'd' }], store_desc: 'x' }), []);
 });
 
 test('renderCopy：四个平台格式', () => {

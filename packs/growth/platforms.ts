@@ -232,14 +232,14 @@ export function lengthNotes(p: Platform, f: Fields): { path: string; text: strin
   return out;
 }
 
-/** 必填但为空的叶子，以及条数不足的数组（报数组键） */
+/** 必填但为空的叶子，以及空数组（报数组键）；条数不足只在 lengthNotes 里提示，不拦定稿 */
 export function missingPaths(p: Platform, f: Fields): string[] {
   const out: string[] = [];
   for (const d of p.fields) {
     const v = f[d.key];
     if (d.kind === 'tags' || d.kind === 'items') {
       const arr = Array.isArray(v) ? v : [];
-      if (arr.length < (d.minItems ?? 1)) {
+      if (!arr.length) {
         out.push(d.key);
         continue;
       }

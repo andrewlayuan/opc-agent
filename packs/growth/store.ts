@@ -3,7 +3,7 @@ import type { DB } from '../../packages/core/db.ts';
 import { getProduct } from '../compliance/store.ts';
 import { lineDiff } from '../wiki/diff.ts';
 import type { DiffLine } from '../wiki/diff.ts';
-import { NO_CTX, check } from './checker.ts';
+import { NO_CTX, carryKept, check } from './checker.ts';
 import type { CheckResult, Ctx, Kept } from './checker.ts';
 import { PLATFORMS, cps, getPlatform, missingPaths, pathLabel, renderCopy, setTextAt, textAt, validateFields } from './platforms.ts';
 import type { Fields, Platform, PlatformId } from './platforms.ts';
@@ -292,8 +292,8 @@ function assertDraft(r: Row): void {
   if (r.status === 'final') throw new GrowthError(409, FINAL);
 }
 
-/** 写一个新版本（事务内重查：不存在 404、已定稿 409、版本不符 409），清理失效的保留，手改与替换继承仍在原文中的复核条目 */
-export function writeRevision(db: DB, id: number, fields: Fields, origin: Origin, o: { expectRev?: number; genHash?: string }, now = Date.now()): CopyView {
+/** 写一个新版本（事务内重查：不存在 404、已定稿 409、版本不符 409）；保留按前后文对到新命中；手改与替换继承上一版、回退继承目标版本中仍在原文里的复核条目 */
+export function writeRevision(db: DB, id: number, fields: Fields, origin: Origin, o: { expectRev?: number; genHash?: string; from?: number }, now = Date.now()): CopyView {
   tx(db, () => {
     const r = copyRow(db, id);
     assertDraft(r);
@@ -305,20 +305,25 @@ export function writeRevision(db: DB, id: number, fields: Fields, origin: Origin
     let base: number | null = null;
     let at: number | null = null;
     const prev = cur > 0 ? revRow(db, id, cur) : undefined;
-    const prevReview = reviewOf(prev);
-    if (prevReview && (origin === 'edit' || origin === 'replace')) {
+    const src = origin === 'edit' || origin === 'replace' ? prev : origin === 'restore' && o.from !== undefined ? revRow(db, id, o.from) : undefined;
+    const srcReview = reviewOf(src);
+    if (srcReview) {
       const t = renderCopy(p, fields);
-      review = prevReview.filter((x) => t.includes(x.quote));
-      base = prev!.review_base == null ? null : Number(prev!.review_base);
-      at = prev!.reviewed_at == null ? null : Number(prev!.reviewed_at);
+      review = srcReview.filter((x) => t.includes(x.quote));
+      base = src!.review_base == null ? null : Number(src!.review_base);
+      at = src!.reviewed_at == null ? null : Number(src!.reviewed_at);
     }
     db.prepare('INSERT INTO gr_revisions(copy_id, n, created_at, origin, fields, review, review_base, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
       id, n, now, origin, JSON.stringify(fields), review == null ? null : JSON.stringify(review), base, at,
     );
     db.prepare('DELETE FROM gr_revisions WHERE copy_id = ? AND n <= ?').run(id, n - REV_MAX);
     const { ctx } = copyContext(db, r);
-    const live = new Set(check(p, fields, ctx, {}).hits.map((h) => h.key));
-    const kept = Object.fromEntries(Object.entries(keptOf(r)).filter(([k]) => live.has(k)));
+    const oldKept = keptOf(r);
+    let kept: Kept = {};
+    if (prev && Object.keys(oldKept).length) {
+      const oldF = fieldsOf(p, prev);
+      kept = carryKept(oldF, check(p, oldF, ctx, oldKept).hits, fields, check(p, fields, ctx, {}).hits);
+    }
     db.prepare('UPDATE gr_copies SET rev = ?, kept = ?, gen_hash = COALESCE(?, gen_hash), updated_at = ? WHERE id = ?').run(n, JSON.stringify(kept), o.genHash ?? null, now, id);
     db.prepare('UPDATE gr_campaigns SET updated_at = ? WHERE id = ?').run(now, Number(r.campaign_id));
   });
@@ -347,6 +352,7 @@ export function replaceHits(db: DB, id: number, baseRev: unknown, items: unknown
   assertDraft(r);
   const b = revNo(baseRev);
   if (!Array.isArray(items) || !items.length || !items.every((x) => isObj(x) && typeof x.key === 'string' && typeof x.with === 'string')) throw new GrowthError(400, '替换内容不对');
+  if (new Set(items.map((x) => x.key)).size !== items.length) throw new GrowthError(400, '替换内容不对');
   if (b !== Number(r.rev) || b === 0) throw new GrowthError(409, STALE);
   const { c, ctx } = copyContext(db, r);
   const cur = viewCopy(db, r, c, ctx);
@@ -418,7 +424,7 @@ export function restoreRevision(db: DB, id: number, n: unknown, now = Date.now()
   const rev = revRow(db, id, k);
   if (!rev) throw new GrowthError(404, '版本不存在');
   if (k === Number(r.rev)) return getCopy(db, id);
-  return writeRevision(db, id, fieldsOf(getPlatform(r.platform), rev), 'restore', {}, now);
+  return writeRevision(db, id, fieldsOf(getPlatform(r.platform), rev), 'restore', { from: k }, now);
 }
 
 export function finalizeCopy(db: DB, id: number, now = Date.now()): CopyView {

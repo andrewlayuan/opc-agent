@@ -291,3 +291,42 @@ export function check(p: Platform, f: Fields, ctx: Ctx, kept: Kept): CheckResult
   const open = (l: Level) => hits.filter((h) => h.level === l && !h.kept).length;
   return { hits, lengths: lengthNotes(p, f), mustOpen: open('must'), warnOpen: open('warn') };
 }
+
+const CTX_N = 10;
+/** 字段路径去掉数组下标：tags.2 → tags，shots.1.line → shots.line */
+const fieldOf = (path: string) => path.replace(/\.\d+(?=\.|$)/g, '');
+function around(f: Fields, h: Hit): { before: string[]; after: string[] } {
+  const cs = Array.from(textAt(f, h.path) ?? '');
+  return { before: cs.slice(Math.max(0, h.start - CTX_N), h.start), after: cs.slice(h.end, h.end + CTX_N) };
+}
+function sameAround(a: ReturnType<typeof around>, b: ReturnType<typeof around>): number {
+  let s = 0;
+  for (let i = 1; i <= Math.min(a.before.length, b.before.length) && a.before[a.before.length - i] === b.before[b.before.length - i]; i++) s++;
+  for (let i = 0; i < Math.min(a.after.length, b.after.length) && a.after[i] === b.after[i]; i++) s++;
+  return s;
+}
+
+/**
+ * 把旧版本已保留的命中对到新版本的命中上：规则、原文、字段（忽略数组下标）相同，再按前后各 10 字的重合度挑最像的一处。
+ * 重合至少 2 字，或同字段只有一个候选时才延续；对不上的保留丢弃，需重新确认
+ */
+export function carryKept(oldF: Fields, oldHits: Hit[], newF: Fields, newHits: Hit[]): Kept {
+  const out: Kept = {};
+  const used = new Set<string>();
+  for (const o of oldHits) {
+    if (!o.kept) continue;
+    const oa = around(oldF, o);
+    const cands = newHits.filter((n) => !used.has(n.key) && n.rule === o.rule && n.text === o.text && fieldOf(n.path) === fieldOf(o.path));
+    let best: Hit | null = null;
+    let bs = -1;
+    for (const n of cands) {
+      const sc = sameAround(oa, around(newF, n));
+      if (sc > bs) [best, bs] = [n, sc];
+    }
+    if (best && (bs >= 2 || cands.length === 1)) {
+      out[best.key] = o.kept;
+      used.add(best.key);
+    }
+  }
+  return out;
+}

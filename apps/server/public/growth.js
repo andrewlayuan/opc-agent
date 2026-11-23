@@ -193,7 +193,7 @@ export function initGrowth({ h, api, toast, diffNodes }) {
     const syncAdd = () => (addBtn.hidden = rows.length >= POINTS_MAX);
     function addPoint(v = '') {
       if (rows.length >= POINTS_MAX) return;
-      const el = input({ name: 'point', maxlength: 100, placeholder: rows.length ? `卖点 ${rows.length + 1}` : '卖点 1，如「自动汇总本周日程」' }, v);
+      const el = input({ name: 'point', maxlength: 100, placeholder: `卖点 ${rows.length + 1}，如「自动汇总本周日程」` }, v);
       const r = { el, row: null };
       r.row = h('div', { class: 'gr-point' }, el,
         h('button', { type: 'button', class: 'link', text: '×', title: '删除这条卖点', 'aria-label': '删除这条卖点', onclick: () => {
@@ -299,6 +299,10 @@ export function initGrowth({ h, api, toast, diffNodes }) {
       const { campaign } = await api(`/api/growth/campaigns/${id}`);
       if (seq !== st.seq) return;
       st.mode = 'detail';
+      if (st.camp?.id === id) {
+        const mine = new Map(st.camp.copies.map((x) => [x.id, x]));
+        campaign.copies = campaign.copies.map((x) => (mine.get(x.id)?.rev > x.rev ? mine.get(x.id) : x));
+      }
       st.camp = campaign;
       renderSide();
       paint();
@@ -307,10 +311,11 @@ export function initGrowth({ h, api, toast, diffNodes }) {
     }
   }
 
+  /** 只接受不比本地旧的版本，避免先发后到的响应覆盖新内容 */
   function putCopy(copy) {
     const list = st.camp?.copies;
     const i = list ? list.findIndex((x) => x.id === copy.id) : -1;
-    if (i >= 0) list[i] = copy;
+    if (i >= 0 && copy.rev >= list[i].rev) list[i] = copy;
     st.issues.delete(copy.id);
   }
 
@@ -323,7 +328,7 @@ export function initGrowth({ h, api, toast, diffNodes }) {
     paint();
   }
 
-  /** 生成一个平台，成功后立即复核。返回 ok / fail / stop（400 未配置模型、404、409 时停下） */
+  /** 生成一个平台，成功后立即复核。返回 ok / fail / skip（404 已删除、409 已改动或定稿）/ stop（400 未配置模型） */
   async function genOne(id, quiet) {
     st.busy.set(id, 'gen');
     st.failed.delete(id);
@@ -334,8 +339,10 @@ export function initGrowth({ h, api, toast, diffNodes }) {
       st.busy.delete(id);
       if (STOP.has(e.status)) {
         toast(e.message);
-        paint();
-        return 'stop';
+        if (e.status === 409) await refresh(id);
+        else if (e.status === 404) await open(st.camp.id);
+        else paint();
+        return e.status === 400 ? 'stop' : 'skip';
       }
       st.failed.set(id, 'gen');
       if (!quiet) toast(e.message);
@@ -366,12 +373,14 @@ export function initGrowth({ h, api, toast, diffNodes }) {
     const cid = st.camp.id;
     let ok = 0;
     let fail = 0;
-    for (const c of copies) {
+    for (const { id } of copies) {
       if (st.mode !== 'detail' || st.camp?.id !== cid) return;
-      const r = await genOne(c.id, true);
+      const c = st.camp.copies.find((x) => x.id === id);
+      if (!c || c.rev > 0 || st.busy.has(id)) continue;
+      const r = await genOne(id, true);
       if (r === 'stop') return;
       if (r === 'ok') ok++;
-      else fail++;
+      else if (r === 'fail') fail++;
     }
     toast(`已生成 ${ok} 个平台，失败 ${fail} 个`);
     await reloadList();
@@ -398,6 +407,7 @@ export function initGrowth({ h, api, toast, diffNodes }) {
       if (done) toast(done);
     } catch (e) {
       toast(e.message);
+      if (e.status === 404) return open(st.camp.id);
       if (e.status === 409 && path !== 'finalize') return refresh(c.id);
       if (e.data?.issues) st.issues.set(c.id, e.data.issues);
     }
@@ -577,7 +587,7 @@ export function initGrowth({ h, api, toast, diffNodes }) {
       failed === 'gen' ? note('warn', '重新生成失败，', link('重试', () => single(c.id))) : null,
       failed === 'review' ? note('warn', '复核失败，', link('重试', () => manualReview(c.id))) : null,
       c.stale ? note('', '投放信息已更新，', draft ? link('重新生成', () => regen(c)) : '取消定稿后可重新生成') : null,
-      c.review_base != null && c.review_base !== c.rev ? note('', `AI 复核基于 v${c.review_base}（当前 v${c.rev}）${st.meta.llm ? '，可重新复核' : ''}`) : null,
+      c.review_base != null && c.review_base !== c.rev ? note('', `AI 复核基于 v${c.review_base}（当前 v${c.rev}），可重新复核`) : null,
       st.issues.has(c.id)
         ? h('div', { class: 'cp-doc-err gr-issues' },
             h('strong', { text: '定稿前还需处理：' }),
@@ -632,7 +642,7 @@ export function initGrowth({ h, api, toast, diffNodes }) {
   }
 
   function hitItem(c, p, x) {
-    const draft = isDraft(c);
+    const draft = isDraft(c) && !st.busy.has(c.id);
     return h('div', { class: `gr-hit-item ${x.level}${x.kept ? ' kept' : ''}` },
       h('div', { class: 'gr-hit-top' },
         h('span', { class: 'gr-hit-label', text: x.label }),
@@ -673,7 +683,7 @@ export function initGrowth({ h, api, toast, diffNodes }) {
       draft
         ? h('div', { class: 'gr-check-bar' },
             fixable.length
-              ? h('button', { type: 'button', class: 'ghost', text: `全部替换（${fixable.length}）`, onclick: () => replace(c, fixable.map((x) => ({ key: x.key, with: x.suggest[0] }))) })
+              ? h('button', { type: 'button', class: 'ghost', text: `全部替换（${fixable.length}）`, disabled: st.busy.has(c.id), onclick: () => replace(c, fixable.map((x) => ({ key: x.key, with: x.suggest[0] }))) })
               : null,
             st.meta.llm ? h('button', { type: 'button', class: 'ghost', text: 'AI 复核', disabled: st.busy.has(c.id), onclick: () => manualReview(c.id) }) : null,
           )
@@ -712,7 +722,7 @@ export function initGrowth({ h, api, toast, diffNodes }) {
       draft
         ? h('button', { type: 'button', text: '定稿', disabled: busy, onclick: () => act(c, 'finalize', {}, '已定稿') })
         : h('button', { type: 'button', class: 'ghost', text: '取消定稿', onclick: () => act(c, 'unfinalize', {}) }),
-      draft ? h('button', { type: 'button', class: 'link gr-danger', text: '删除此平台', onclick: () => delCopy(c) }) : null,
+      draft ? h('button', { type: 'button', class: 'link gr-danger', text: '删除此平台', disabled: busy, onclick: () => delCopy(c) }) : null,
     );
   }
 
@@ -746,10 +756,10 @@ export function initGrowth({ h, api, toast, diffNodes }) {
 
   function fieldEditor(d, f) {
     if (d.kind === 'tags') {
-      const el = input({ 'aria-label': d.label, placeholder: '用空格或逗号分隔，不用写 #' }, f[d.key].join(' '));
+      const el = input({ 'aria-label': d.label, placeholder: '用逗号分隔，不用写 #' }, f[d.key].join('，'));
       const cnt = counter(() => f[d.key].length, d.minItems, d.maxItems, d.unit);
       el.addEventListener('input', () => {
-        f[d.key] = el.value.split(/[\s,，、#]+/).filter(Boolean);
+        f[d.key] = el.value.split(/[,，、\n]+/).map((t) => t.trim().replace(/^#+/, '').trim()).filter(Boolean);
         cnt.upd();
       });
       return h('label', { class: 'kb-field gr-edit-field' }, h('span', { class: 'gr-field-head' }, d.label, cnt.el), el);
@@ -804,6 +814,8 @@ export function initGrowth({ h, api, toast, diffNodes }) {
     const save = h('button', { type: 'submit', text: '保存' });
     return h('form', { class: 'gr-edit', onsubmit: async (e) => {
       e.preventDefault();
+      const over = p.fields.find((d) => d.kind === 'tags' && ed.fields[d.key].length > d.maxItems);
+      if (over) return toast(`${over.label}最多 ${over.maxItems} 个`);
       save.disabled = true;
       try {
         const { copy } = await api(`/api/growth/copies/${c.id}`, { method: 'PUT', body: { fields: ed.fields, baseRev: ed.rev } });

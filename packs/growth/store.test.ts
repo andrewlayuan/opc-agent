@@ -149,6 +149,34 @@ test('保留：跨版本延续，命中消失后清理；理由长度 400；命�
   done();
 });
 
+test('保留按前后文对到新命中：替换前一处后仍保留；前面插入同词不继承；数组下标前移后仍保留', () => {
+  const { db, done } = setup();
+  const id = createCampaign(db, C, ['xhs']);
+  const cid = copyOf(db, id, 'xhs').id;
+  writeRevision(db, cid, { title: '标题', body: 'A 方案最好用。B 方案也最好看。', tags: ['效率', '周报', '行业第一'] }, 'generate', {});
+  keepHit(db, cid, 'superlative:body:最好:1', '引用用户原话');
+  keepHit(db, cid, 'superlative:tags.2:第一:0', '榜单名称');
+  const kept = (v: ReturnType<typeof getCopy>) => v.check.hits.map((h) => [h.path, h.key.split(':').at(-1), h.kept?.reason ?? null]);
+  const r = replaceHits(db, cid, 1, [{ key: 'superlative:body:最好:0', with: '很好' }]);
+  assert.equal(r.fields.body, 'A 方案很好用。B 方案也最好看。');
+  assert.deepEqual(kept(r), [['body', '0', '引用用户原话'], ['tags.2', '0', '榜单名称']], '前一处被替换后，原来保留的那处换成新序号仍保留');
+  const e = saveCopy(db, cid, { title: '标题', body: '最好的开始。A 方案很好用。B 方案也最好看。', tags: ['周报', '行业第一'] }, 2);
+  assert.deepEqual(kept(e), [['body', '0', null], ['body', '1', '引用用户原话'], ['tags.1', '0', '榜单名称']], '前面新插入的同词不继承；标签前移后仍保留');
+  assert.equal(e.check.mustOpen, 1);
+  done();
+});
+
+test('替换：同一个 key 提交两次 400，不改坏文本', () => {
+  const { db, done } = setup();
+  const id = createCampaign(db, C, ['xhs']);
+  const cid = copyOf(db, id, 'xhs').id;
+  writeRevision(db, cid, XHS('正文', '最好用的'), 'generate', {});
+  const key = 'superlative:title:最好:0';
+  assert.deepEqual(statusOf(() => replaceHits(db, cid, 1, [{ key, with: 'A' }, { key, with: 'BBB' }])), { status: 400, message: '替换内容不对' });
+  assert.equal(getCopy(db, cid).rev, 1);
+  done();
+});
+
 test('定稿：未保留必须改与空字段拦截并带 issues；保留后可定稿；定稿后保留 409；取消定稿', () => {
   const { db, done } = setup();
   const id = createCampaign(db, C, ['xhs', 'landing']);
