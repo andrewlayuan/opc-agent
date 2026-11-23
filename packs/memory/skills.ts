@@ -164,8 +164,8 @@ export function createSkill(db: DB, input: unknown, o: { source: 'auto' | 'manua
     if (Number(n) >= SKILL_LIMITS.max) throw new MemoryError(409, '技能最多 40 条');
     const status = o.status ?? 'candidate';
     const r = db.prepare(
-      "INSERT INTO skills(name, scene, steps, cautions, example, source, status, manual, uses, hits, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?)",
-    ).run(s.name, s.scene, JSON.stringify(s.steps), JSON.stringify(s.cautions), s.example, o.source, status, now, now);
+      "INSERT INTO skills(name, scene, steps, cautions, example, source, status, manual, uses, hits, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)",
+    ).run(s.name, s.scene, JSON.stringify(s.steps), JSON.stringify(s.cautions), s.example, o.source, status, o.source === 'manual' ? 1 : 0, now, now);
     const newId = Number(r.lastInsertRowid);
     writeSkillRev(db, newId, s, 1, o.source, o.source === 'auto' ? '自动沉淀' : '手工新建', now);
     return newId;

@@ -201,20 +201,28 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e)).slic
  * 跑一次沉淀。检查顺序：今日次数 → 有没有新事件 →（非强制时）间隔 3 天、新事件 ≥ 20。
  * 模型失败只记错误，不推进游标；不会抛异常
  */
-export async function crystallize(db: DB, llm: Llm, o: { now?: number; force?: boolean; dailyCalls?: number; log?: (s: string) => void } = {}): Promise<CrystalRun> {
+/** 这次不该跑的原因；可以跑时返回 null。顺序：当日次数 → 有无新事件 →（非强制）间隔与新事件数 */
+export function crystalSkip(db: DB, o: { now?: number; force?: boolean; dailyCalls?: number } = {}): string | null {
   const now = o.now ?? Date.now();
-  const res: CrystalRun = { ran: false, added: 0, updated: 0, blocked: 0, dropped: 0 };
   const limit = o.dailyCalls ?? CRYSTAL.dailyCalls;
   const today = (db.prepare('SELECT COUNT(*) AS n FROM skill_runs WHERE started_at >= ?').get(dayStart(now)) as { n: number }).n;
-  if (Number(today) >= limit) return { ...res, skip: '今日沉淀次数已用完' };
+  if (Number(today) >= limit) return '今日沉淀次数已用完';
   const ok = lastOk(db);
   const cursor = ok ? Number(ok.upto_event) : 0;
   const fresh = Number((db.prepare('SELECT COUNT(*) AS n FROM events WHERE id > ?').get(cursor) as { n: number }).n);
-  if (!fresh) return { ...res, skip: '没有新事件' };
+  if (!fresh) return '没有新事件';
   if (!o.force) {
-    if (ok && now - Number(ok.started_at) < CRYSTAL.interval) return { ...res, skip: '距上次沉淀不到 3 天' };
-    if (fresh < CRYSTAL.minNew) return { ...res, skip: `新事件不足 ${CRYSTAL.minNew} 条` };
+    if (ok && now - Number(ok.started_at) < CRYSTAL.interval) return '距上次沉淀不到 3 天';
+    if (fresh < CRYSTAL.minNew) return `新事件不足 ${CRYSTAL.minNew} 条`;
   }
+  return null;
+}
+
+export async function crystallize(db: DB, llm: Llm, o: { now?: number; force?: boolean; dailyCalls?: number; log?: (s: string) => void } = {}): Promise<CrystalRun> {
+  const now = o.now ?? Date.now();
+  const res: CrystalRun = { ran: false, added: 0, updated: 0, blocked: 0, dropped: 0 };
+  const skip = crystalSkip(db, { now, force: o.force, dailyCalls: o.dailyCalls });
+  if (skip) return { ...res, skip };
 
   const upto = Number((db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM events').get() as { m: number }).m);
   const events = (
@@ -280,6 +288,8 @@ export class SkillKeeper {
   private readonly run: (force: boolean) => Promise<CrystalRun>;
   private busy: Promise<CrystalRun> | null = null;
   private stopped = false;
+  /** 最近一次运行的结果（含跳过原因与出错），供页面轮询展示；进程内保存 */
+  last: { at: number; run?: CrystalRun; error?: string } | null = null;
 
   constructor(
     db: DB,
@@ -311,15 +321,22 @@ export class SkillKeeper {
     return null;
   }
 
+  /** 手动沉淀前的检查：开关、模型、预算、当日次数、有无新事件；可以跑时返回 null */
+  check(): string | null {
+    return this.blocker ?? crystalSkip(this.db, { force: true, dailyCalls: this.dailyCalls });
+  }
+
   notify(): void {
     if (this.stopped || !this.enabled || this.busy) return;
     this.start(false).catch((e) => this.log(`[skills] 沉淀出错：${errMsg(e)}`));
   }
 
+  /** 立即沉淀（强制）：开关、模型、预算、当日次数、新事件任一不满足时 409；运行中返回进行中的那次 */
   runNow(): Promise<CrystalRun> {
-    const why = this.blocker;
+    if (this.busy) return this.busy;
+    const why = this.check();
     if (why) return Promise.reject(new MemoryError(409, why));
-    return this.busy ?? this.start(true);
+    return this.start(true);
   }
 
   stop(): void {
@@ -329,7 +346,12 @@ export class SkillKeeper {
   private start(force: boolean): Promise<CrystalRun> {
     this.busy = (async () => {
       try {
-        return await this.run(force);
+        const run = await this.run(force);
+        this.last = { at: Date.now(), run };
+        return run;
+      } catch (e) {
+        this.last = { at: Date.now(), error: errMsg(e) };
+        throw e;
       } finally {
         this.busy = null;
       }

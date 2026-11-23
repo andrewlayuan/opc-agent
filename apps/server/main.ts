@@ -351,7 +351,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     return sendJson(res, 200, { interests: after });
   }
 
-  if (await handleMemoryApi({ db, keeper, llmEnabled: radar.llm.enabled }, req, res, method, p)) return;
+  if (await handleMemoryApi({ db, keeper, skills: skillKeeper, llmEnabled: radar.llm.enabled }, req, res, method, p)) return;
   if (await handleKbApi({ db, files: kbFiles, llm: radar.llm }, req, res, method, url)) return;
   if (await handleWikiApi({ db, llm: radar.llm, queue: wikiQueue, assets: wikiAssets, tmpDir: wikiTmp }, req, res, method, url)) return;
   if (await handleProtoApi({ db, runner: protoRunner }, req, res, method, url)) return;

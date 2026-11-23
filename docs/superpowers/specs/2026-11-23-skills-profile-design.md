@@ -147,7 +147,9 @@ CREATE TABLE profile_versions (
 | DELETE | `/api/memory/skills/:id` | 删除 |
 | GET | `/api/memory/skills/:id/revisions` | 版本列表 |
 | POST | `/api/memory/skills/:id/restore` | 回退到某版 |
-| POST | `/api/memory/skills/crystallize` | 立即沉淀（后台，返回任务 id） |
+| POST | `/api/memory/skills/:id/accept` | 采用暂存的新版本（手改过的技能遇到沉淀出的新版本时） |
+| DELETE | `/api/memory/skills/:id/pending` | 忽略暂存的新版本 |
+| POST | `/api/memory/skills/crystallize` | 立即沉淀：开关、模型、当日次数、新事件不满足时 409 并给出原因；否则后台运行返回 202，结果从 `GET /api/memory/skills` 的 `running`/`last` 轮询 |
 | GET | `/api/memory/profile/versions` | 画像版本列表 |
 | POST | `/api/memory/profile/restore` | 回退到某版 |
 | GET | `/api/memory/export?format=zip` | 导出记忆 + 技能 + 画像版本 |

@@ -229,9 +229,10 @@ test('MemoryKeeper：每次整理跑完调用 after，传入最后一次结果�
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-function skillSetup(o: { enabled?: boolean; llm?: boolean; dailyCalls?: number } = {}) {
+function skillSetup(o: { enabled?: boolean; llm?: boolean; dailyCalls?: number; events?: number } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-skeep-'));
   const db = openDb(path.join(dir, 't.db'));
+  if (o.events !== 0) recordEvent(db, { kind: 'item_star', refType: 'item', refId: 1, summary: 's' }, Date.now());
   const forces: boolean[] = [];
   let release: () => void = () => {};
   let hold = false;
@@ -302,4 +303,18 @@ test('SkillKeeper：notify 里出错只记日志；stop 之后 notify 不再跑'
   await tick();
   assert.equal(k.forces.length, 1);
   k.done();
+});
+
+test('SkillKeeper：runNow 先查当日次数与新事件，不满足时 409 带原因；last 记录最近一次结果与出错', async () => {
+  const k = skillSetup({ events: 0 });
+  await assert.rejects(k.keeper.runNow(), (e: unknown) => e instanceof MemoryError && e.status === 409 && e.message === '没有新事件');
+  assert.equal(k.keeper.last, null);
+  k.done();
+  const k2 = skillSetup();
+  await k2.keeper.runNow();
+  assert.equal(k2.keeper.last?.run?.added, 1);
+  k2.fail(true);
+  await assert.rejects(k2.keeper.runNow(), /数据库坏了/);
+  assert.equal(k2.keeper.last?.error, '数据库坏了');
+  k2.done();
 });

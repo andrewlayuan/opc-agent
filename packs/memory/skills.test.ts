@@ -69,7 +69,7 @@ test('技能：新建进候选、采纳与停用、非法状态 400、删除后 
   const { db, done } = setup();
   const id = createSkill(db, S, { source: 'manual' });
   const s = getSkill(db, id);
-  assert.deepEqual([s.name, s.status, s.source, s.manual, s.uses, s.revisions], ['周报起草与整理流程', 'candidate', 'manual', false, 0, 1]);
+  assert.deepEqual([s.name, s.status, s.source, s.manual, s.uses, s.revisions], ['周报起草与整理流程', 'candidate', 'manual', true, 0, 1]);
   assert.deepEqual(listSkills(db).map((x) => x.id), [id]);
   assert.deepEqual(listSkills(db, { status: 'active' }), []);
   assert.equal(setSkillStatus(db, id, 'active').status, 'active');
