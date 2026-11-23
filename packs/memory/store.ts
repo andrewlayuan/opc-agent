@@ -1,6 +1,7 @@
 // 记忆条目、画像与变更记录：手动修改、淘汰、撤销、清空、导出
 import type { DB } from '../../packages/core/db.ts';
 import { hasSensitive } from './sensitive.ts';
+import { pushProfileVersion, seedProfileVersion } from './profile-versions.ts';
 
 export const MEMORY_KINDS = ['fact', 'preference', 'decision', 'interest'] as const;
 export type MemoryKind = (typeof MEMORY_KINDS)[number];
@@ -8,6 +9,7 @@ export const KIND_LABELS: Record<MemoryKind, string> = { fact: '事实', prefere
 export const MAX_MEMORIES = 60;
 export const CONTENT_MAX = 200;
 export const PROFILE_MAX = 1500;
+export const PROFILE_REV_MAX = 50;
 export const UNDO_DAYS = 30;
 const UNDO_MS = UNDO_DAYS * 86_400_000;
 
@@ -184,6 +186,8 @@ export function setProfile(db: DB, content: unknown, now = Date.now()): void {
   if (hasSensitive(c)) throw new MemoryError(400, SENSITIVE_MSG);
   tx(db, () => {
     const p = getProfile(db);
+    seedProfileVersion(db, p.content, now);
+    pushProfileVersion(db, c, 'manual', '手工保存', [], now);
     db.prepare('UPDATE profile SET content = ?, manual = 1, updated_at = ? WHERE id = 1').run(c, now);
     logChange(db, { op: 'profile', before: { content: p.content, manual: p.manual }, after: { content: c, manual: true }, source: 'manual' }, now);
   });

@@ -527,6 +527,42 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX gr_copies_campaign ON gr_copies(campaign_id);
   `,
+  // 14：技能沉淀与画像版本
+  `CREATE TABLE skills (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    scene TEXT NOT NULL,
+    steps TEXT NOT NULL DEFAULT '[]',
+    cautions TEXT NOT NULL DEFAULT '[]',
+    example TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'candidate',
+    manual INTEGER NOT NULL DEFAULT 0,
+    uses INTEGER NOT NULL DEFAULT 0,
+    hits INTEGER NOT NULL DEFAULT 0,
+    last_used_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX skills_status ON skills(status, updated_at DESC);
+  CREATE TABLE skill_revisions (
+    skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    rev INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (skill_id, rev)
+  );
+  CREATE TABLE profile_versions (
+    rev INTEGER PRIMARY KEY AUTOINCREMENT,
+    content TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    event_ids TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 export type DB = DatabaseSync;

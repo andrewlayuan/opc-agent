@@ -25,7 +25,7 @@ const itemOf = (db: DB, pid: number, id: string) => getProduct(db, pid).items.fi
 
 test('迁移 11–12：合规表存在，user_version=12，cp_products 有 facts 列', () => {
   const { db, done } = tmp();
-  assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 13);
+  assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 14);
   assert.ok((db.prepare('PRAGMA table_info(cp_products)').all() as { name: string }[]).some((c) => c.name === 'facts'));
   for (const t of ['cp_products', 'cp_assessments', 'cp_items', 'cp_entity', 'cp_docs', 'cp_doc_sections', 'cp_doc_revisions']) assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t), t);
   done();
