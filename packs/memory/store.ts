@@ -240,7 +240,11 @@ export function undoChange(db: DB, id: number, now = Date.now()): void {
     const before = parseObj(c.before);
     const after = parseObj(c.after);
     if (c.op === 'profile') {
-      db.prepare('UPDATE profile SET content = ?, manual = ?, updated_at = ? WHERE id = 1').run(String(before?.content ?? ''), before?.manual ? 1 : 0, now);
+      const cur = getProfile(db);
+      const back = String(before?.content ?? '');
+      seedProfileVersion(db, cur.content, now);
+      pushProfileVersion(db, back, 'restore', `撤销 #${c.id}`, [], now);
+      db.prepare('UPDATE profile SET content = ?, manual = ?, updated_at = ? WHERE id = 1').run(back, before?.manual ? 1 : 0, now);
     } else {
       const mid = Number(c.memory_id);
       const exists = Boolean(getMemory(db, mid));
@@ -265,7 +269,7 @@ export function undoChange(db: DB, id: number, now = Date.now()): void {
 export function clearMemory(db: DB, confirm: unknown, now = Date.now()): void {
   if (confirm !== '清空') throw new MemoryError(400, '请输入「清空」确认');
   tx(db, () => {
-    db.exec('DELETE FROM memories; DELETE FROM memory_changes; DELETE FROM events;');
+    db.exec('DELETE FROM memories; DELETE FROM memory_changes; DELETE FROM events; DELETE FROM profile_versions;');
     db.prepare("UPDATE profile SET content = '', manual = 0, updated_at = ? WHERE id = 1").run(now);
   });
 }

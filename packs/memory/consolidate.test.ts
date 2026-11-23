@@ -381,3 +381,60 @@ test('consolidateOnce：用户手动删除的自动记忆进 <rejected> 且不�
   assert.equal(listMemories(db).some((m) => m.content === '关注端侧模型'), false);
   done();
 });
+
+test('consolidateOnce：画像走版本表；原画像非空且变化不足 40 字不写，变化够了写版本并带原因与事件', async () => {
+  const { db, done } = tmp();
+  const base = '## 身份与业务\n律所 SaaS 创业者，主做中小律所的合同审查工具，团队三人。';
+  db.prepare('UPDATE profile SET content = ?, updated_at = ? WHERE id = 1').run(base, T - DAY);
+  recordEvent(db, { kind: 'item_star', refType: 'item', refId: 1, summary: '收藏：端侧模型' }, T - 1000);
+  const r1 = await consolidateOnce(db, fakeLlm(() => ({ ops: [], profile: base + '团队四人。', profile_reason: '小改' })), noop, T);
+  assert.equal(r1.profile, false);
+  assert.equal(getProfile(db).content, base);
+  assert.equal(all(db, 'SELECT count(*) AS n FROM profile_versions')[0].n, 0);
+  assert.equal(all(db, "SELECT count(*) AS n FROM memory_changes WHERE op = 'profile'")[0].n, 0);
+  assert.equal(all(db, 'SELECT count(*) AS n FROM events WHERE consumed_at IS NULL')[0].n, 0);
+
+  const e = recordEvent(db, { kind: 'item_star', refType: 'item', refId: 2, summary: '收藏：律所 AI 落地' }, T + 1000)!;
+  const next = base + '\n## 关注方向\n端侧模型、律所行业的 AI 落地案例、合同审查的准确率评测方法与公开数据集。';
+  const r2 = await consolidateOnce(db, fakeLlm(() => ({ ops: [], profile: next, profile_reason: '连续收藏端侧模型与律所 AI' })), noop, T + 2000);
+  assert.equal(r2.profile, true);
+  assert.equal(getProfile(db).content, next);
+  assert.deepEqual(all(db, 'SELECT content, origin, reason, event_ids FROM profile_versions ORDER BY rev'), [
+    { content: base, origin: 'auto', reason: '升级前的画像', event_ids: '[]' },
+    { content: next, origin: 'auto', reason: '连续收藏端侧模型与律所 AI', event_ids: JSON.stringify([e]) },
+  ]);
+  assert.deepEqual(all(db, "SELECT source, reason FROM memory_changes WHERE op = 'profile'"), [{ source: 'auto', reason: '连续收藏端侧模型与律所 AI' }]);
+  done();
+});
+
+test('consolidateOnce：从空画像首次写入不受 40 字门槛限制；模型没给原因时写默认原因；原因含敏感信息置空', async () => {
+  const { db, done } = tmp();
+  recordEvent(db, { kind: 'item_star', refType: 'item', refId: 1, summary: '收藏：端侧模型' }, T - 1000);
+  const r = await consolidateOnce(db, fakeLlm(() => ({ ops: [], profile: '独立开发者' })), noop, T);
+  assert.equal(r.profile, true);
+  assert.deepEqual(all(db, 'SELECT content, origin, reason FROM profile_versions'), [{ content: '独立开发者', origin: 'auto', reason: '整理 1 条操作' }]);
+  assert.equal(validateOps({ ops: [], profile: '新画像', profile_reason: '手机 13812345678' }, st()).profileReason, '');
+  assert.equal(validateOps({ ops: [], profile: '新画像', profile_reason: ' 原因 ' }, st()).profileReason, '原因');
+  done();
+});
+
+test('撤销自动画像变更会记一版 restore；清空会删掉画像版本', async () => {
+  const { db, done } = tmp();
+  const a = '独立开发者';
+  const b = '独立开发者，在做面向中小律所的合同审查工具，关注端侧模型、律所 AI 落地案例与合同审查准确率评测。';
+  recordEvent(db, { kind: 'item_star', refType: 'item', refId: 1, summary: '收藏：端侧模型' }, T - 1000);
+  await consolidateOnce(db, fakeLlm(() => ({ ops: [], profile: a })), noop, T);
+  recordEvent(db, { kind: 'item_star', refType: 'item', refId: 2, summary: '收藏：律所 AI' }, T + 1000);
+  await consolidateOnce(db, fakeLlm(() => ({ ops: [], profile: b })), noop, T + 2000);
+  const cid = Number((db.prepare("SELECT max(id) AS id FROM memory_changes WHERE op = 'profile'").get() as { id: number }).id);
+  undoChange(db, cid, T + 3000);
+  assert.equal(getProfile(db).content, a);
+  assert.deepEqual(all(db, 'SELECT content, origin, reason FROM profile_versions ORDER BY rev'), [
+    { content: a, origin: 'auto', reason: '整理 1 条操作' },
+    { content: b, origin: 'auto', reason: '整理 1 条操作' },
+    { content: a, origin: 'restore', reason: `撤销 #${cid}` },
+  ]);
+  clearMemory(db, '清空', T + 4000);
+  assert.equal(all(db, 'SELECT count(*) AS n FROM profile_versions')[0].n, 0);
+  done();
+});

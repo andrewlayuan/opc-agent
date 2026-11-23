@@ -43,9 +43,10 @@
 ## Task 3：调度与预算（`consolidate.ts` + `config.ts`）
 
 - `config.ts` 增加 `skillDailyCalls: int('OPC_SKILL_DAILY_CALLS', 12, 0, 1000)`，0 表示停用；`skillsEnabled` 由 `OPC_SKILLS !== 'off'` 决定。
-- `SkillKeeper`（放 `crystallize.ts`）：`notify()` 在 `MemoryKeeper` 整理完成后调用；条件：开关开、距上次 ≥ 3 天、未整理事件 ≥ 20、当日调用数 < 预算。
-- 每日调用数存 `meta` 表（键 `skill_daily:<yyyymmdd>`），与 wiki 不同表不冲突。
-- 测试 `keeper.test.ts` 追加：条件不满足不跑、预算用尽不跑、成功后计数 +1、失败不计数但 `attempts` 记录避免死循环。
+- `SkillKeeper`（放 `crystallize.ts`）：`notify()` 由 `MemoryKeeper` 的 `after` 钩子在整理完成后调用；条件判断在 `crystallize` 内：距上次成功 ≥ 3 天、上次成功后新增事件 ≥ 20、当日次数 < 预算。开关关、未配置模型、预算为 0 时 `notify` 不跑，`runNow` 返回 409。
+- 每日次数直接按 `skill_runs` 当日行数统计（失败也算一次，避免反复重试刷调用），不另建 `meta` 表。
+- `consolidate.ts` 画像写入改走 `applyProfile`（事务内版本的 `writeProfile`），带 40 字门槛、`profile_reason` 与事件 id；`undoChange` 撤销画像记 `restore` 版本，`clearMemory` 清画像版本。
+- 测试：`consolidate.test.ts` 追加门槛、默认原因、撤销与清空；`keeper.test.ts` 追加 `after` 钩子与 `SkillKeeper` 的开关、并发、出错、停止。
 
 ## Task 4：召回与接入（`packs/memory/context.ts`、`packs/pm/advisor.ts`）
 

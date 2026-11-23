@@ -267,4 +267,75 @@ export async function crystallize(db: DB, llm: Llm, o: { now?: number; force?: b
   return res;
 }
 
+/**
+ * 调度沉淀：记忆整理跑完后 notify 一次，由 crystallize 自己判断间隔、新事件数与每日次数；
+ * 同一时间只跑一个。手动「立即沉淀」走 runNow（强制，跳过间隔与事件数门槛，仍受每日次数限制）
+ */
+export class SkillKeeper {
+  private readonly db: DB;
+  private readonly llm: Llm;
+  private readonly on: boolean;
+  private readonly dailyCalls: number;
+  private readonly log: (s: string) => void;
+  private readonly run: (force: boolean) => Promise<CrystalRun>;
+  private busy: Promise<CrystalRun> | null = null;
+  private stopped = false;
+
+  constructor(
+    db: DB,
+    llm: Llm,
+    o: { enabled: boolean; dailyCalls: number; log?: (s: string) => void; run?: (force: boolean) => Promise<CrystalRun> },
+  ) {
+    this.db = db;
+    this.llm = llm;
+    this.on = o.enabled;
+    this.dailyCalls = o.dailyCalls;
+    this.log = o.log ?? ((s) => console.log(s));
+    this.run = o.run ?? ((force) => crystallize(this.db, this.llm, { force, dailyCalls: this.dailyCalls, log: this.log }));
+  }
+
+  /** 开关打开、模型已配置、每日次数大于 0 */
+  get enabled(): boolean {
+    return this.on && this.llm.enabled && this.dailyCalls > 0;
+  }
+
+  get running(): boolean {
+    return this.busy !== null;
+  }
+
+  /** 不满足条件时说明原因；可以跑时返回 null */
+  get blocker(): string | null {
+    if (!this.on) return '技能沉淀已关闭（OPC_SKILLS=off）';
+    if (!this.llm.enabled) return '未配置模型';
+    if (this.dailyCalls <= 0) return '每日沉淀次数为 0（OPC_SKILL_DAILY_CALLS）';
+    return null;
+  }
+
+  notify(): void {
+    if (this.stopped || !this.enabled || this.busy) return;
+    this.start(false).catch((e) => this.log(`[skills] 沉淀出错：${errMsg(e)}`));
+  }
+
+  runNow(): Promise<CrystalRun> {
+    const why = this.blocker;
+    if (why) return Promise.reject(new MemoryError(409, why));
+    return this.busy ?? this.start(true);
+  }
+
+  stop(): void {
+    this.stopped = true;
+  }
+
+  private start(force: boolean): Promise<CrystalRun> {
+    this.busy = (async () => {
+      try {
+        return await this.run(force);
+      } finally {
+        this.busy = null;
+      }
+    })();
+    return this.busy;
+  }
+}
+
 export { SKILL_LIMITS };

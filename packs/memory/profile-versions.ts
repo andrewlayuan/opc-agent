@@ -50,34 +50,49 @@ export function listProfileVersions(db: DB): ProfileVersion[] {
   }));
 }
 
-/** 统一写入：内容与当前相同不写；旧内容入版本表；同时记 memory_changes。自动整理与手工保存都走这里 */
-export function writeProfile(
-  db: DB,
-  content: unknown,
-  o: { origin: ProfileOrigin; reason?: string; eventIds?: number[]; manual?: boolean; now?: number },
-): { content: string; written: boolean } {
+/** 自动更新的门槛：去掉空白后差异不足 40 字视为没有实质变化 */
+export const PROFILE_MIN_DELTA = 40;
+
+/** 去掉空白后，按公共前缀与公共后缀估算改动的字数（线性时间，足够判断「是否有实质变化」） */
+export function profileDelta(a: string, b: string): number {
+  const x = [...a.replace(/\s+/g, '')];
+  const y = [...b.replace(/\s+/g, '')];
+  let pre = 0;
+  while (pre < x.length && pre < y.length && x[pre] === y[pre]) pre++;
+  let suf = 0;
+  while (suf < x.length - pre && suf < y.length - pre && x[x.length - 1 - suf] === y[y.length - 1 - suf]) suf++;
+  return Math.max(x.length, y.length) - pre - suf;
+}
+
+type WriteOpts = { origin: ProfileOrigin; reason?: string; eventIds?: number[]; manual?: boolean; now?: number };
+
+/** 统一写入：内容与当前相同不写；写入后的内容入版本表；同时记 memory_changes。自动整理与手工保存都走这里 */
+export function writeProfile(db: DB, content: unknown, o: WriteOpts): { content: string; written: boolean } {
+  return tx(db, () => applyProfile(db, content, o));
+}
+
+/** 同 writeProfile，但不开事务：给已经在事务里的调用方（整理落库）用 */
+export function applyProfile(db: DB, content: unknown, o: WriteOpts): { content: string; written: boolean } {
   const text = typeof content === 'string' ? content.trim().slice(0, PROFILE_MAX) : '';
   const now = o.now ?? Date.now();
   const before = getProfile(db);
   if (text === before.content.trim()) return { content: before.content, written: false };
-  tx(db, () => {
-    seedProfileVersion(db, before.content, now);
-    pushProfileVersion(db, text, o.origin, o.reason ?? '', o.eventIds ?? [], now);
-    const manual = Boolean(o.manual) || before.manual;
-    db.prepare('UPDATE profile SET content = ?, updated_at = ?, manual = ? WHERE id = 1').run(text, now, manual ? 1 : 0);
-    logChange(
-      db,
-      {
-        op: 'profile',
-        before: { content: before.content, manual: before.manual },
-        after: { content: text, manual },
-        source: o.origin === 'auto' ? 'auto' : 'manual',
-        reason: o.reason,
-        eventIds: o.eventIds,
-      },
-      now,
-    );
-  });
+  seedProfileVersion(db, before.content, now);
+  pushProfileVersion(db, text, o.origin, o.reason ?? '', o.eventIds ?? [], now);
+  const manual = Boolean(o.manual) || before.manual;
+  db.prepare('UPDATE profile SET content = ?, updated_at = ?, manual = ? WHERE id = 1').run(text, now, manual ? 1 : 0);
+  logChange(
+    db,
+    {
+      op: 'profile',
+      before: { content: before.content, manual: before.manual },
+      after: { content: text, manual },
+      source: o.origin === 'auto' ? 'auto' : 'manual',
+      reason: o.reason,
+      eventIds: o.eventIds,
+    },
+    now,
+  );
   return { content: text, written: true };
 }
 

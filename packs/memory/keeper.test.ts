@@ -7,6 +7,9 @@ import { openDb } from '../../packages/core/db.ts';
 import type { DB } from '../../packages/core/db.ts';
 import type { Llm } from '../../packages/core/llm.ts';
 import { MemoryKeeper } from './consolidate.ts';
+import { SkillKeeper } from './crystallize.ts';
+import type { CrystalRun } from './crystallize.ts';
+import { MemoryError } from './store.ts';
 import type { Clock, ConsolidateResult } from './consolidate.ts';
 import { recordEvent } from './events.ts';
 
@@ -201,4 +204,102 @@ test('巡检：任何类型的未整理事件最早一条满 30 分钟都会触�
   await clock.advance(10 * MIN);
   assert.equal(calls(), 1);
   done();
+});
+
+test('MemoryKeeper：每次整理跑完调用 after，传入最后一次结果；出错只记日志', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-keep-'));
+  const db = openDb(path.join(dir, 't.db'));
+  const seen: ConsolidateResult[] = [];
+  const logs: string[] = [];
+  let boom = false;
+  const run = async (): Promise<ConsolidateResult> => ({ events: 1, applied: 1, profile: false, skipped: 0 });
+  const after = (r: ConsolidateResult) => {
+    seen.push(r);
+    if (boom) throw new Error('炸了');
+  };
+  const keeper = new MemoryKeeper(db, { enabled: true } as unknown as Llm, { clock: fakeClock(), run, after, log: (s) => logs.push(s) });
+  await keeper.runNow();
+  assert.deepEqual(seen, [{ events: 1, applied: 1, profile: false, skipped: 0 }]);
+  boom = true;
+  await keeper.runNow();
+  assert.equal(seen.length, 2);
+  assert.ok(logs.some((s) => s.includes('炸了')));
+  keeper.stop();
+  db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+function skillSetup(o: { enabled?: boolean; llm?: boolean; dailyCalls?: number } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-skeep-'));
+  const db = openDb(path.join(dir, 't.db'));
+  const forces: boolean[] = [];
+  let release: () => void = () => {};
+  let hold = false;
+  let fail = false;
+  const run = async (force: boolean): Promise<CrystalRun> => {
+    forces.push(force);
+    if (hold) await new Promise<void>((r) => (release = r));
+    if (fail) throw new Error('数据库坏了');
+    return { ran: true, added: 1, updated: 0, blocked: 0, dropped: 0 };
+  };
+  const logs: string[] = [];
+  const keeper = new SkillKeeper(db, { enabled: o.llm ?? true } as unknown as Llm, { enabled: o.enabled ?? true, dailyCalls: o.dailyCalls ?? 12, run, log: (s) => logs.push(s) });
+  return {
+    keeper,
+    forces,
+    logs,
+    hold: (v: boolean) => (hold = v),
+    fail: (v: boolean) => (fail = v),
+    release: () => release(),
+    done: () => (keeper.stop(), db.close(), fs.rmSync(dir, { recursive: true, force: true })),
+  };
+}
+const tick = async () => {
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+};
+
+test('SkillKeeper：开关关、模型未配置、每日次数为 0 时 notify 不跑，runNow 返回 409', async () => {
+  for (const o of [{ enabled: false }, { llm: false }, { dailyCalls: 0 }]) {
+    const k = skillSetup(o);
+    assert.equal(k.keeper.enabled, false);
+    k.keeper.notify();
+    await tick();
+    assert.deepEqual(k.forces, []);
+    await assert.rejects(k.keeper.runNow(), (e: unknown) => e instanceof MemoryError && e.status === 409);
+    k.done();
+  }
+});
+
+test('SkillKeeper：notify 按条件跑（不强制）；运行中再 notify 不重复；runNow 强制并复用进行中的那次', async () => {
+  const k = skillSetup();
+  k.hold(true);
+  k.keeper.notify();
+  await tick();
+  assert.equal(k.keeper.running, true);
+  k.keeper.notify();
+  const p = k.keeper.runNow();
+  await tick();
+  assert.deepEqual(k.forces, [false]);
+  k.release();
+  assert.equal((await p).added, 1);
+  assert.equal(k.keeper.running, false);
+  k.hold(false);
+  assert.equal((await k.keeper.runNow()).ran, true);
+  assert.deepEqual(k.forces, [false, true]);
+  k.done();
+});
+
+test('SkillKeeper：notify 里出错只记日志；stop 之后 notify 不再跑', async () => {
+  const k = skillSetup();
+  k.fail(true);
+  k.keeper.notify();
+  await tick();
+  assert.ok(k.logs.some((s) => s.includes('数据库坏了')));
+  assert.equal(k.keeper.running, false);
+  k.fail(false);
+  k.keeper.stop();
+  k.keeper.notify();
+  await tick();
+  assert.equal(k.forces.length, 1);
+  k.done();
 });

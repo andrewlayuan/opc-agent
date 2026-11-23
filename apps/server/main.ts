@@ -10,6 +10,7 @@ import { WikiAssets } from '../../packs/wiki/assets.ts';
 import { WikiQueue } from '../../packs/wiki/queue.ts';
 import { recallWiki } from '../../packs/wiki/recall.ts';
 import { MemoryKeeper } from '../../packs/memory/consolidate.ts';
+import { SkillKeeper } from '../../packs/memory/crystallize.ts';
 import { resolveRefs, touchMemories, userContext } from '../../packs/memory/context.ts';
 import { paragraphDiff, recordEvent } from '../../packs/memory/events.ts';
 import type { EventInput } from '../../packs/memory/events.ts';
@@ -38,7 +39,8 @@ import { handleGrowthApi } from './growth-api.ts';
 const cfg = loadConfig({ requireAuth: true });
 const db = openDb(cfg.dbPath);
 const radar = new Radar(db, cfg, undefined, { analyzeContext: () => userContext(db, 'analyze').text });
-const keeper = new MemoryKeeper(db, radar.llm);
+const skillKeeper = new SkillKeeper(db, radar.llm, { enabled: cfg.skillsEnabled, dailyCalls: cfg.skillDailyCalls });
+const keeper = new MemoryKeeper(db, radar.llm, { after: () => skillKeeper.notify() });
 const pmSkillsDir = defaultSkillsDir();
 const files = new AttachmentStore(db, path.join(cfg.dataDir, 'uploads'), radar.llm);
 const kbFiles = new KbFiles(db, path.join(cfg.dataDir, 'kb'), radar.llm);
@@ -651,6 +653,7 @@ function cleanupFiles(): void {
 function shutdown(): void {
   radar.stop();
   keeper.stop();
+  skillKeeper.stop();
   wikiQueue.stop();
   server.close(() => {
     db.close();

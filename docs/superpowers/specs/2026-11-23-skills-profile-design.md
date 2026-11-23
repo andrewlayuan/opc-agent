@@ -111,7 +111,7 @@ CREATE TABLE profile_versions (
 1. 目前画像有两条写入路径：`store.ts` 的 `setProfile`（手工保存）和 `consolidate.ts` 第 205–207 行的直接 UPDATE（自动整理）。两处统一改走新增的 `writeProfile(db, content, o)`（`packs/memory/profile-versions.ts`）：`profile_versions` 记录**每次写入后的状态**，最新一条即当前内容（与上一版相同则跳过，避免刷版本），再更新 `profile` 并照旧记 `memory_changes`。升级前已有的画像在第一次写入前补一条「升级前的画像」，保证能回退。
 2. 画像的新内容由整理器给出，同时给出 `reason`（这次为什么改：哪几条事件推动了变化）与 `event_ids`。
 3. 页面「画像」标签：当前内容可编辑（Markdown）→ 保存写新版本 `origin='manual'`；历史列表可对比任意两版、回退（写新版本 `origin='restore'`）。
-4. **画像自动更新的门槛**：与旧内容差异小于 40 字（去掉空白后）视为无实质变化，只更新 `updated_at`，不写版本，避免每次整理都刷一屏历史。
+4. **画像自动更新的门槛**：与旧内容差异小于 40 字（去掉空白后）（按公共前缀与后缀估算）视为无实质变化，这次不写画像也不写版本，避免每次整理都刷一屏历史；原画像为空时不受门槛限制。撤销一次画像变更会记一版 `origin='restore'`；「清空」同时删除画像版本。
 
 ## 7. 召回
 
