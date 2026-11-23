@@ -41,6 +41,8 @@ export interface AppConfig {
   skillsEnabled: boolean;
   /** 技能沉淀每日模型调用上限，0 表示停用 */
   skillDailyCalls: number;
+  kbExpand: boolean;
+  kbExpandDailyCalls: number;
 }
 
 export type LlmThinking = 'on' | 'off' | null;
@@ -86,6 +88,8 @@ export function loadConfig(opts: { requireAuth?: boolean } = {}): AppConfig {
     wikiDailyCalls: int('OPC_WIKI_DAILY_CALLS', 200, 1, 100000),
     skillsEnabled: process.env.OPC_SKILLS?.trim().toLowerCase() !== 'off',
     skillDailyCalls: int('OPC_SKILL_DAILY_CALLS', 12, 0, 1000),
+    kbExpand: process.env.OPC_KB_EXPAND?.trim().toLowerCase() !== 'off',
+    kbExpandDailyCalls: int('OPC_KB_EXPAND_DAILY_CALLS', 100, 0, 10000),
   };
   if (opts.requireAuth) {
     if (!cfg.adminUser || !cfg.adminHash) {

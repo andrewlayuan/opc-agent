@@ -577,6 +577,20 @@ const MIGRATIONS: string[] = [
     created_at INTEGER NOT NULL
   );
   `,
+  // 15：知识库查询扩写的缓存与每日调用记录
+  `
+  CREATE TABLE kb_expand (
+    key TEXT PRIMARY KEY,
+    terms TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE kb_expand_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at INTEGER NOT NULL,
+    ok INTEGER NOT NULL
+  );
+  CREATE INDEX kb_expand_calls_at ON kb_expand_calls(at);
+  `,
 ];
 
 export type DB = DatabaseSync;

@@ -7,7 +7,7 @@ const count = (db: DB, sql: string, ...a: (string | number)[]) => Number((db.pre
 
 test('迁移 9：Wiki 各表存在，user_version=9', () => {
   const { db, done } = tmpWikiDb();
-  assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 14);
+  assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 15);
   for (const t of ['wiki_pages', 'wiki_ops', 'wiki_revisions', 'wiki_links', 'wiki_cites', 'wiki_docs', 'wiki_assets', 'wiki_fts']) {
     assert.equal(count(db, 'SELECT count(*) AS n FROM sqlite_master WHERE name = ?', t), 1, t);
   }
