@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { openDb } from '../../packages/core/db.ts';
 
 const V5_DROP = `
-  DROP TABLE IF EXISTS skill_revisions; DROP TABLE IF EXISTS skills; DROP TABLE IF EXISTS profile_versions;
+  DROP TABLE IF EXISTS skill_runs; DROP TABLE IF EXISTS skill_revisions; DROP TABLE IF EXISTS skills; DROP TABLE IF EXISTS profile_versions;
   DROP TABLE IF EXISTS gr_revisions; DROP TABLE IF EXISTS gr_copies; DROP TABLE IF EXISTS gr_campaigns; DROP TABLE IF EXISTS cp_doc_revisions; DROP TABLE IF EXISTS cp_doc_sections; DROP TABLE IF EXISTS cp_docs; DROP TABLE IF EXISTS cp_entity;
   DROP TABLE IF EXISTS cp_items; DROP TABLE IF EXISTS cp_assessments; DROP TABLE IF EXISTS cp_products;
   DROP TABLE IF EXISTS wiki_fts; DROP TABLE IF EXISTS wiki_assets; DROP TABLE IF EXISTS wiki_docs; DROP TABLE IF EXISTS wiki_cites; DROP TABLE IF EXISTS wiki_links; DROP TABLE IF EXISTS wiki_revisions; DROP TABLE IF EXISTS wiki_ops; DROP TABLE IF EXISTS wiki_pages; DROP TABLE IF EXISTS pm_prototypes; DROP TABLE IF EXISTS kb_fts; DROP TABLE IF EXISTS kb_chunks; DROP TABLE IF EXISTS kb_docs; DROP TABLE IF EXISTS kb_folders;

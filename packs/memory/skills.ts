@@ -37,6 +37,8 @@ export interface Skill extends SkillInput {
   source: 'auto' | 'manual';
   status: SkillStatus;
   manual: boolean;
+  /** 手改过的技能遇到沉淀出的新版本时暂存于此，由用户决定采用或忽略 */
+  pending: SkillInput | null;
   uses: number;
   hits: number;
   last_used_at: number | null;
@@ -97,6 +99,7 @@ const toSkill = (r: Row, rev: number, revisions: number): Skill => ({
   source: String(r.source) === 'auto' ? 'auto' : 'manual',
   status: (SKILL_STATUS as readonly string[]).includes(String(r.status)) ? (String(r.status) as SkillStatus) : 'candidate',
   manual: Number(r.manual) === 1,
+  pending: r.pending == null ? null : (JSON.parse(String(r.pending)) as SkillInput),
   uses: Number(r.uses),
   hits: Number(r.hits),
   last_used_at: r.last_used_at == null ? null : Number(r.last_used_at),
@@ -197,6 +200,21 @@ export function setSkillStatus(db: DB, id: number, status: unknown, now = Date.n
   skillRow(db, id);
   db.prepare('UPDATE skills SET status = ?, updated_at = ? WHERE id = ?').run(status, now, id);
   return getSkill(db, id);
+}
+
+/** 暂存或清除待采用的新版本 */
+export function setPending(db: DB, id: number, skill: SkillInput | null, now = Date.now()): void {
+  skillRow(db, id);
+  db.prepare('UPDATE skills SET pending = ?, updated_at = ? WHERE id = ?').run(skill ? JSON.stringify(skill) : null, now, id);
+}
+
+/** 采用暂存的新版本：写新版本（origin=auto），清空 pending；没有暂存时 409 */
+export function acceptPending(db: DB, id: number, now = Date.now()): Skill {
+  const r = skillRow(db, id);
+  if (r.pending == null) throw new MemoryError(409, '没有待采用的新版本');
+  const s = updateSkill(db, id, JSON.parse(String(r.pending)), { origin: 'auto', reason: '采用沉淀出的新版本', now });
+  db.prepare('UPDATE skills SET pending = NULL WHERE id = ?').run(id);
+  return { ...s, pending: null };
 }
 
 /** 召回计数：同一轮只调用一次 */

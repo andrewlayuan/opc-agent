@@ -538,6 +538,7 @@ const MIGRATIONS: string[] = [
     source TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'candidate',
     manual INTEGER NOT NULL DEFAULT 0,
+    pending TEXT,
     uses INTEGER NOT NULL DEFAULT 0,
     hits INTEGER NOT NULL DEFAULT 0,
     last_used_at INTEGER,
@@ -545,6 +546,19 @@ const MIGRATIONS: string[] = [
     updated_at INTEGER NOT NULL
   );
   CREATE INDEX skills_status ON skills(status, updated_at DESC);
+  -- 每次沉淀一行：事件游标（upto_event）、每日预算计数与运行记录
+  CREATE TABLE skill_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    upto_event INTEGER NOT NULL DEFAULT 0,
+    events INTEGER NOT NULL DEFAULT 0,
+    added INTEGER NOT NULL DEFAULT 0,
+    updated INTEGER NOT NULL DEFAULT 0,
+    blocked INTEGER NOT NULL DEFAULT 0,
+    dropped INTEGER NOT NULL DEFAULT 0,
+    error TEXT
+  );
   CREATE TABLE skill_revisions (
     skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
     rev INTEGER NOT NULL,
