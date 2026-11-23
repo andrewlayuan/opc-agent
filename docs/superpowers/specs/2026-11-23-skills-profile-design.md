@@ -95,6 +95,7 @@ CREATE TABLE profile_versions (
    - `evidence` 至少命中 2 条真实事件的 summary 片段（逐字包含，去空白后比较）——防止凭空编造技能；
    - 字段长度与条数符合 4 节约束；
    - 与现有技能 `name` 归一化后完全相同的，视为「更新」而不是新增：写新版本、`origin='auto'`；但 `manual=1` 的不覆盖，只在页面上标记「有新版可参考」。
+   - 模型调用期间用户可能手改、停用、删除或同名新建技能：写库时在同一事务里按**最新**技能列表重新归并，以写库时的状态为准；写库出错记入运行记录的 error，不推进游标。内容与当前完全相同的更新不写版本。手动编辑、回退都会置 `manual=1`（用户的选择，自动流程不再覆盖）。
 5. 新增的进 `candidate`，不直接启用；页面上「采纳」后才参与召回。
 6. 全部结果写 `skill_revisions`（`origin='auto'`，`reason` 记 evidence 摘要）。
 
@@ -151,6 +152,7 @@ CREATE TABLE profile_versions (
 | DELETE | `/api/memory/skills/:id/pending` | 忽略暂存的新版本 |
 | POST | `/api/memory/skills/crystallize` | 立即沉淀：开关、模型、当日次数、新事件不满足时 409 并给出原因；否则后台运行返回 202，结果从 `GET /api/memory/skills` 的 `running`/`last` 轮询 |
 | GET | `/api/memory/profile/versions` | 画像版本列表 |
+| GET | `/api/memory/profile/versions/:rev/diff`、`/api/memory/skills/:id/revisions/:rev/diff`、`/api/memory/skills/:id/pending/diff` | 某版（或暂存的新版）与当前的逐行差异 |
 | POST | `/api/memory/profile/restore` | 回退到某版 |
 | GET | `/api/memory/export?format=zip` | 导出记忆 + 技能 + 画像版本 |
 
