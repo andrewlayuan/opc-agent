@@ -514,6 +514,30 @@ test('知识库：只配 hooks.kb 时首版与追问都召回，context_refs 记
   done();
 });
 
+test('知识库：hooks.kb 返回 Promise 时首版与追问都等待并召回', async () => {
+  const systems: string[] = [];
+  const kb = async () => (await new Promise((r) => setTimeout(r, 5)), { text: KB, refs: KB_REFS });
+  const { advisor, done } = setup({ chat: (m) => (systems.push(m[0].content), fakeTurn(m)) }, { kb });
+  const id = await doneReview(advisor);
+  assert.ok(systems[0].includes(KB));
+  assert.deepEqual(advisor.get(id)!.context_refs, { memories: [], reviews: [], kb: KB_REFS });
+  advisor.ask(id, '把定价改成年费', 'auto');
+  await waitTurn(advisor, id);
+  assert.ok(systems[1].includes(KB));
+  done();
+});
+
+test('知识库：hooks.kb 异步抛错时评审照常完成，无 kb 引用', async () => {
+  const logs: string[] = [];
+  const { db, advisor, done } = setup({ chat: (m) => fakeTurn(m) }, { kb: async () => Promise.reject(new Error('扩写炸了')) }, (s: string) => logs.push(s));
+  const id = await doneReview(advisor);
+  assert.equal(advisor.get(id)!.status, 'done');
+  const raw = (db.prepare('SELECT context_refs FROM pm_reviews WHERE id = ?').get(id) as { context_refs: string | null }).context_refs;
+  assert.ok(raw == null || !('kb' in JSON.parse(raw)));
+  assert.ok(logs.some((l) => l.includes('扩写炸了')));
+  done();
+});
+
 test('知识库：hooks.kb 返回空或未配置时提示词不变，context_refs 不含 kb', async () => {
   const run = async (hooks: AdvisorHooks) => {
     const systems: string[] = [];

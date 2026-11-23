@@ -261,15 +261,44 @@ export function initKb({ h, api, toast, show, openReview, openItem, renderMarkdo
   };
   const titleLink = (d, ord) => h('a', { href: '#', class: 'kb-title', text: d.title, onclick: (e) => (e.preventDefault(), open(d.id, ord)) });
 
-  async function loadList() {
+  /** smart：智能搜索（先让模型扩写检索词），只在用户点按钮时发起 */
+  async function loadList(smart = false) {
     const seq = ++st.seq;
     const p = new URLSearchParams();
     if (st.folder != null) p.set('folder', String(st.folder));
     if (st.q) p.set('q', st.q);
+    if (smart && st.q) p.set('smart', '1');
     const qs = p.toString();
     const data = await api(`/api/kb/docs${qs ? `?${qs}` : ''}`);
     if (seq !== st.seq || st.view !== 'list') return;
-    renderList(data);
+    renderList(data, smart);
+  }
+
+  /** 智能搜索的说明行：用到的检索词，或者没扩写的原因 */
+  function smartLine(data) {
+    if (data.terms?.length) return h('p', { class: 'kb-smart-terms muted', text: `已按这些说法搜索：${data.terms.join('、')}` });
+    return h('p', { class: 'kb-smart-terms muted', text: data.reason ? `没有用上智能搜索：${data.reason}，下面是普通搜索结果` : '智能搜索没有找到别的说法，下面是普通搜索结果' });
+  }
+
+  function smartBtn() {
+    const b = h('button', {
+      type: 'button',
+      class: 'ghost kb-smart-btn',
+      text: '没找到想要的？智能搜索',
+      title: '让模型把问题换几种说法（同义词、上下位概念、中英文）再搜一次',
+      onclick: async () => {
+        b.disabled = true;
+        b.textContent = '正在换几种说法搜索…';
+        try {
+          await loadList(true);
+        } catch (e) {
+          toast(e.message);
+          b.disabled = false;
+          b.textContent = '没找到想要的？智能搜索';
+        }
+      },
+    });
+    return b;
   }
 
   /** 搜索摘录里【】包住的是命中词，渲染成高亮 */
@@ -282,7 +311,8 @@ export function initKb({ h, api, toast, show, openReview, openItem, renderMarkdo
         .map((part, i) => (i % 2 ? h('mark', { text: part }) : part)),
     );
 
-  function renderList({ docs, hits }) {
+  function renderList(data, smart = false) {
+    const { docs, hits } = data;
     const body = $('kb-body');
     const n = hits ? hits.length : docs.length;
     const crumb = h(
@@ -292,9 +322,11 @@ export function initKb({ h, api, toast, show, openReview, openItem, renderMarkdo
       n ? h('span', { class: 'kb-crumb-count', text: hits ? `${n} 条结果` : `${n} 个条目` }) : null,
     );
     if (hits) {
-      if (!hits.length) return body.replaceChildren(crumb, h('p', { class: 'empty kb-empty', text: '没有找到相关内容' }));
+      const extra = smart ? smartLine(data) : null;
+      const more = smart ? null : smartBtn();
+      if (!hits.length) return body.replaceChildren(...[crumb, extra, h('p', { class: 'empty kb-empty', text: '没有找到相关内容' }), more].filter(Boolean));
       return body.replaceChildren(
-        crumb,
+        ...[crumb, extra].filter(Boolean),
         h(
           'ol',
           { class: 'kb-list' },
@@ -308,6 +340,7 @@ export function initKb({ h, api, toast, show, openReview, openItem, renderMarkdo
             ),
           ),
         ),
+        ...[more].filter(Boolean),
       );
     }
     if (!docs.length) {

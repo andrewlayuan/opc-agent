@@ -1112,3 +1112,7 @@ mark.gr-hit.flash { outline: 2px solid var(--accent); outline-offset: 1px; }
   .sk-status { flex-basis: 100%; }
   .sk-card, .sk-form { padding: 10px 12px; }
 }
+
+/* 知识库智能搜索 */
+.kb-smart-terms { margin: 4px 0 10px; font-size: 13px; }
+.kb-smart-btn { display: block; margin: 12px auto 4px; }

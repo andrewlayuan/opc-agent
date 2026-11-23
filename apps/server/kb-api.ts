@@ -9,6 +9,8 @@ import { searchKb } from '../../packs/kb/search.ts';
 import { suggestFolder } from '../../packs/kb/suggest.ts';
 import { KB_LIMITS, KbError } from '../../packs/kb/types.ts';
 import type { KbFiles } from '../../packs/kb/uploads.ts';
+import { EXPAND } from '../../packs/kb/expand.ts';
+import type { Expansion, KbExpander } from '../../packs/kb/expand.ts';
 import { ExtractError } from '../../packs/pm/extract.ts';
 import { decodeHtml } from '../../packs/pm/html.ts';
 import { HttpError, contentDisposition, readBodyToFile, readJson, sendJson } from './http.ts';
@@ -17,6 +19,10 @@ export interface KbApiDeps {
   db: DB;
   files: KbFiles;
   llm: Pick<Llm, 'enabled' | 'chat'>;
+  /** 查询扩写；未提供时智能搜索返回 off */
+  expander?: Pick<KbExpander, 'expand'>;
+  /** 导出整库的临时目录 */
+  tmpDir: string;
 }
 
 const BODY_MAX = 16 * 1024;
@@ -197,8 +203,13 @@ async function route(deps: KbApiDeps, req: http.IncomingMessage, res: http.Serve
     const term = (q.get('q') ?? '').slice(0, 200).trim();
     if (term) {
       safeRefresh(db);
-      const hits = searchKb(db, term).filter((h) => folder == null || (folder === 'none' ? h.doc.folder_id == null : h.doc.folder_id === folder));
-      sendJson(res, 200, { hits });
+      const inFolder = (h: { doc: { folder_id: number | null } }) => folder == null || (folder === 'none' ? h.doc.folder_id == null : h.doc.folder_id === folder);
+      if (q.get('smart') === '1') {
+        const x: Expansion = deps.expander ? await deps.expander.expand(term, { timeoutMs: EXPAND.smartTimeoutMs }) : { terms: [], source: 'off', reason: '未启用智能搜索' };
+        sendJson(res, 200, { hits: searchKb(db, term, 50, x.terms).filter(inFolder), terms: x.terms, source: x.source, ...(x.reason ? { reason: x.reason } : {}) });
+        return true;
+      }
+      sendJson(res, 200, { hits: searchKb(db, term).filter(inFolder) });
     } else {
       sendJson(res, 200, { docs: listDocs(db, folder, 500) });
     }

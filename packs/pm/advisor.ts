@@ -136,7 +136,8 @@ export interface AdvisorHooks {
   /** 本轮成功完成后，回报实际注入提示词的记忆 id */
   used?: (memoryIds: number[]) => void;
   /** 知识库召回；advisor 本身不依赖知识库模块 */
-  kb?: (query: string) => { text: string; refs: KbRef[] };
+  /** 知识库召回；可以是异步的（先做查询扩写） */
+  kb?: (query: string) => Promise<{ text: string; refs: KbRef[] }> | { text: string; refs: KbRef[] };
   /** 技能召回；advisor 本身不依赖记忆模块 */
   skills?: (query: string) => { text: string; ids: number[] };
   /** 本轮成功完成后，回报实际注入提示词的技能 id */
@@ -341,7 +342,7 @@ export class PmAdvisor {
       .catch((e) => {
         const msg = (e instanceof Error ? e.message : String(e)).slice(0, 300);
         this.log(`[pm] 评审 #${id} 失败：${msg}`);
-        this.db.prepare("UPDATE pm_reviews SET status='error', error=?, finished_at=? WHERE id=?").run(msg, Date.now(), id);
+        this.markError("UPDATE pm_reviews SET status='error', error=?, finished_at=? WHERE id=?", msg, id);
       })
       .finally(() => this.running--);
     return id;
@@ -359,7 +360,7 @@ export class PmAdvisor {
     }
     if (!chosen.length) chosen = ['value-proposition', 'identify-assumptions-new', 'pre-mortem'].filter((s) => this.byName.has(s));
     const refs = useRadar ? this.radarRefs(keywords) : [];
-    const ctx = this.userContext({ query: input, excludeReview: id });
+    const ctx = await this.userContext({ query: input, excludeReview: id });
     this.db
       .prepare('UPDATE pm_reviews SET skills=?, item_ids=?, context_refs=? WHERE id=?')
       .run(JSON.stringify(chosen), JSON.stringify(refs.map((r) => r.id)), ctx ? JSON.stringify(ctx.refs) : null, id);
@@ -390,10 +391,10 @@ export class PmAdvisor {
   }
 
   /** 取用户上下文（记忆、技能、知识库依次排列，中间空一行）；都为空或出错时返回 null，不影响评审 */
-  private userContext(opts: { query: string; excludeReview?: number }): { text: string; refs: ContextRefs } | null {
+  private async userContext(opts: { query: string; excludeReview?: number }): Promise<{ text: string; refs: ContextRefs } | null> {
     const mem = this.memoryContext(opts);
     const sk = this.skillsContext(opts.query);
-    const kb = this.kbContext(opts.query);
+    const kb = await this.kbContext(opts.query);
     if (!mem && !sk && !kb) return null;
     const refs: ContextRefs = mem ? mem.refs : { memories: [], reviews: [] };
     if (sk) refs.skills = sk.ids;
@@ -424,10 +425,10 @@ export class PmAdvisor {
     }
   }
 
-  private kbContext(query: string): { text: string; refs: KbRef[] } | null {
+  private async kbContext(query: string): Promise<{ text: string; refs: KbRef[] } | null> {
     if (!this.hooks.kb) return null;
     try {
-      const k = this.hooks.kb(query);
+      const k = await this.hooks.kb(query);
       return k.text && k.refs.length ? k : null;
     } catch (e) {
       this.log(`[pm] 读取知识库失败，按无知识库继续：${e instanceof Error ? e.message : e}`);
@@ -724,7 +725,7 @@ ${structure}
       .catch((e) => {
         const msg = (e instanceof Error ? e.message : String(e)).slice(0, 300);
         this.log(`[pm] 评审 #${id} 追问失败：${msg}`);
-        this.db.prepare("UPDATE pm_messages SET status='error', error=?, finished_at=? WHERE id=?").run(msg, Date.now(), ids.mid);
+        this.markError("UPDATE pm_messages SET status='error', error=?, finished_at=? WHERE id=?", msg, ids.mid);
       })
       .finally(() => this.running--);
     return ids.mid;
@@ -762,6 +763,15 @@ ${structure}
     return latestN + 1;
   }
 
+  /** 后台任务失败时记错误；数据库已关闭（服务正在退出）时只记日志，不再抛出 */
+  private markError(sql: string, msg: string, id: number): void {
+    try {
+      this.db.prepare(sql).run(msg, Date.now(), id);
+    } catch (e) {
+      this.log(`[pm] 记录失败状态出错：${e instanceof Error ? e.message : e}`);
+    }
+  }
+
   private busy(id: number): boolean {
     return Boolean(this.db.prepare("SELECT 1 FROM pm_messages WHERE review_id=? AND status='running' LIMIT 1").get(id));
   }
@@ -790,7 +800,7 @@ ${structure}
     );
     const first = byMsg(null);
     const current = byMsg(userId);
-    const ctx = this.userContext({ query: `${text}\n${clip(String(r.input), 200)}`, excludeReview: id });
+    const ctx = await this.userContext({ query: `${text}\n${clip(String(r.input), 200)}`, excludeReview: id });
     const messages: ChatMessage[] = buildTurnMessages({
       system: `${this.turnSystem(skills, added, mode, ctx?.text)}\n\n${TURN_PROTOCOL}`,
       input: `<request>\n${String(r.input)}\n</request>` + (first.length ? `\n${renderAttachments(first.map(attText), ATT_FIRST_IN_TURN)}` : ''),
