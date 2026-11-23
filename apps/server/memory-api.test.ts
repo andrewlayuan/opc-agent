@@ -183,7 +183,7 @@ test('差异：技能某版与当前、画像某版与当前；版本不存在 4
   const id = (await s.call('POST', S, SKILL)).data.id as number;
   await s.call('PUT', `${S}/${id}`, { ...SKILL, steps: ['先列本周完成的三件事', '再写下周计划和需要的支持', '最后核对数字再发送'] });
   const d = (await s.call('GET', `${S}/${id}/revisions/1/diff`)).data.diff;
-  assert.deepEqual(d.lines.filter((l: { t: string }) => l.t !== ' '), [{ t: '+', s: '3. 最后核对数字再发送' }]);
+  assert.deepEqual(d.lines.filter((l: { t: string }) => l.t !== ' '), [{ t: '+', s: '- 最后核对数字再发送' }]);
   assert.ok(d.lines.some((l: { s: string }) => l.s === '名称：周报起草与整理流程'));
   assert.equal((await s.call('GET', `${S}/${id}/revisions/9/diff`)).status, 404);
   await s.call('PUT', '/api/memory/profile', { content: '独立开发者' });
@@ -195,6 +195,9 @@ test('差异：技能某版与当前、画像某版与当前；版本不存在 4
   assert.equal((await s.call('GET', `${S}/${id}/pending/diff`)).status, 404);
   setPending(s.db, id, { ...SKILL, cautions: ['数字要和看板一致', '投资人版去掉内部代号'] });
   const pdl = (await s.call('GET', `${S}/${id}/pending/diff`)).data.diff.lines.filter((l: { t: string }) => l.t !== ' ');
-  assert.deepEqual(pdl, [{ t: '-', s: '3. 最后核对数字再发送' }, { t: '+', s: '- 投资人版去掉内部代号' }]);
+  assert.deepEqual(pdl, [{ t: '-', s: '- 最后核对数字再发送' }, { t: '+', s: '- 投资人版去掉内部代号' }]);
+  await s.call('PUT', `${S}/${id}`, { ...SKILL, steps: ['先列本周完成的三件事', '中间插入的一步检查', '再写下周计划和需要的支持'] });
+  const mid = (await s.call('GET', `${S}/${id}/revisions/1/diff`)).data.diff.lines.filter((l: { t: string }) => l.t !== ' ');
+  assert.deepEqual(mid, [{ t: '+', s: '- 中间插入的一步检查' }], '中间插入一步时，后面的步骤不因编号变化而显示为改动');
   await s.close();
 });

@@ -5,7 +5,7 @@ export function initSkills({ h, api, toast, diffNodes, onProfileChange }) {
   const S = '/api/memory/skills';
   const STATUS = { active: '启用', candidate: '候选', retired: '停用' };
   const ORDER = ['active', 'candidate', 'retired'];
-  const SK_ORIGIN = { auto: '自动沉淀', manual: '手改', restore: '回退' };
+  const SK_ORIGIN = { auto: '自动沉淀', manual: '手动', restore: '回退' };
   const PF_ORIGIN = { auto: '自动整理', manual: '手动', restore: '回退' };
   const LIM = { nameMin: 8, nameMax: 40, sceneMin: 20, sceneMax: 200, stepsMin: 2, stepsMax: 8, stepMax: 200, cautionsMax: 5, cautionMax: 120, exampleMax: 600 };
   const cps = (s) => Array.from(String(s ?? '').trim()).length;

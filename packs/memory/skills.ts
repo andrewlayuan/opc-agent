@@ -120,9 +120,9 @@ function skillRow(db: DB, id: number): Row {
   return r;
 }
 
-/** 技能的纯文本形式，供逐行比较版本差异 */
+/** 技能的纯文本形式，供逐行比较版本差异；步骤不编号，中间插入一步时后面的步骤不会因编号变化显示为改动 */
 export function skillText(s: SkillInput): string {
-  const out = [`名称：${s.name}`, `何时用：${s.scene}`, '步骤：', ...s.steps.map((x, i) => `${i + 1}. ${x}`)];
+  const out = [`名称：${s.name}`, `何时用：${s.scene}`, '步骤：', ...s.steps.map((x) => `- ${x}`)];
   if (s.cautions.length) out.push('注意：', ...s.cautions.map((x) => `- ${x}`));
   if (s.example) out.push('示例：', ...s.example.split('\n'));
   return out.join('\n');

@@ -1068,7 +1068,8 @@ mark.gr-hit.flash { outline: 2px solid var(--accent); outline-offset: 1px; }
 #mem-main[hidden], .sk-pane[hidden] { display: none; }
 .sk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0 4px; }
 .sk-status { flex: 1 1 240px; min-width: 0; font-size: 13px; }
-.sk-status.warn { color: var(--err); }
+.sk-status.warn { color: var(--fg); }
+.sk-pane > .mem-intro { margin-top: 12px; }
 .sk-empty { font-size: 13px; margin: 16px 0; }
 .sk-card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--glass); padding: 12px 14px; margin: 8px 0; font-size: 14px; }
 .sk-card.off { opacity: .6; }
@@ -1108,5 +1109,6 @@ mark.gr-hit.flash { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sk-ph .sk-hist { border-top: 0; padding-top: 4px; margin-top: 4px; }
 @media (max-width: 640px) {
   .sk-head .info { margin-left: 0; width: 100%; }
+  .sk-status { flex-basis: 100%; }
   .sk-card, .sk-form { padding: 10px 12px; }
 }
