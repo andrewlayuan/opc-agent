@@ -9,15 +9,18 @@ import { recentRuns } from '../../packs/memory/crystallize.ts';
 import type { SkillKeeper } from '../../packs/memory/crystallize.ts';
 import { pendingCount } from '../../packs/memory/events.ts';
 import { listProfileVersions, restoreProfile } from '../../packs/memory/profile-versions.ts';
+import { lineDiff } from '../../packs/wiki/diff.ts';
 import {
   acceptPending,
   createSkill,
   deleteSkill,
+  getSkill,
   listSkillRevisions,
   listSkills,
   restoreSkill,
   setPending,
   setSkillStatus,
+  skillText,
   updateSkill,
 } from '../../packs/memory/skills.ts';
 import { ZipWriter } from '../../packs/wiki/zip.ts';
@@ -126,6 +129,24 @@ export async function handleMemoryApi(deps: MemoryApiDeps, req: http.IncomingMes
     sendJson(res, 200, { versions: listProfileVersions(db) });
     return true;
   }
+  let m = p.match(/^\/api\/memory\/profile\/versions\/(\d+)\/diff$/);
+  if (m && method === 'GET') {
+    const rev = idOf(m[1]);
+    const v = listProfileVersions(db).find((x) => x.rev === rev);
+    if (!v) throw new HttpError(404, '版本不存在');
+    sendJson(res, 200, { diff: lineDiff(v.content, getProfile(db).content) });
+    return true;
+  }
+  m = p.match(/^\/api\/memory\/skills\/(\d+)\/revisions\/(\d+)\/diff$/);
+  if (m && method === 'GET') {
+    const id = idOf(m[1]);
+    const rev = idOf(m[2]);
+    const cur = call(() => getSkill(db, id));
+    const v = call(() => listSkillRevisions(db, id)).find((x) => x.rev === rev);
+    if (!v) throw new HttpError(404, '版本不存在');
+    sendJson(res, 200, { diff: lineDiff(skillText(v.skill), skillText(cur)) });
+    return true;
+  }
   if (p === '/api/memory/profile/restore' && method === 'POST') {
     const body = await readJson(req, BODY_MAX);
     sendJson(res, 200, call(() => restoreProfile(db, body.rev)));
@@ -168,7 +189,7 @@ export async function handleMemoryApi(deps: MemoryApiDeps, req: http.IncomingMes
     sendJson(res, 201, { id });
     return true;
   }
-  let m = p.match(/^\/api\/memory\/items\/(\d+)$/);
+  m = p.match(/^\/api\/memory\/items\/(\d+)$/);
   if (m && method === 'PUT') {
     const id = idOf(m[1]);
     const body = await readJson(req, BODY_MAX);

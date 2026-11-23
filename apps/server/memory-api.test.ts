@@ -177,3 +177,20 @@ test('导出：默认仍是 JSON；format=zip 打包记忆、技能、画像与�
   assert.equal((await s.raw('GET', '/api/memory/export?format=xml')).status, 400);
   await s.close();
 });
+
+test('差异：技能某版与当前、画像某版与当前；版本不存在 404', async () => {
+  const s = await setup();
+  const id = (await s.call('POST', S, SKILL)).data.id as number;
+  await s.call('PUT', `${S}/${id}`, { ...SKILL, steps: ['先列本周完成的三件事', '再写下周计划和需要的支持', '最后核对数字再发送'] });
+  const d = (await s.call('GET', `${S}/${id}/revisions/1/diff`)).data.diff;
+  assert.deepEqual(d.lines.filter((l: { t: string }) => l.t !== ' '), [{ t: '+', s: '3. 最后核对数字再发送' }]);
+  assert.ok(d.lines.some((l: { s: string }) => l.s === '名称：周报起草与整理流程'));
+  assert.equal((await s.call('GET', `${S}/${id}/revisions/9/diff`)).status, 404);
+  await s.call('PUT', '/api/memory/profile', { content: '独立开发者' });
+  await s.call('PUT', '/api/memory/profile', { content: '独立开发者\n在做律所合同审查工具' });
+  const rev = (await s.call('GET', '/api/memory/profile/versions')).data.versions[1].rev;
+  const pd = (await s.call('GET', `/api/memory/profile/versions/${rev}/diff`)).data.diff;
+  assert.deepEqual(pd.lines, [{ t: ' ', s: '独立开发者' }, { t: '+', s: '在做律所合同审查工具' }]);
+  assert.equal((await s.call('GET', '/api/memory/profile/versions/999/diff')).status, 404);
+  await s.close();
+});
