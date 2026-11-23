@@ -11,7 +11,8 @@ import { WikiQueue } from '../../packs/wiki/queue.ts';
 import { recallWiki } from '../../packs/wiki/recall.ts';
 import { MemoryKeeper } from '../../packs/memory/consolidate.ts';
 import { SkillKeeper } from '../../packs/memory/crystallize.ts';
-import { resolveRefs, touchMemories, userContext } from '../../packs/memory/context.ts';
+import { resolveRefs, skillsFor, touchMemories, userContext } from '../../packs/memory/context.ts';
+import { touchSkill } from '../../packs/memory/skills.ts';
 import { paragraphDiff, recordEvent } from '../../packs/memory/events.ts';
 import type { EventInput } from '../../packs/memory/events.ts';
 import { hasSensitive } from '../../packs/memory/sensitive.ts';
@@ -57,6 +58,8 @@ const pm = new PmAdvisor(
     onEvent: (e) => record({ ...scrubAttachments(e), refType: 'review' }),
     used: (ids) => touchMemories(db, ids),
     kb: (q) => recallWiki(db, q),
+    skills: cfg.skillsEnabled ? (q) => skillsFor(db, q) : undefined,
+    skillsUsed: (ids) => ids.forEach((id) => touchSkill(db, id, false)),
   },
   files,
 );

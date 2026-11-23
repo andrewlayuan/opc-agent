@@ -118,7 +118,7 @@ CREATE TABLE profile_versions (
 `context.ts` 新增 `skillsFor(db, query, limit=3)`：
 
 1. 只取 `status='active'`。
-2. 打分：查询词与 `name`/`scene` 的三元组重合数（复用 `recallTerms`）×2 + `steps` 重合数 + 近期命中（`hits` 归一化）。
+2. 打分：查询词与 `name`/`scene` 的二元组重合数 ×2 + `steps` 重合数 + 命中加成（`hits` 归一化）；`name`/`scene` 至少命中 min(2, 查询词数一半) 个才算相关。用二元组而非 `recallTerms` 的三元组：技能最多 40 条在内存里打分，短查询如「写周报」用三元组会落空。
 3. 取前 3 条，拼成：
 
 ```

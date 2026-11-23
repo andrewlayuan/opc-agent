@@ -888,3 +888,55 @@ test('追加框架：该轮失败时不并入评审框架；评审合计上限 1
   });
   done();
 });
+
+const SKB = '<skills>\n[1] 周报起草与整理流程\n</skills>';
+
+test('技能：技能块在记忆之后、知识库之前；context_refs 记 skills；每轮成功后 skillsUsed 回报一次', async () => {
+  const systems: string[] = [];
+  const used: number[][] = [];
+  const queries: string[] = [];
+  const { advisor, done } = setup(
+    { chat: (m) => (systems.push(m[0].content), fakeTurn(m)) },
+    {
+      context: () => ({ text: CTX, memoryIds: [3], reviewIds: [] }),
+      skills: (q) => (queries.push(q), { text: SKB, ids: [7] }),
+      kb: () => ({ text: KB, refs: KB_REFS }),
+      skillsUsed: (ids) => used.push(ids),
+    },
+  );
+  const id = await doneReview(advisor);
+  assert.ok(systems[0].includes(`${CTX}\n\n${SKB}\n\n${KB}`));
+  assert.deepEqual(advisor.get(id)!.context_refs, { memories: [3], reviews: [], skills: [7], kb: KB_REFS });
+  assert.deepEqual(used, [[7]]);
+  advisor.ask(id, '把定价改成年费', 'auto');
+  await waitTurn(advisor, id);
+  assert.ok(systems[1].includes(SKB));
+  assert.deepEqual(advisor.get(id)!.messages[1].context_refs, { memories: [3], reviews: [], skills: [7], kb: KB_REFS });
+  assert.deepEqual(used, [[7], [7]]);
+  assert.deepEqual(queries, ['给团队做一个周报自动生成工具', '把定价改成年费\n给团队做一个周报自动生成工具']);
+  done();
+});
+
+test('技能：未配置、返回空或抛错时提示词与 context_refs 不变，评审照常完成', async () => {
+  const run = async (hooks: AdvisorHooks) => {
+    const systems: string[] = [];
+    const logs: string[] = [];
+    const { db, advisor, done } = setup({ chat: (m) => (systems.push(m[0].content), fakeTurn(m)) }, hooks, (s) => logs.push(s));
+    const id = await doneReview(advisor);
+    const raw = (db.prepare('SELECT context_refs FROM pm_reviews WHERE id = ?').get(id) as { context_refs: string | null }).context_refs;
+    const status = advisor.get(id)!.status;
+    done();
+    return { system: systems[0], raw, status, logs };
+  };
+  const context = () => ({ text: CTX, memoryIds: [3], reviewIds: [] });
+  const base = await run({ context });
+  const empty = await run({ context, skills: () => ({ text: '', ids: [] }) });
+  assert.equal(empty.system, base.system);
+  assert.equal(empty.raw, base.raw);
+  const bad = await run({ context, skills: () => {
+    throw new Error('boom');
+  } });
+  assert.equal(bad.system, base.system);
+  assert.equal(bad.status, 'done');
+  assert.ok(bad.logs.some((l) => l.startsWith('[pm] 读取技能失败')), bad.logs.join('\n'));
+});

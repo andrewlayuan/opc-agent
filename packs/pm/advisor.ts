@@ -112,6 +112,8 @@ export interface ContextRefs {
   reviews: number[];
   /** 召回的知识库段落；没有召回时不出现该键 */
   kb?: KbRef[];
+  /** 召回的技能 id；没有召回时不出现该键 */
+  skills?: number[];
 }
 
 /** 由外部（记忆模块）提供的用户上下文；advisor 本身不依赖记忆模块 */
@@ -135,6 +137,10 @@ export interface AdvisorHooks {
   used?: (memoryIds: number[]) => void;
   /** 知识库召回；advisor 本身不依赖知识库模块 */
   kb?: (query: string) => { text: string; refs: KbRef[] };
+  /** 技能召回；advisor 本身不依赖记忆模块 */
+  skills?: (query: string) => { text: string; ids: number[] };
+  /** 本轮成功完成后，回报实际注入提示词的技能 id */
+  skillsUsed?: (ids: number[]) => void;
 }
 
 const clip = (s: string, n: number): string => {
@@ -158,6 +164,7 @@ function parseRefs(raw: unknown): ContextRefs | null {
     if (!Array.isArray(v.memories) || !Array.isArray(v.reviews)) return null;
     const out: ContextRefs = { memories: v.memories, reviews: v.reviews };
     if (Array.isArray(v.kb)) out.kb = v.kb.filter(isKbRef).map((r) => ({ doc: r.doc, ord: r.ord, title: r.title, heading: r.heading, ...(typeof r.wiki === 'string' && r.wiki ? { wiki: r.wiki.slice(0, 80) } : {}) }));
+    if (Array.isArray(v.skills)) out.skills = v.skills.filter((i): i is number => Number.isSafeInteger(i));
     return out;
   } catch {
     return null;
@@ -382,14 +389,27 @@ export class PmAdvisor {
     });
   }
 
-  /** 取用户上下文（记忆在前、知识库在后，中间空一行）；都为空或出错时返回 null，不影响评审 */
+  /** 取用户上下文（记忆、技能、知识库依次排列，中间空一行）；都为空或出错时返回 null，不影响评审 */
   private userContext(opts: { query: string; excludeReview?: number }): { text: string; refs: ContextRefs } | null {
     const mem = this.memoryContext(opts);
+    const sk = this.skillsContext(opts.query);
     const kb = this.kbContext(opts.query);
-    if (!mem && !kb) return null;
+    if (!mem && !sk && !kb) return null;
     const refs: ContextRefs = mem ? mem.refs : { memories: [], reviews: [] };
+    if (sk) refs.skills = sk.ids;
     if (kb) refs.kb = kb.refs;
-    return { text: [mem?.text, kb?.text].filter(Boolean).join('\n\n'), refs };
+    return { text: [mem?.text, sk?.text, kb?.text].filter(Boolean).join('\n\n'), refs };
+  }
+
+  private skillsContext(query: string): { text: string; ids: number[] } | null {
+    if (!this.hooks.skills) return null;
+    try {
+      const s = this.hooks.skills(query);
+      return s.text && s.ids.length ? s : null;
+    } catch (e) {
+      this.log(`[pm] 读取技能失败，按无技能继续：${e instanceof Error ? e.message : e}`);
+      return null;
+    }
   }
 
   private memoryContext(opts: { query: string; excludeReview?: number }): { text: string; refs: ContextRefs } | null {
@@ -416,11 +436,19 @@ export class PmAdvisor {
   }
 
   private markUsed(ctx: { refs: ContextRefs } | null): void {
-    if (!ctx?.refs.memories.length || !this.hooks.used) return;
-    try {
-      this.hooks.used(ctx.refs.memories);
-    } catch (e) {
-      this.log(`[pm] 更新记忆使用次数失败：${e instanceof Error ? e.message : e}`);
+    if (ctx?.refs.memories.length && this.hooks.used) {
+      try {
+        this.hooks.used(ctx.refs.memories);
+      } catch (e) {
+        this.log(`[pm] 更新记忆使用次数失败：${e instanceof Error ? e.message : e}`);
+      }
+    }
+    if (ctx?.refs.skills?.length && this.hooks.skillsUsed) {
+      try {
+        this.hooks.skillsUsed(ctx.refs.skills);
+      } catch (e) {
+        this.log(`[pm] 更新技能使用次数失败：${e instanceof Error ? e.message : e}`);
+      }
     }
   }
 
