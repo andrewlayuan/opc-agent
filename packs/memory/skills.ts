@@ -163,43 +163,60 @@ function writeSkillRev(db: DB, id: number, skill: SkillInput, rev: number, origi
   db.prepare('DELETE FROM skill_revisions WHERE skill_id = ? AND rev <= ?').run(id, rev - SKILL_LIMITS.revMax);
 }
 
+/** 新建技能，不开事务（调用方已在事务里）；满 40 条时 409 */
+export function insertSkill(db: DB, s: SkillInput, o: { source: 'auto' | 'manual'; status?: SkillStatus; reason?: string; now: number }): number {
+  const n = (db.prepare('SELECT COUNT(*) AS n FROM skills').get() as { n: number }).n;
+  if (Number(n) >= SKILL_LIMITS.max) throw new MemoryError(409, '技能最多 40 条');
+  const r = db
+    .prepare(
+      "INSERT INTO skills(name, scene, steps, cautions, example, source, status, manual, uses, hits, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)",
+    )
+    .run(s.name, s.scene, JSON.stringify(s.steps), JSON.stringify(s.cautions), s.example, o.source, o.status ?? 'candidate', o.source === 'manual' ? 1 : 0, o.now, o.now);
+  const id = Number(r.lastInsertRowid);
+  writeSkillRev(db, id, s, 1, o.source, o.reason || (o.source === 'auto' ? '自动沉淀' : '手工新建'), o.now);
+  return id;
+}
+
 /** 新建技能，返回 id（与 addMemory 一致） */
 export function createSkill(db: DB, input: unknown, o: { source: 'auto' | 'manual'; status?: SkillStatus; now?: number }): number {
   const s = validateSkill(input);
   const now = o.now ?? Date.now();
-  const id = tx(db, () => {
-    const n = (db.prepare('SELECT COUNT(*) AS n FROM skills').get() as { n: number }).n;
-    if (Number(n) >= SKILL_LIMITS.max) throw new MemoryError(409, '技能最多 40 条');
-    const status = o.status ?? 'candidate';
-    const r = db.prepare(
-      "INSERT INTO skills(name, scene, steps, cautions, example, source, status, manual, uses, hits, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)",
-    ).run(s.name, s.scene, JSON.stringify(s.steps), JSON.stringify(s.cautions), s.example, o.source, status, o.source === 'manual' ? 1 : 0, now, now);
-    const newId = Number(r.lastInsertRowid);
-    writeSkillRev(db, newId, s, 1, o.source, o.source === 'auto' ? '自动沉淀' : '手工新建', now);
-    return newId;
-  });
-  return id;
+  return tx(db, () => insertSkill(db, s, { ...o, now }));
 }
 
-/** 编辑：写新版本；origin 为 manual 时置 manual=1，自动流程不再覆盖 */
+/** 两个技能内容是否相同（只比较名称、何时用、步骤、注意、示例） */
+export const sameSkill = (a: SkillInput, b: SkillInput): boolean => skillText(a) === skillText(b);
+
+/**
+ * 编辑，不开事务（调用方已在事务里）：内容变了才写新版本，返回是否写了。
+ * origin 为 manual 或 restore 时置 manual=1（用户的选择，自动流程不再覆盖）；内容没变的手动保存也置位
+ */
+export function applySkillUpdate(db: DB, id: number, s: SkillInput, o: { origin: SkillOrigin; reason?: string; now: number }): boolean {
+  const r = skillRow(db, id);
+  const manual = o.origin !== 'auto' || Number(r.manual) === 1 ? 1 : 0;
+  if (sameSkill(toSkill(r, 0, 0), s)) {
+    if (manual !== Number(r.manual)) db.prepare('UPDATE skills SET manual = ?, updated_at = ? WHERE id = ?').run(manual, o.now, id);
+    return false;
+  }
+  db.prepare('UPDATE skills SET name = ?, scene = ?, steps = ?, cautions = ?, example = ?, manual = ?, updated_at = ? WHERE id = ?').run(
+    s.name,
+    s.scene,
+    JSON.stringify(s.steps),
+    JSON.stringify(s.cautions),
+    s.example,
+    manual,
+    o.now,
+    id,
+  );
+  writeSkillRev(db, id, s, revInfo(db, id).rev + 1, o.origin, o.reason ?? (o.origin === 'manual' ? '手工修改' : '自动沉淀'), o.now);
+  return true;
+}
+
+/** 编辑：内容变了才写新版本；origin 为 manual / restore 时置 manual=1，自动流程不再覆盖 */
 export function updateSkill(db: DB, id: number, input: unknown, o: { origin: SkillOrigin; reason?: string; now?: number }): Skill {
   const s = validateSkill(input);
   const now = o.now ?? Date.now();
-  tx(db, () => {
-    const r = skillRow(db, id);
-    const rev = revInfo(db, id).rev + 1;
-    db.prepare('UPDATE skills SET name = ?, scene = ?, steps = ?, cautions = ?, example = ?, manual = ?, updated_at = ? WHERE id = ?').run(
-      s.name,
-      s.scene,
-      JSON.stringify(s.steps),
-      JSON.stringify(s.cautions),
-      s.example,
-      o.origin === 'manual' || Number(r.manual) === 1 ? 1 : 0,
-      now,
-      id,
-    );
-    writeSkillRev(db, id, s, rev, o.origin, o.reason ?? (o.origin === 'manual' ? '手工修改' : '自动沉淀'), now);
-  });
+  tx(db, () => applySkillUpdate(db, id, s, { ...o, now }));
   return getSkill(db, id);
 }
 
@@ -218,11 +235,13 @@ export function setPending(db: DB, id: number, skill: SkillInput | null, now = D
 
 /** 采用暂存的新版本：写新版本（origin=auto），清空 pending；没有暂存时 409 */
 export function acceptPending(db: DB, id: number, now = Date.now()): Skill {
-  const r = skillRow(db, id);
-  if (r.pending == null) throw new MemoryError(409, '没有待采用的新版本');
-  const s = updateSkill(db, id, JSON.parse(String(r.pending)), { origin: 'auto', reason: '采用沉淀出的新版本', now });
-  db.prepare('UPDATE skills SET pending = NULL WHERE id = ?').run(id);
-  return { ...s, pending: null };
+  tx(db, () => {
+    const r = skillRow(db, id);
+    if (r.pending == null) throw new MemoryError(409, '没有待采用的新版本');
+    applySkillUpdate(db, id, validateSkill(JSON.parse(String(r.pending))), { origin: 'auto', reason: '采用沉淀出的新版本', now });
+    db.prepare('UPDATE skills SET pending = NULL WHERE id = ?').run(id);
+  });
+  return getSkill(db, id);
 }
 
 /** 召回计数：同一轮只调用一次 */

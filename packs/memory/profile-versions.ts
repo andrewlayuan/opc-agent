@@ -16,6 +16,9 @@ export interface ProfileVersion {
 
 type Row = Record<string, unknown>;
 
+/** 按码点截到 PROFILE_MAX，与 setProfile 的长度校验一致，不切开代理对 */
+const clip = (s: string): string => (s.length <= PROFILE_MAX ? s : Array.from(s).slice(0, PROFILE_MAX).join(''));
+
 /** 记一条快照（版本表保存每次写入后的状态，最新一条即当前内容）；与最新一版相同则跳过，超出 50 条删最旧的 */
 export function pushProfileVersion(db: DB, content: string, origin: ProfileOrigin, reason: string, eventIds: number[], now: number): void {
   const text = content.trim();
@@ -73,7 +76,7 @@ export function writeProfile(db: DB, content: unknown, o: WriteOpts): { content:
 
 /** 同 writeProfile，但不开事务：给已经在事务里的调用方（整理落库）用 */
 export function applyProfile(db: DB, content: unknown, o: WriteOpts): { content: string; written: boolean } {
-  const text = typeof content === 'string' ? content.trim().slice(0, PROFILE_MAX) : '';
+  const text = typeof content === 'string' ? clip(content.trim()) : '';
   const now = o.now ?? Date.now();
   const before = getProfile(db);
   if (text === before.content.trim()) return { content: before.content, written: false };
@@ -102,13 +105,13 @@ export function restoreProfile(db: DB, rev: unknown, now = Date.now()): { conten
   if (!Number.isSafeInteger(n)) throw new MemoryError(400, '版本号不对');
   const r = db.prepare('SELECT content FROM profile_versions WHERE rev = ?').get(n) as { content: string } | undefined;
   if (!r) throw new MemoryError(404, '版本不存在');
-  const text = String(r.content).slice(0, PROFILE_MAX);
+  const text = clip(String(r.content));
   tx(db, () => {
     const before = getProfile(db);
     seedProfileVersion(db, before.content, now);
     pushProfileVersion(db, text, 'restore', `回退到版本 ${n}`, [], now);
     db.prepare('UPDATE profile SET content = ?, updated_at = ?, manual = 1 WHERE id = 1').run(text, now);
-    logChange(db, { op: 'profile', before: { content: before.content }, after: { content: text, manual: true }, source: 'manual', reason: `回退到版本 ${n}` }, now);
+    logChange(db, { op: 'profile', before: { content: before.content, manual: before.manual }, after: { content: text, manual: true }, source: 'manual', reason: `回退到版本 ${n}` }, now);
   });
   return { content: text };
 }

@@ -66,13 +66,18 @@ function sendZip(db: DB, res: http.ServerResponse, now: number): void {
   try {
     const file = path.join(dir, 'out.zip');
     const z = new ZipWriter(file);
-    const json = (v: unknown) => Buffer.from(JSON.stringify(v, null, 2));
-    z.add('memories.json', json(exportMemory(db, now)));
-    z.add('skills.json', json(listSkills(db).map((s) => ({ ...s, revisions: listSkillRevisions(db, s.id) }))));
-    const profile = getProfile(db).content.trim();
-    z.add('profile.md', Buffer.from(profile ? `${profile}\n` : ''));
-    z.add('profile-versions.json', json(listProfileVersions(db)));
-    z.close();
+    try {
+      const json = (v: unknown) => Buffer.from(JSON.stringify(v, null, 2));
+      z.add('memories.json', json(exportMemory(db, now)));
+      z.add('skills.json', json(listSkills(db).map((s) => ({ ...s, revisions: listSkillRevisions(db, s.id) }))));
+      const profile = getProfile(db).content.trim();
+      z.add('profile.md', Buffer.from(profile ? `${profile}\n` : ''));
+      z.add('profile-versions.json', json(listProfileVersions(db)));
+      z.close();
+    } catch (e) {
+      z.abort();
+      throw e;
+    }
     data = fs.readFileSync(file);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -119,6 +124,7 @@ export async function handleMemoryApi(deps: MemoryApiDeps, req: http.IncomingMes
       llm: deps.llmEnabled,
       skills: skillSummary(db),
       profileVersions: (db.prepare('SELECT COUNT(*) AS n FROM profile_versions').get() as { n: number }).n,
+      profileRev: (db.prepare('SELECT COALESCE(MAX(rev), 0) AS m FROM profile_versions').get() as { m: number }).m,
       skillsEnabled: skills.enabled,
       skillsBlocker: skills.blocker,
       crystallizing: skills.running,

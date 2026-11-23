@@ -1708,7 +1708,7 @@ function renderMemory(keepEditors = false) {
   const d = mem.data;
   if (!d) return;
   renderMemTabs();
-  sk.renderProfileHistory(d.profileVersions ?? 0);
+  sk.renderProfileHistory(d.profileVersions ?? 0, d.profileRev ?? 0, d.profile?.content ?? '');
   const pend = d.running ? '正在整理…' : d.pending ? `还有 ${d.pending} 条交互待整理` : '交互都已整理';
   $('mem-pending').textContent = d.llm ? pend : `${pend} · 未配置模型，暂不自动整理`;
   $('mem-run').disabled = !d.llm || d.running;

@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { openDb } from '../../packages/core/db.ts';
 import type { DB } from '../../packages/core/db.ts';
 import { stubLlm } from '../wiki/testutil.ts';
-import { CRYSTAL, buildCrystallizeMessages, crystallize, lastRun, normName, validateCrystals } from './crystallize.ts';
+import { CRYSTAL, buildCrystallizeMessages, crystalSkip, crystallize, lastRun, normName, validateCrystals } from './crystallize.ts';
 import type { CrystalEvent } from './crystallize.ts';
 import { createSkill, getSkill, listSkills, setSkillStatus, updateSkill } from './skills.ts';
 
@@ -116,6 +116,48 @@ test('crystallize：新事件不足跳过且不调模型；强制跑；写候选
 
   const again = await crystallize(db, stubLlm([]), { now: NOW + 1, force: true });
   assert.deepEqual([again.ran, again.skip], [false, '没有新事件']);
+  done();
+});
+
+test('crystallize：等待模型期间的手改、停用、删除、同名新建都以写库时为准', async () => {
+  const { db, done } = setup();
+  addEvents(db, ['新建评审：周报助手的定价', '改写：按项目分组重写周报进展']);
+  const edited = createSkill(db, SK('定价方案评审要点'), { source: 'auto' });
+  const retired = createSkill(db, SK('竞品对照检查的做法'), { source: 'auto' });
+  const gone = createSkill(db, SK('用户访谈提纲的写法'), { source: 'auto' });
+  const evs = [ev(1, '定价'), ev(2, '重写')];
+  const reply = () => {
+    updateSkill(db, edited, SK('定价方案评审要点', { steps: ['用户自己改的第一步', '第二步'] }), { origin: 'manual' });
+    setSkillStatus(db, retired, 'retired');
+    db.prepare('DELETE FROM skills WHERE id = ?').run(gone);
+    createSkill(db, SK('周报起草与分组写法'), { source: 'manual' });
+    return JSON.stringify({
+      skills: [
+        SK('定价方案评审要点', { steps: ['模型的新写法', '第二步'], evidence: evs }),
+        SK('竞品对照检查的做法', { steps: ['模型的新写法', '第二步'], evidence: evs }),
+        SK('用户访谈提纲的写法', { steps: ['模型的新写法', '第二步'], evidence: evs }),
+        SK('周报起草与分组写法', { steps: ['模型的新写法', '第二步'], evidence: evs }),
+      ],
+    });
+  };
+  const r = await crystallize(db, stubLlm([reply]), { now: NOW, force: true });
+  assert.equal(r.error, undefined);
+  assert.equal(getSkill(db, edited).steps[0], '用户自己改的第一步', '等待期间手改的不被覆盖');
+  assert.equal(getSkill(db, edited).pending?.steps[0], '模型的新写法');
+  assert.equal(getSkill(db, retired).steps[0], '先列出本周的一条主线', '等待期间停用的不被更新');
+  const weekly = listSkills(db).filter((s) => s.name === '周报起草与分组写法');
+  assert.equal(weekly.length, 1, '等待期间同名新建的不重复新增');
+  assert.equal(weekly[0].pending?.steps[0], '模型的新写法');
+  assert.deepEqual([r.added, r.updated, r.blocked, r.dropped], [1, 0, 2, 1], '被删除的按新增处理');
+  done();
+});
+
+test('crystalSkip：中途崩溃留下的未完成记录不算成功，游标按最近一次完成的运行', () => {
+  const { db, done } = setup();
+  const ids = addEvents(db, Array.from({ length: 25 }, (_, i) => `事件 ${i}`), NOW - 6 * DAY);
+  db.prepare('INSERT INTO skill_runs(started_at, finished_at, upto_event, events) VALUES (?, ?, ?, 25)').run(NOW - 5 * DAY, NOW - 5 * DAY, ids[ids.length - 1]);
+  db.prepare('INSERT INTO skill_runs(started_at, events) VALUES (?, 25)').run(NOW - 4 * DAY);
+  assert.equal(crystalSkip(db, { now: NOW }), '没有新事件');
   done();
 });
 

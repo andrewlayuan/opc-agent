@@ -8,14 +8,17 @@ import type { DB } from '../../packages/core/db.ts';
 import { getProfile, setProfile } from './store.ts';
 import { MemoryError } from './store.ts';
 import { listProfileVersions, restoreProfile, writeProfile } from './profile-versions.ts';
+import { undoChange, recentChanges } from './store.ts';
 import {
   SKILL_LIMITS,
+  acceptPending,
   createSkill,
   deleteSkill,
   getSkill,
   listSkillRevisions,
   listSkills,
   restoreSkill,
+  setPending,
   setSkillStatus,
   updateSkill,
   validateSkill,
@@ -102,6 +105,39 @@ test('版本：每次编辑写新版本，manual 置位，只在 20 个以内，
   assert.equal(listSkillRevisions(db, id)[0].origin, 'restore');
   assert.deepEqual(statusOf(() => restoreSkill(db, id, 2)), { status: 404, message: '版本不存在' }, '超出 20 个的旧版本已删除');
   assert.deepEqual(statusOf(() => restoreSkill(db, id, 99)), { status: 404, message: '版本不存在' });
+  done();
+});
+
+test('版本：内容没变不写新版本（手动保存仍置 manual）；回退自动技能后置 manual；采用新版清空暂存', () => {
+  const { db, done } = setup();
+  const id = createSkill(db, S, { source: 'auto' });
+  assert.equal(updateSkill(db, id, { ...S }, { origin: 'auto' }).rev, 1, '自动更新内容相同不写版本');
+  const same = updateSkill(db, id, { ...S, steps: [' 列出一条主线 ', '按项目分组'] }, { origin: 'manual' });
+  assert.deepEqual([same.rev, same.manual], [1, true], '手动保存相同内容：不写版本，但记为手改');
+  const id2 = createSkill(db, { ...S, name: '另一个自动沉淀的技能' }, { source: 'auto' });
+  updateSkill(db, id2, { ...S, name: '另一个自动沉淀的技能', steps: ['新一步', '再一步'] }, { origin: 'auto' });
+  assert.equal(getSkill(db, id2).manual, false);
+  const back = restoreSkill(db, id2, 1);
+  assert.deepEqual([back.rev, back.manual], [3, true], '回退是用户的选择，之后自动沉淀不再覆盖');
+  setPending(db, id2, { ...S, name: '另一个自动沉淀的技能', steps: ['暂存一步', '暂存两步'] });
+  const acc = acceptPending(db, id2);
+  assert.deepEqual([acc.rev, acc.pending, getSkill(db, id2).pending, acc.steps[0]], [4, null, null, '暂存一步']);
+  done();
+});
+
+test('画像回退：撤销回退后 manual 保持；按码点截断不丢字', () => {
+  const { db, done } = setup();
+  setProfile(db, '我自己写的画像');
+  writeProfile(db, '我自己写的画像，后来自动补充了一些内容', { origin: 'auto' });
+  restoreProfile(db, 1);
+  assert.equal(getProfile(db).manual, true);
+  undoChange(db, recentChanges(db, 1)[0].id);
+  assert.equal(getProfile(db).manual, true, '撤销回退不应把手改标记清掉');
+  const emoji = '😀'.repeat(1000);
+  setProfile(db, emoji);
+  setProfile(db, '换一个');
+  const rev = listProfileVersions(db).find((v) => v.content === emoji)!.rev;
+  assert.equal(restoreProfile(db, rev).content, emoji, '1000 个表情是 1000 字，不应按 UTF-16 截断');
   done();
 });
 

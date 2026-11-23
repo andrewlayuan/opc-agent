@@ -15,24 +15,35 @@ export function initSkills({ h, api, toast, diffNodes, onProfileChange }) {
   const copy = (s) => ({ name: s.name, scene: s.scene, steps: [...s.steps], cautions: [...s.cautions], example: s.example ?? '' });
 
   /** edit：{ id|null, draft }；hist：{ id, list, rev, data, opened, full, err }；pend：{ id, data, opened, err } */
-  const st = { data: null, bar: null, edit: null, hist: null, pend: null, poll: null, wasRunning: false, err: null };
-  /** 画像历史：open 时才拉列表；count 变化说明有新版本，列表作废 */
-  const ph = { open: false, count: null, list: null, loading: false, rev: null, data: null, opened: new Set(), full: false, err: null };
+  const st = { data: null, bar: null, edit: null, hist: null, pend: null, poll: null, seq: 0, wasRunning: false, err: null };
+  /** 画像历史：open 时才拉列表；最大版本号变化说明有新版本，列表作废（数量到 50 后不再变，不能用数量判断） */
+  const ph = { open: false, count: null, top: null, content: '', list: null, loading: false, rev: null, data: null, opened: new Set(), full: false, err: null };
+
+  /** 打开编辑表单：记下原稿，离开时用来判断有没有未保存的修改 */
+  const startEdit = (id, draft) => ({ id, draft, orig: JSON.stringify(draft), focus: true });
+  /** 要离开当前表单时：有未保存的修改先确认；返回 false 表示用户选择留下 */
+  const leaveEdit = () => !st.edit || JSON.stringify(st.edit.draft) === st.edit.orig || confirm('正在编辑的技能还没保存，放弃修改吗？');
 
   // ---------------- 技能 ----------------
   async function load(poll = false) {
     clearTimeout(st.poll);
+    const my = ++st.seq;
+    let data = null;
+    let err = null;
     try {
-      st.data = await api(S);
-      st.err = null;
+      data = await api(S);
     } catch (e) {
-      st.err = e.message;
+      err = e.message;
     }
+    if (my !== st.seq) return;
+    if (data) st.data = data;
+    st.err = err;
     const d = st.data;
     if (d && st.wasRunning && !d.running) toast(lastText(d.last) ?? '沉淀已结束');
     st.wasRunning = Boolean(d?.running);
-    if (!(poll && st.edit)) paint();
-    else paintBar();
+    // 沉淀进行中、正在编辑时只刷新顶部状态，免得每 3 秒打断输入；结束时整页重绘（草稿保存在 st.edit 里不会丢）
+    if (poll && st.edit && d?.running) paintBar();
+    else paint();
     if (d?.running && !$('mem-skills').hidden) st.poll = setTimeout(() => load(true), 3000);
   }
 
@@ -83,7 +94,8 @@ export function initSkills({ h, api, toast, diffNodes, onProfileChange }) {
         text: '新建技能',
         disabled: st.edit?.id === null,
         onclick: () => {
-          st.edit = { id: null, draft: blank() };
+          if (!leaveEdit()) return;
+          st.edit = startEdit(null, blank());
           st.hist = null;
           paint();
         },
@@ -155,11 +167,12 @@ export function initSkills({ h, api, toast, diffNodes, onProfileChange }) {
         s.status === 'retired' ? status('active', '重新启用', '已重新启用') : null,
         s.status === 'candidate' ? status('retired', '不采纳', '已停用') : null,
         btn('编辑', () => {
-          st.edit = { id: s.id, draft: copy(s), focus: true };
+          if (!leaveEdit()) return;
+          st.edit = startEdit(s.id, copy(s));
           st.hist = null;
           paint();
         }),
-        btn(st.hist?.id === s.id ? '收起历史' : `历史（${s.revisions}）`, () => (st.hist?.id === s.id ? ((st.hist = null), paint()) : openHist(s))),
+        btn(st.hist?.id === s.id ? '收起历史' : `历史（${s.revisions}）`, () => (st.hist?.id === s.id ? ((st.hist = null), paint()) : leaveEdit() && openHist(s))),
         btn('删除', (e) => {
           if (!confirm(`删除技能「${s.name}」？版本历史也会一起删除，无法恢复。`)) return;
           act(e.currentTarget, () => api(`${S}/${s.id}`, { method: 'DELETE' }), '已删除');
@@ -379,7 +392,7 @@ export function initSkills({ h, api, toast, diffNodes, onProfileChange }) {
             h(
               'div',
               { class: 'sk-diff-bar' },
-              h('span', { class: 'muted', text: hs.rev === cur ? `v${hs.rev} 是当前版本` : `v${hs.rev} → 当前 v${cur}` }),
+              h('span', { class: 'muted', text: hs.rev === cur ? `v${hs.rev} 是当前版本` : cur ? `v${hs.rev} → 当前 v${cur}` : `v${hs.rev} → 当前内容` }),
               h('button', {
                 type: 'button',
                 class: 'link',
@@ -398,13 +411,15 @@ export function initSkills({ h, api, toast, diffNodes, onProfileChange }) {
   }
 
   // ---------------- 画像历史 ----------------
-  function renderProfileHistory(count) {
-    if (count !== ph.count) {
-      ph.count = count;
+  /** count 为版本数、top 为最大版本号、content 为当前画像；top 或内容变了说明列表过期 */
+  function renderProfileHistory(count, top, content) {
+    const text = String(content ?? '').trim();
+    if (top !== ph.top || text !== ph.content) {
       ph.list = null;
       ph.rev = null;
       ph.data = null;
     }
+    Object.assign(ph, { count, top, content: text });
     paintProfile();
   }
 
@@ -448,7 +463,8 @@ export function initSkills({ h, api, toast, diffNodes, onProfileChange }) {
     });
     if (!ph.open) return root.replaceChildren(toggle);
     if (ph.list == null && !ph.loading && !ph.err) loadProfileVersions();
-    const cur = ph.list?.[0]?.rev ?? null;
+    // 最新一版与当前画像一致时才标「当前」；画像被清空等情况下当前内容不在版本里，每一版都可以回退
+    const cur = ph.list?.[0] && ph.list[0].content.trim() === ph.content ? ph.list[0].rev : null;
     root.replaceChildren(
       toggle,
       revPanel({

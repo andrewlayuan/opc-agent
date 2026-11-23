@@ -151,6 +151,7 @@ test('画像版本：保存记版本、列表、回退；/api/memory 带技能�
   assert.equal(m.profile.content, '独立开发者');
   assert.deepEqual(m.skills, { total: 1, active: 0, candidate: 1, retired: 0, pending: 0 });
   assert.equal(m.profileVersions, 3);
+  assert.equal(m.profileRev, 3, '最大版本号：版本数封顶 50 后页面靠它判断列表是否过期');
   assert.deepEqual([m.skillsEnabled, m.skillsBlocker, m.crystallizing], [true, null, false]);
   await s.close();
 });

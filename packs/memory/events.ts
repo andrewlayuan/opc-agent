@@ -45,8 +45,12 @@ export const cut = (s: string, n: number): string => {
   return cps.length > n ? cps.slice(0, n).join('') : s;
 };
 
-/** 中和数据里形如 <x> / </x> 的标签片段，防止闭合提示词的外层框架 */
-export const fence = (s: string): string => s.replace(/<(\/?[A-Za-z_][\w-]*)[^<>]*>/g, '‹$1›');
+/**
+ * 中和数据里形如 <x> / </x> 的标签片段，防止闭合提示词的外层框架。
+ * 完整标签换成 ‹x›；剩下的 `</ x`、没有收尾的 `</x`、全角 `＜/x` 只把开头的尖括号换掉
+ */
+export const fence = (s: string): string =>
+  s.replace(/<(\/?[A-Za-z_][\w-]*)[^<>]*>/g, '‹$1›').replace(/[<＜](?=\s*\/?\s*[A-Za-z_])/g, '‹');
 
 function payloadJson(p: Record<string, unknown> | undefined): string {
   const s = JSON.stringify(p ?? {});

@@ -4,7 +4,8 @@ import type { DB } from '../../packages/core/db.ts';
 import type { ChatMessage, Llm } from '../../packages/core/llm.ts';
 import { cut, fence } from './events.ts';
 import { MemoryError } from './store.ts';
-import { SKILL_LIMITS, createSkill, listSkills, setPending, updateSkill, validateSkill } from './skills.ts';
+import { tx } from './store.ts';
+import { SKILL_LIMITS, applySkillUpdate, getSkill, insertSkill, listSkills, sameSkill, validateSkill } from './skills.ts';
 import type { SkillInput, SkillStatus } from './skills.ts';
 
 const DAY = 86_400_000;
@@ -185,7 +186,8 @@ export function recentRuns(db: DB, limit = 10): RunRow[] {
   return (db.prepare('SELECT * FROM skill_runs ORDER BY id DESC LIMIT ?').all(limit) as Record<string, unknown>[]).map(toRun);
 }
 
-const lastOk = (db: DB) => db.prepare('SELECT started_at, upto_event FROM skill_runs WHERE error IS NULL ORDER BY id DESC LIMIT 1').get() as
+/** 最近一次成功完成的运行；中途崩溃留下的未完成记录（finished_at 为空）不算 */
+const lastOk = (db: DB) => db.prepare('SELECT started_at, upto_event FROM skill_runs WHERE error IS NULL AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1').get() as
   | { started_at: number; upto_event: number }
   | undefined;
 
@@ -250,27 +252,35 @@ export async function crystallize(db: DB, llm: Llm, o: { now?: number; force?: b
     return res;
   }
 
-  const v = validateCrystals(out, events, skills.map((s) => ({ id: s.id, name: s.name, manual: s.manual, status: s.status })));
-  res.dropped = v.dropped;
-  v.add.forEach((s, i) => {
-    try {
-      const id = createSkill(db, s, { source: 'auto', now });
-      if (v.reasons[i]) db.prepare("UPDATE skill_revisions SET reason = ? WHERE skill_id = ? AND rev = 1").run(v.reasons[i], id);
-      res.added++;
-    } catch (e) {
-      if (!(e instanceof MemoryError)) throw e;
-      res.dropped++;
-    }
-  });
-  for (const u of v.update) {
-    updateSkill(db, u.id, u.skill, { origin: 'auto', reason: u.reason, now });
-    res.updated++;
-  }
-  for (const b of v.blocked) {
-    setPending(db, b.id, b.skill, now);
-    res.blocked++;
+  // 等模型的这段时间里用户可能手改、停用、删除或同名新建了技能：写库时在同一事务里按最新状态重新归并
+  try {
+    tx(db, () => {
+      const fresh = listSkills(db);
+      const v = validateCrystals(out, events, fresh.map((s) => ({ id: s.id, name: s.name, manual: s.manual, status: s.status })));
+      const c = { added: 0, updated: 0, blocked: 0, dropped: v.dropped };
+      let total = fresh.length;
+      v.add.forEach((s, i) => {
+        if (total >= SKILL_LIMITS.max) return void c.dropped++;
+        insertSkill(db, s, { source: 'auto', reason: v.reasons[i], now });
+        total++;
+        c.added++;
+      });
+      for (const u of v.update) if (applySkillUpdate(db, u.id, u.skill, { origin: 'auto', reason: u.reason, now })) c.updated++;
+      for (const b of v.blocked) {
+        if (sameSkill(getSkill(db, b.id), b.skill)) continue;
+        db.prepare('UPDATE skills SET pending = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(b.skill), now, b.id);
+        c.blocked++;
+      }
+      Object.assign(res, c);
+    });
+  } catch (e) {
+    res.error = `写入失败：${errMsg(e)}`;
   }
   finish();
+  if (res.error) {
+    o.log?.(`[skills] 沉淀失败：${res.error}`);
+    return res;
+  }
   o.log?.(`[skills] 沉淀完成：新增 ${res.added}，更新 ${res.updated}，待确认 ${res.blocked}，丢弃 ${res.dropped}`);
   return res;
 }
