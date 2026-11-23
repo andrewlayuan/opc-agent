@@ -1,6 +1,7 @@
 // 知识库目录树：名称校验、层级与数量上限、移动防环、只删空目录
 import type { DB } from '../../packages/core/db.ts';
-import { KB_LIMITS, KbError, len } from './types.ts';
+import { tx } from '../memory/store.ts';
+import { KB_LIMITS, KbError, clipCp, len } from './types.ts';
 
 export interface Folder {
   id: number;
@@ -130,4 +131,55 @@ export function folderPaths(db: DB): { id: number; path: string }[] {
     return parts.join('/');
   };
   return [...map.keys()].map((id) => ({ id, path: pathOf(id) })).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+/** 批量导入用的目录段清洗：控制字符与反斜杠换成空格、合并空白、去首尾空白、截到 40 字；. 与 .. 视为空 */
+function cleanSeg(raw: string): string {
+  // eslint-disable-next-line no-control-regex
+  const n = clipCp(raw.replace(/[\u0000-\u001f\u007f\\]/g, ' ').replace(/\s+/g, ' ').trim(), KB_LIMITS.folderName).trim();
+  return n === '.' || n === '..' ? '' : n;
+}
+
+/**
+ * 按相对路径（/ 分隔）在 parentId 下逐层建目录，同名复用；返回 路径 → 目录 id（'' 与全空段映射到 parentId）。
+ * 超过 5 层的段不再建，放在第 5 层；目录总数到 200 时停止新建，之后的路径放在已有的最深一层（capped=true）。
+ * 一个事务内完成，任何错误整批回滚
+ */
+export function ensureFolders(db: DB, parentId: number | null, paths: string[], now: number = Date.now()): { map: Record<string, number | null>; capped: boolean } {
+  return tx(db, () => {
+    assertFolder(db, parentId);
+    const all = rows(db);
+    const child = new Map<string, number>();
+    for (const r of all.values()) child.set(`${r.parent_id ?? 0}/${r.name}`, r.id);
+    let total = all.size;
+    const base = parentId == null ? 0 : depthOf(all, parentId);
+    const ins = db.prepare('INSERT INTO kb_folders(parent_id, name, created_at) VALUES (?, ?, ?)');
+    const map: Record<string, number | null> = {};
+    let capped = false;
+    for (const p of paths) {
+      if (typeof p !== 'string') throw new KbError(400, '路径不合法');
+      if (p in map) continue;
+      let cur = parentId;
+      let depth = base;
+      for (const seg of p.split('/').map(cleanSeg).filter(Boolean)) {
+        if (depth >= KB_LIMITS.depth) break;
+        const name = cleanName(seg);
+        const key = `${cur ?? 0}/${name}`;
+        let id = child.get(key);
+        if (id == null) {
+          if (total >= KB_LIMITS.folders) {
+            capped = true;
+            break;
+          }
+          id = Number(ins.run(cur, name, now).lastInsertRowid);
+          child.set(key, id);
+          total++;
+        }
+        cur = id;
+        depth++;
+      }
+      map[p] = cur;
+    }
+    return { map, capped };
+  });
 }

@@ -77,3 +77,30 @@ test('GET /api/kb/docs?smart=1：未配置扩写时 source off、hits 为普通�
   assert.deepEqual([r2.data.source, r2.data.reason], ['skip', '今天的智能搜索次数已用完']);
   await t.close();
 });
+
+test('POST /api/kb/folders/ensure：返回映射与 capped；参数校验 400；父目录不存在 404', async () => {
+  const s = await kbServer();
+  const r = await s.call('POST', '/api/kb/folders/ensure', { parentId: null, paths: ['', '竞品/定价'] });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.map[''], null);
+  assert.equal(typeof r.data.map['竞品/定价'], 'number');
+  assert.equal(r.data.capped, false);
+  assert.equal((await s.call('POST', '/api/kb/folders/ensure', { parentId: null, paths: Array(501).fill('a') })).status, 400);
+  assert.equal((await s.call('POST', '/api/kb/folders/ensure', { parentId: null, paths: ['字'.repeat(401)] })).status, 400);
+  assert.equal((await s.call('POST', '/api/kb/folders/ensure', { parentId: null, paths: 'a' })).status, 400);
+  assert.equal((await s.call('POST', '/api/kb/folders/ensure', { parentId: 'x', paths: [] })).status, 400);
+  assert.equal((await s.call('POST', '/api/kb/folders/ensure', { parentId: 999, paths: ['a'] })).status, 404);
+  await s.close();
+});
+
+test('GET /api/kb/docs?ids=：按 id 返回条目，不存在的跳过；超过 100 个或非法 400', async () => {
+  const s = await kbServer();
+  const a = createDoc(s.db, { kind: 'note', title: '甲', body: '内容' });
+  const b = createDoc(s.db, { kind: 'note', title: '乙', body: '内容' });
+  const r = await s.call('GET', `/api/kb/docs?ids=${b},${a},999`);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.data.docs.map((d: { id: number }) => d.id).sort(), [a, b].sort());
+  assert.equal((await s.call('GET', `/api/kb/docs?ids=${Array.from({ length: 101 }, (_, i) => i + 1).join(',')}`)).status, 400);
+  assert.equal((await s.call('GET', '/api/kb/docs?ids=1,x')).status, 400);
+  await s.close();
+});

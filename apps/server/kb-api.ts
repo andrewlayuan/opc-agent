@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import type http from 'node:http';
 import type { DB } from '../../packages/core/db.ts';
 import type { Llm } from '../../packages/core/llm.ts';
-import { createDoc, deleteDoc, findBySource, getDoc, listDocs, refreshStale, sourceText, updateDoc } from '../../packs/kb/docs.ts';
-import { createFolder, deleteFolder, listFolders, updateFolder } from '../../packs/kb/folders.ts';
+import { createDoc, deleteDoc, docViews, findBySource, getDoc, listDocs, refreshStale, sourceText, updateDoc } from '../../packs/kb/docs.ts';
+import { createFolder, deleteFolder, ensureFolders, listFolders, updateFolder } from '../../packs/kb/folders.ts';
 import { searchKb } from '../../packs/kb/search.ts';
 import { suggestFolder } from '../../packs/kb/suggest.ts';
 import { KB_LIMITS, KbError } from '../../packs/kb/types.ts';
@@ -26,6 +26,11 @@ export interface KbApiDeps {
 }
 
 const BODY_MAX = 16 * 1024;
+/** 批量建目录：最多 500 条路径、每条 400 字；中文 3 字节/字另留 JSON 余量 */
+const ENSURE_MAX = 500;
+const ENSURE_PATH_MAX = 400;
+const ENSURE_BODY_MAX = 1024 * 1024;
+const IDS_MAX = 100;
 /** 笔记正文 20 万字：中文 3 字节/字，另留 JSON 转义余量 */
 const NOTE_BODY_MAX = 1024 * 1024;
 
@@ -198,6 +203,23 @@ async function route(deps: KbApiDeps, req: http.IncomingMessage, res: http.Serve
     return true;
   }
 
+  if (p === '/api/kb/folders/ensure' && method === 'POST') {
+    const body = await readJson(req, ENSURE_BODY_MAX);
+    const paths = body.paths;
+    if (!Array.isArray(paths) || paths.length > ENSURE_MAX || paths.some((x) => typeof x !== 'string' || [...x].length > ENSURE_PATH_MAX)) {
+      throw new HttpError(400, `路径需为字符串数组，最多 ${ENSURE_MAX} 条、每条 ${ENSURE_PATH_MAX} 字以内`);
+    }
+    if (!('parentId' in body)) throw new HttpError(400, '缺少 parentId');
+    sendJson(res, 200, ensureFolders(db, optRef(body, 'parentId') ?? null, paths as string[]));
+    return true;
+  }
+  if (p === '/api/kb/docs' && method === 'GET' && q.has('ids')) {
+    const raw = (q.get('ids') ?? '').split(',').filter(Boolean);
+    if (raw.length > IDS_MAX) throw new HttpError(400, `一次最多查询 ${IDS_MAX} 个条目`);
+    const views = docViews(db, raw.map(idOf));
+    sendJson(res, 200, { docs: [...views.values()] });
+    return true;
+  }
   if (p === '/api/kb/docs' && method === 'GET') {
     const folder = folderParam(q.get('folder'));
     const term = (q.get('q') ?? '').slice(0, 200).trim();
