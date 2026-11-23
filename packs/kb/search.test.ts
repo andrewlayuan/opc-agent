@@ -100,3 +100,51 @@ test('searchKb：整段词对不上时退回三字片段匹配，命中多的排
   assert.deepEqual(searchKb(db, '完全不相干的查询词'), []);
   done();
 });
+
+test('recallKb：问「怎么收费」原方式召回为空；扩写给出「价格」「定价策略」后召回「价格策略」段落', () => {
+  const { db, done } = tmpKbDb();
+  const a = note(db, '价格策略', '我们按席位定价，每席每月 99 元，年付八折。');
+  note(db, '无关', '今天天气不错，适合散步。');
+  assert.equal(recallKb(db, '怎么收费').refs.length, 0);
+  const r = recallKb(db, '怎么收费', undefined, ['价格', '定价策略']);
+  assert.deepEqual(r.refs.map((x) => [x.doc, x.title]), [[a, '价格策略']]);
+  done();
+});
+
+test('recallKb：两字扩写词经 LIKE 补候选（原问题三元组一个都不中时也能召回）', () => {
+  const { db, done } = tmpKbDb();
+  const a = note(db, '会议纪要', '周五讨论了合同模板的改法。');
+  assert.equal(recallKb(db, '协议样板').refs.length, 0);
+  assert.deepEqual(recallKb(db, '协议样板', undefined, ['合同']).refs.map((x) => x.doc), [a]);
+  done();
+});
+
+test('recallKb：extra 为空时结果与不传逐条一致', () => {
+  const { db, done } = tmpKbDb();
+  note(db, '竞品分析', '## 定价策略\n竞品甲的合同审查产品按席位收费');
+  note(db, '杂项', '合同审查的一些想法');
+  const q = '合同审查工具怎么定价';
+  assert.deepEqual(recallKb(db, q, undefined, []), recallKb(db, q));
+  assert.deepEqual(searchKb(db, q, 50, []), searchKb(db, q));
+  done();
+});
+
+test('recallKb：扩写词含 " * NEAR OR % _ 不报错且只按字面匹配', () => {
+  const { db, done } = tmpKbDb();
+  note(db, '数据', '转化率提升到 1000 人，ab 测试');
+  const r = recallKb(db, '完全无关的问题', undefined, ['"价格"', '价*', 'NEAR', 'a OR b', '100%', '_x', 'a_']);
+  assert.equal(r.refs.length, 0, '100% 不匹配 1000，_x / a_ 不当通配符');
+  const s = searchKb(db, '完全无关的问题', 50, ['100%', '"x"', '*']);
+  assert.deepEqual(s, []);
+  done();
+});
+
+test('searchKb：传 extra 时「怎么收费」能找到「价格策略」，每篇一条', () => {
+  const { db, done } = tmpKbDb();
+  const a = note(db, '价格策略', '## 套餐\n我们按席位定价\n\n## 折扣\n定价策略：年付八折');
+  assert.deepEqual(searchKb(db, '怎么收费'), []);
+  const hits = searchKb(db, '怎么收费', 50, ['定价策略', '价格']);
+  assert.deepEqual(hits.map((h) => h.doc.id), [a]);
+  assert.match(hits[0].snippet, /【/);
+  done();
+});

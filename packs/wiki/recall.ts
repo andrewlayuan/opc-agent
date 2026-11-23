@@ -1,7 +1,7 @@
 // 评审召回：先给 Wiki 页面（整理好的结论），再附这些页面引用的原文分段；Wiki 没有命中时退回 recallKb
 import type { DB } from '../../packages/core/db.ts';
 import { refreshStale } from '../kb/docs.ts';
-import { recallKb, recallTerms, renderKb } from '../kb/search.ts';
+import { extraScore, ftsExpr, likeAny, likeTerms, normExtra, recallKb, recallTerms, renderKb } from '../kb/search.ts';
 import type { KbRef } from '../kb/types.ts';
 import { fence } from '../memory/events.ts';
 import { WIKI_LIMITS } from './types.ts';
@@ -40,31 +40,48 @@ interface Hit {
   body: string;
 }
 
-export function recallWiki(db: DB, query: string): { text: string; refs: KbRef[] } {
+/** extra 为查询扩写词：每命中一个 +2 分，命中 1 个即算相关；Wiki 没有命中时一并交给 recallKb */
+export function recallWiki(db: DB, query: string, extra: string[] = []): { text: string; refs: KbRef[] } {
   const terms = recallTerms(query);
-  if (!terms.length) return recallKb(db, query);
+  const ex = normExtra(extra);
+  const fallback = () => (ex.length ? recallKb(db, query, undefined, ex) : recallKb(db, query));
+  if (!terms.length && !ex.length) return fallback();
   const minHits = Math.min(2, terms.length);
   let rows: Hit[] = [];
+  const expr = ftsExpr(terms, ex);
   try {
-    rows = db
-      .prepare(
-        `SELECT p.id, p.slug, p.kind, p.title, p.summary, p.body FROM wiki_fts JOIN wiki_pages p ON p.id = wiki_fts.rowid
-         WHERE wiki_fts MATCH ? AND p.deleted = 0 ORDER BY bm25(wiki_fts) LIMIT 50`,
-      )
-      .all(terms.map((t) => `"${t.replace(/"/g, '""')}"`).join(' OR ')) as unknown as Hit[];
+    if (expr)
+      rows = db
+        .prepare(
+          `SELECT p.id, p.slug, p.kind, p.title, p.summary, p.body FROM wiki_fts JOIN wiki_pages p ON p.id = wiki_fts.rowid
+           WHERE wiki_fts MATCH ? AND p.deleted = 0 ORDER BY bm25(wiki_fts) LIMIT 50`,
+        )
+        .all(expr) as unknown as Hit[];
   } catch {
     rows = [];
   }
+  const two = likeTerms(ex);
+  if (two.length) {
+    const w = likeAny(['p.title', 'p.summary', 'p.body'], two);
+    const seen = new Set(rows.map((r) => Number(r.id)));
+    for (const r of db
+      .prepare(`SELECT p.id, p.slug, p.kind, p.title, p.summary, p.body FROM wiki_pages p WHERE p.deleted = 0 AND ${w.sql} ORDER BY p.updated_at DESC LIMIT 20`)
+      .all(...w.args) as unknown as Hit[])
+      if (!seen.has(Number(r.id))) rows.push(r);
+  }
+  const score = (s: string) => hitsOf(terms, s) + 2 * extraScore(s, ex);
   const pages = rows
     .map((r, rank) => {
-      const h = hitsOf(terms, `${r.title}\n${r.summary}\n${r.body}`);
-      return { r, rank, h, score: h + (r.kind === 'answer' || r.kind === 'overview' ? 1 : 0) };
+      const hay = `${r.title}\n${r.summary}\n${r.body}`;
+      const h = hitsOf(terms, hay);
+      const e = extraScore(hay, ex);
+      return { r, rank, h, e, score: h + 2 * e + (r.kind === 'answer' || r.kind === 'overview' ? 1 : 0) };
     })
-    .filter((x) => x.h >= minHits)
+    .filter((x) => (terms.length && x.h >= minHits) || x.e >= 1)
     .sort((a, b) => b.score - a.score || a.rank - b.rank)
     .slice(0, PAGES)
     .map((x) => x.r);
-  if (!pages.length) return recallKb(db, query);
+  if (!pages.length) return fallback();
 
   const blocks: string[] = [];
   const refs: KbRef[] = [];
@@ -74,7 +91,7 @@ export function recallWiki(db: DB, query: string): { text: string; refs: KbRef[]
     let best = paras[0] ?? '';
     let bh = -1;
     for (const s of paras) {
-      const h = hitsOf(terms, s);
+      const h = score(s);
       if (h > bh) {
         best = s;
         bh = h;
@@ -105,7 +122,7 @@ export function recallWiki(db: DB, query: string): { text: string; refs: KbRef[]
        WHERE c.page_id IN (${ids.map(() => '?').join(',')})`,
     )
     .all(...ids) as { doc_id: number; ord: number; heading: string; body: string; title: string }[];
-  const ranked = cited.map((c, i) => ({ c, i, h: hitsOf(terms, `${c.heading}\n${c.body}`) })).sort((a, b) => b.h - a.h || a.i - b.i);
+  const ranked = cited.map((c, i) => ({ c, i, h: score(`${c.heading}\n${c.body}`) })).sort((a, b) => b.h - a.h || a.i - b.i);
   const picked: { title: string; heading: string; body: string; doc: number; ord: number }[] = [];
   let su = 0;
   for (const { c } of ranked) {

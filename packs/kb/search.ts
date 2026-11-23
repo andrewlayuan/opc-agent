@@ -46,6 +46,66 @@ function ftsHits(db: DB, match: string): ChunkHit[] {
 }
 
 const escLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+const quote = (t: string) => `"${t.replace(/"/g, '""')}"`;
+
+/** 扩写词：去首尾空白、小写、去重，至少 2 字 */
+export function normExtra(extra: string[]): string[] {
+  const out = new Set<string>();
+  for (const t of extra) {
+    const v = t.trim().toLowerCase();
+    if (len(v) >= 2) out.add(v);
+  }
+  return [...out];
+}
+
+/** 段落中出现的扩写词个数（小写比较，按字面） */
+export const extraScore = (hay: string, extra: string[]): number => {
+  const h = hay.toLowerCase();
+  return extra.filter((t) => h.includes(t)).length;
+};
+
+/** FTS 候选表达式：原问题三元组 OR 扩写词中 ≥3 字的整词短语（trigram 不能匹配两字词） */
+export const ftsExpr = (terms: string[], extra: string[]): string => [...terms, ...extra.filter((t) => len(t) >= 3)].map(quote).join(' OR ');
+
+/** 两字扩写词走 LIKE，最多 8 个 */
+export const likeTerms = (extra: string[]): string[] => extra.filter((t) => len(t) === 2).slice(0, 8);
+
+/** 生成 `(a LIKE ? ESCAPE '\' OR b LIKE ? …)` 与对应参数 */
+export function likeAny(cols: string[], words: string[]): { sql: string; args: string[] } {
+  const parts: string[] = [];
+  const args: string[] = [];
+  for (const w of words)
+    for (const c of cols) {
+      parts.push(`${c} LIKE ? ESCAPE '\\'`);
+      args.push(`%${escLike(w)}%`);
+    }
+  return { sql: `(${parts.join(' OR ')})`, args };
+}
+
+const keyOf = (r: ChunkHit) => `${r.doc_id}:${r.ord}`;
+
+/** 扩写词的候选段落：≥3 字走 FTS 短语，两字走 LIKE（最多 50 行）；按段去重，FTS 在前 */
+function extraHits(db: DB, extra: string[]): ChunkHit[] {
+  const long = extra.filter((t) => len(t) >= 3);
+  const rows = long.length ? ftsHits(db, long.map(quote).join(' OR ')) : [];
+  const two = likeTerms(extra);
+  if (two.length) {
+    const w = likeAny(['c.body', 'c.heading', 'd.title'], two);
+    rows.push(
+      ...(db
+        .prepare(`SELECT c.doc_id, c.ord, c.heading, c.body, d.title FROM kb_chunks c JOIN kb_docs d ON d.id = c.doc_id WHERE d.status = 'ready' AND ${w.sql} ORDER BY d.updated_at DESC, c.ord LIMIT 50`)
+        .all(...w.args) as unknown as ChunkHit[]),
+    );
+  }
+  return rows;
+}
+
+function mergeHits(a: ChunkHit[], b: ChunkHit[]): ChunkHit[] {
+  const seen = new Set(a.map(keyOf));
+  const out = [...a];
+  for (const r of b) if (!seen.has(keyOf(r))) (seen.add(keyOf(r)), out.push(r));
+  return out;
+}
 
 function likeSnippet(text: string, q: string): string {
   const i = text.toLowerCase().indexOf(q.toLowerCase());
@@ -78,10 +138,11 @@ function fuzzyHits(db: DB, query: string): ChunkHit[] {
     .map((x) => x.r);
 }
 
-/** 页面搜索：每个条目只取最相关的一段；不刷新来源 */
-export function searchKb(db: DB, q: string, limit = 50): SearchHit[] {
+/** 页面搜索：每个条目只取最相关的一段；不刷新来源。extra 为查询扩写词（智能搜索），命中越多越靠前 */
+export function searchKb(db: DB, q: string, limit = 50, extra: string[] = []): SearchHit[] {
   const query = q.trim();
   if (!query) return [];
+  const ex = normExtra(extra);
   let rows: ChunkHit[];
   if (len(query.replace(/\s+/g, '')) < 3) {
     const p = `%${escLike(query)}%`;
@@ -98,6 +159,21 @@ export function searchKb(db: DB, q: string, limit = 50): SearchHit[] {
     const m = matchExpr(query);
     rows = m ? ftsHits(db, m) : [];
     if (!rows.length) rows = fuzzyHits(db, query);
+  }
+  if (ex.length) {
+    const base = new Set(rows.map(keyOf));
+    rows = mergeHits(rows, extraHits(db, ex))
+      .map((r, rank) => {
+        const e = extraScore(`${r.title}\n${r.heading}\n${r.body}`, ex);
+        return { r, rank, e, score: (base.has(keyOf(r)) ? 3 : 0) + 2 * e };
+      })
+      .filter((x) => base.has(keyOf(x.r)) || x.e > 0)
+      .sort((a, b) => b.score - a.score || a.rank - b.rank)
+      .map(({ r, e }) => {
+        if (r.snip || !e) return r;
+        const t = ex.find((w) => `${r.title}\n${r.heading}\n${r.body}`.toLowerCase().includes(w))!;
+        return { ...r, snip: likeSnippet(r.body.toLowerCase().includes(t) ? r.body : `${r.title} ${r.body}`, t) };
+      });
   }
   const best = new Map<number, ChunkHit>();
   for (const r of rows) {
@@ -129,23 +205,32 @@ export function recallTerms(query: string): string[] {
   return [...out];
 }
 
-/** 评审召回：先刷新来源，再按命中的三元组数与 bm25 排序取段落；至少命中 2 个三元组才算相关 */
+/**
+ * 评审召回：先刷新来源，再按分数与 bm25 排序取段落。分数 = 命中的三元组数 + 2 × 命中的扩写词数；
+ * 至少命中 2 个三元组，或命中 1 个扩写词，才算相关
+ */
 export function recallKb(
   db: DB,
   query: string,
   o: { limit: number; perDoc: number; budget: number } = { limit: KB_LIMITS.recallLimit, perDoc: KB_LIMITS.recallPerDoc, budget: KB_LIMITS.recallBudget },
+  extra: string[] = [],
 ): { text: string; refs: KbRef[] } {
   const terms = recallTerms(query);
-  if (!terms.length) return { text: '', refs: [] };
+  const ex = normExtra(extra);
+  if (!terms.length && !ex.length) return { text: '', refs: [] };
   const minHits = Math.min(2, terms.length);
   refreshStale(db);
-  const scored = ftsHits(db, terms.map((t) => `"${t.replace(/"/g, '""')}"`).join(' OR '))
+  const fts = terms.length || ex.some((t) => len(t) >= 3) ? ftsHits(db, ftsExpr(terms, ex)) : [];
+  const two = likeTerms(ex);
+  const scored = (two.length ? mergeHits(fts, extraHits(db, two)) : fts)
     .map((r, rank) => {
       const hay = `${r.title}\n${r.heading}\n${r.body}`.toLowerCase();
-      return { r, rank, hits: terms.filter((t) => hay.includes(t)).length };
+      const hits = terms.filter((t) => hay.includes(t)).length;
+      const e = extraScore(hay, ex);
+      return { r, rank, hits, e, score: hits + 2 * e };
     })
-    .filter((x) => x.hits >= minHits)
-    .sort((a, b) => b.hits - a.hits || a.rank - b.rank);
+    .filter((x) => (terms.length && x.hits >= minHits) || x.e >= 1)
+    .sort((a, b) => b.score - a.score || a.rank - b.rank);
   const picked: ChunkHit[] = [];
   const perDoc = new Map<number, number>();
   let used = 0;

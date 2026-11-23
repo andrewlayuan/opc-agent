@@ -77,3 +77,15 @@ test('recallWiki：命中的段落只有小标题时，与下一段正文合并�
   assert.match(r.text, /## 供应商定位与接入\n作为广播冗余来源接入/);
   done();
 });
+
+test('recallWiki：扩写词命中 Wiki 页面；Wiki 未命中时把 extra 传给 recallKb', () => {
+  const { db, done } = tmpWikiDb();
+  const doc = seedDoc(db, '价格资料', '## 套餐\n按席位定价，每席每月 99 元');
+  assert.deepEqual(recallWiki(db, '怎么收费'), { text: '', refs: [] });
+  assert.deepEqual(recallWiki(db, '怎么收费', ['定价']), recallKb(db, '怎么收费', undefined, ['定价']));
+  assert.ok(recallWiki(db, '怎么收费', ['定价']).refs.some((r) => r.doc === doc));
+  put(db, [page('pricing', '价格策略', `## 结论\n建议按席位定价[^${doc}:0]`)]);
+  const r = recallWiki(db, '怎么收费', ['价格策略']);
+  assert.equal(r.refs[0].wiki, 'pricing');
+  done();
+});
