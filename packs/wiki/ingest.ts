@@ -9,6 +9,7 @@ import { digestPrompt, generatePrompt, planPrompt, renderChunks, writePrompt } f
 import type { SrcChunk, WriteTarget } from './prompts.ts';
 import { catalog, citeValid, finishOp, getPageRow, tx, writePages } from './store.ts';
 import type { CatalogEntry, PageChange, PageDraft } from './store.ts';
+import { placeIngested, renderTree } from './tree.ts';
 import { WIKI_LIMITS, WikiError } from './types.ts';
 import type { PageKind } from './types.ts';
 
@@ -112,6 +113,8 @@ interface PlanPage {
   title: string;
   reason: string;
   ords: number[];
+  /** 模型给的分类路径，未校验；能不能用由 tree.ts 的 cleanPath 决定 */
+  path: unknown;
 }
 
 const PLAN_KINDS: ReadonlySet<string> = new Set(['entity', 'concept', 'compare', 'overview']);
@@ -127,7 +130,7 @@ function readPlan(raw: Record<string, unknown>, docTitle: string, valid: Set<num
     if (!slug || slug.startsWith('src-') || seen.has(slug)) continue;
     seen.add(slug);
     const kind = (PLAN_KINDS.has(String(p.kind)) ? p.kind : 'concept') as PageKind;
-    pages.push({ slug, kind, title: title || slug, reason: str(p.reason), ords: ordsOf(p.ords, valid) });
+    pages.push({ slug, kind, title: title || slug, reason: str(p.reason), ords: ordsOf(p.ords, valid), path: p.path });
     if (pages.length >= WIKI_LIMITS.ingestPages - 1) break;
   }
   const conflicts = (Array.isArray(raw.conflicts) ? (raw.conflicts as Record<string, unknown>[]) : [])
@@ -135,6 +138,22 @@ function readPlan(raw: Record<string, unknown>, docTitle: string, valid: Set<num
     .filter((x) => x.length > 1)
     .slice(0, 10);
   return { source: { title: str(s.title, WIKI_LIMITS.titleChars) || docTitle, summary: str(s.summary) }, pages, conflicts };
+}
+
+/** 给本次写入的页面落位；整体出错时回滚到 SAVEPOINT，全部记为未能分类 */
+function placeInSavepoint(db: DB, drafts: PageDraft[], planned: PlanPage[], now: number): { placed: number; failed: string[] } {
+  const path = new Map(planned.map((p) => [p.slug, p.path]));
+  const items = drafts.map((d) => ({ slug: d.slug, kind: d.kind, path: path.get(d.slug) }));
+  db.exec('SAVEPOINT place_pages');
+  try {
+    const r = placeIngested(db, items, now);
+    db.exec('RELEASE place_pages');
+    return r;
+  } catch {
+    db.exec('ROLLBACK TO place_pages');
+    db.exec('RELEASE place_pages');
+    return { placed: 0, failed: items.map((i) => i.slug) };
+  }
 }
 
 /** 防截断：已有页面的新正文不到旧正文一半时，保留旧正文，把新内容追加到末尾 */
@@ -169,7 +188,7 @@ export async function ingestDoc(db: DB, llm: Llm, opId: number, docId: number, o
     for (let i = 0; i < parts.length; i++) outs.push((await calls.text(digestPrompt(doc.title, renderChunks(parts[i]), i, parts.length), 3000)).trim());
     digest = outs.join('\n\n');
   }
-  const rawPlan = await calls.json<Record<string, unknown>>(planPrompt(doc, digest || renderChunks(chunks), cat, Boolean(digest)), 4000);
+  const rawPlan = await calls.json<Record<string, unknown>>(planPrompt(doc, digest || renderChunks(chunks), cat, Boolean(digest), renderTree(db)), 4000);
   const plan = readPlan(rawPlan, doc.title, valid);
 
   // 3. 分批撰写，资料摘要页在第一批
@@ -216,7 +235,10 @@ export async function ingestDoc(db: DB, llm: Llm, opId: number, docId: number, o
   const now = o.now ?? Date.now();
   return tx(db, () => {
     const { changes, dropped } = writePages(db, opId, drafts, { now });
+    // 分类只影响侧栏位置，出错不能连累页面与摄入结果：放进 SAVEPOINT，失败只回滚这一步
+    const placed = placeInSavepoint(db, drafts, plan.pages, now);
     const notes = [`编入《${doc.title}》：改动 ${changes.length} 页`];
+    if (placed.failed.length) notes.push(`${placed.failed.length} 个页面未能分类`);
     if (dropped.length) notes.push(`已删除 ${dropped.length} 处无效引用`);
     if (plan.conflicts.length) notes.push(`可能的矛盾：${plan.conflicts.join('；')}`);
     const note = notes.join('。');

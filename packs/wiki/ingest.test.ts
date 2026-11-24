@@ -160,3 +160,139 @@ test('generatePage：依据链接到它的页面的引用原文生成一页', as
   await assert.rejects(generatePage(db, stubLlm([]), createOp(db, 'generate', { status: 'running' }), '没人链接'), { status: 400 });
   done();
 });
+
+// ---------------- 分类树：摄入时随规划一并分类 ----------------
+
+type PlanWithPath = { slug: string; kind: string; title: string; ords: number[]; path?: unknown };
+const planP = (pages: PlanWithPath[]) =>
+  JSON.stringify({ source: { title: '资料摘要标题', summary: '一句话' }, pages: pages.map((p) => ({ reason: '相关', ...p })), conflicts: [] });
+const nodeOf = (db: DB, slug: string): string | undefined =>
+  (
+    db
+      .prepare('SELECT n.title AS t FROM wiki_pages p JOIN wiki_page_node pn ON pn.page_id = p.id JOIN wiki_nodes n ON n.id = pn.node_id WHERE p.slug = ?')
+      .get(slug) as { t: string } | undefined
+  )?.t;
+const ingestWith = async (db: DB, docTitle: string, planJson: string, slugs: string[]) => {
+  const doc = seedDoc(db, docTitle, MD);
+  // 摘要页 + 规划的页面按每批 3 页撰写，每批一次模型调用
+  const all = [`src-${doc}`, ...slugs];
+  const batches: string[] = [];
+  for (let i = 0; i < all.length; i += 3) {
+    batches.push(written(all.slice(i, i + 3).map((s) => ({ slug: s, body: s.startsWith('src-') ? `摘要[^${doc}:0]` : `正文[^${doc}:0]` }))));
+  }
+  const llm = stubLlm([planJson, ...batches]);
+  const r = await ingestDoc(db, llm, createOp(db, 'ingest', { docId: doc, status: 'running' }), doc);
+  return { doc, llm, r };
+};
+
+test('ingestDoc 分类：规划带 path 时页面落位，调用次数与不带 path 时相同（2 次）', async () => {
+  const { db, done } = tmpWikiDb();
+  const { doc, llm, r } = await ingestWith(db, '检索方案', planP([{ slug: 'rag', kind: 'concept', title: 'RAG', ords: [0], path: ['Agent 开发', '检索'] }]), ['rag']);
+  assert.equal(r.llmCalls, 2);
+  assert.equal(llm.calls.length, 2);
+  assert.equal(nodeOf(db, 'rag'), '检索');
+  assert.equal(nodeOf(db, `src-${doc}`), '资料摘要');
+  assert.equal(n(db, "SELECT count(*) AS n FROM wiki_nodes WHERE title = 'Agent 开发' AND parent_id IS NULL"), 1);
+  done();
+});
+
+test('ingestDoc 分类：规划提示词里带有当前分类树，并要求每页返回 path', async () => {
+  const { db, done } = tmpWikiDb();
+  await ingestWith(db, '第一份', planP([{ slug: 'rag', kind: 'concept', title: 'RAG', ords: [0], path: ['Agent 开发', '检索'] }]), ['rag']);
+  const { llm } = await ingestWith(db, '第二份', planP([{ slug: 'memory', kind: 'concept', title: '记忆', ords: [0], path: ['Agent 开发', '记忆'] }]), ['memory']);
+  const first = String(llm.calls[0].map((m) => m.content).join('\n'));
+  assert.match(first, /现有分类树/);
+  assert.match(first, /- Agent 开发\n {2}- 检索/);
+  assert.match(first, /"path"/);
+  assert.equal(nodeOf(db, 'memory'), '记忆');
+  assert.equal(n(db, "SELECT count(*) AS n FROM wiki_nodes WHERE title = 'Agent 开发'"), 1, '复用已有节点，不重复建');
+  done();
+});
+
+test('ingestDoc 分类：已有归属的页面不会被新资料移动', async () => {
+  const { db, done } = tmpWikiDb();
+  await ingestWith(db, '第一份', planP([{ slug: 'rag', kind: 'concept', title: 'RAG', ords: [0], path: ['甲'] }]), ['rag']);
+  await ingestWith(db, '第二份', planP([{ slug: 'rag', kind: 'concept', title: 'RAG', ords: [0], path: ['乙'] }]), ['rag']);
+  assert.equal(nodeOf(db, 'rag'), '甲');
+  assert.equal(n(db, "SELECT count(*) AS n FROM wiki_nodes WHERE title = '乙'"), 0);
+  done();
+});
+
+test('ingestDoc 分类：path 缺失 / 不是数组 / 含数字 / 全空串 → 页面照常写入，保持未分类；超过 3 层截断', async () => {
+  const { db, done } = tmpWikiDb();
+  await ingestWith(
+    db,
+    '资料',
+    planP([
+      { slug: 'a', kind: 'concept', title: 'A', ords: [0] },
+      { slug: 'b', kind: 'concept', title: 'B', ords: [0], path: 'Agent/上下文' },
+      { slug: 'c', kind: 'concept', title: 'C', ords: [0], path: ['甲', 7] },
+      { slug: 'd', kind: 'concept', title: 'D', ords: [0], path: ['', ' '] },
+      { slug: 'e', kind: 'concept', title: 'E', ords: [0], path: ['一', '二', '三', '四'] },
+    ]),
+    ['a', 'b', 'c', 'd', 'e'],
+  );
+  for (const s of ['a', 'b', 'c', 'd', 'e']) assert.ok(getPage(db, s), `${s} 已写入`);
+  for (const s of ['a', 'b', 'c', 'd']) assert.equal(nodeOf(db, s), undefined, `${s} 未分类`);
+  assert.equal(nodeOf(db, 'e'), '三');
+  assert.equal(n(db, "SELECT count(*) AS n FROM wiki_nodes WHERE title IN ('四', '甲', 'Agent/上下文')"), 0);
+  done();
+});
+
+test('ingestDoc 分类：节点数到 200 时页面照常写入，放到已匹配的最深一层', async () => {
+  const { db, done } = tmpWikiDb();
+  db.prepare('INSERT INTO wiki_nodes(parent_id, title, created_at) VALUES (NULL, ?, 1)').run('Agent 开发');
+  for (let i = 0; i < 199; i++) db.prepare('INSERT INTO wiki_nodes(parent_id, title, created_at) VALUES (NULL, ?, 1)').run(`n${i}`);
+  await ingestWith(db, '资料', planP([{ slug: 'rag', kind: 'concept', title: 'RAG', ords: [0], path: ['Agent 开发', '检索'] }]), ['rag']);
+  assert.ok(getPage(db, 'rag'));
+  assert.equal(n(db, 'SELECT count(*) AS n FROM wiki_nodes'), 200);
+  assert.equal(nodeOf(db, 'rag'), 'Agent 开发');
+  done();
+});
+
+test('ingestDoc 分类：一次摄入最多新建 5 个节点', async () => {
+  const { db, done } = tmpWikiDb();
+  const pages = ['a', 'b', 'c', 'd'].map((s) => ({ slug: s, kind: 'concept', title: s, ords: [0], path: [`${s}领域`, `${s}主题`] }));
+  await ingestWith(db, '资料', planP(pages), ['a', 'b', 'c', 'd']);
+  const doc = Number((db.prepare('SELECT id FROM kb_docs').get() as { id: number }).id);
+  assert.equal(n(db, "SELECT count(*) AS n FROM wiki_nodes WHERE title <> '资料摘要'"), 5);
+  assert.ok(doc);
+  done();
+});
+
+test('ingestDoc 分类：问答页保留 answer 类型，且归入「问答」', async () => {
+  const { db, done } = tmpWikiDb();
+  tx(db, () => {
+    const id = createOp(db, 'query_save', { status: 'running' });
+    finishOp(db, id, { status: 'done', pages: writePages(db, id, [{ slug: 'q-rag', kind: 'answer', title: 'RAG 是什么？', summary: '', body: '## 问题\nRAG 是什么？' }]).changes });
+  });
+  await ingestWith(db, '资料', planP([{ slug: 'q-rag', kind: 'concept', title: 'RAG 是什么？', ords: [0], path: ['乱写'] }]), ['q-rag']);
+  assert.equal(getPage(db, 'q-rag')!.kind, 'answer');
+  assert.equal(nodeOf(db, 'q-rag'), '问答');
+  assert.equal(n(db, "SELECT count(*) AS n FROM wiki_nodes WHERE title = '乱写'"), 0);
+  done();
+});
+
+test('ingestDoc 分类：落位出错不影响页面写入与摄入结果，note 里写明', async () => {
+  const { db, done } = tmpWikiDb();
+  // 把 wiki_page_node 换成会让 INSERT 失败的表，模拟落位异常
+  db.exec('DROP TABLE wiki_page_node; CREATE TABLE wiki_page_node (page_id INTEGER PRIMARY KEY, node_id INTEGER NOT NULL CHECK (node_id < 0), manual INTEGER NOT NULL DEFAULT 0);');
+  const { doc, r } = await ingestWith(db, '资料', planP([{ slug: 'rag', kind: 'concept', title: 'RAG', ords: [0], path: ['Agent'] }]), ['rag']);
+  assert.ok(getPage(db, 'rag'));
+  assert.ok(getPage(db, `src-${doc}`));
+  assert.equal(getOp(db, 1)?.status, 'done');
+  assert.match(r.note, /个页面未能分类/);
+  done();
+});
+
+test('ingestDoc 分类：落位整体抛错时回滚这一步，页面与摄入结果不受影响，也不留下半个节点', async () => {
+  const { db, done } = tmpWikiDb();
+  // 让每次 INSERT INTO wiki_nodes 之后的下一步必然失败：节点能建出来，但读 wiki_pages 的触发器式失败改由丢表模拟
+  db.exec(`CREATE TRIGGER boom BEFORE INSERT ON wiki_page_node BEGIN SELECT RAISE(ABORT, 'boom'); END;`);
+  const { doc, r } = await ingestWith(db, '资料', planP([{ slug: 'rag', kind: 'concept', title: 'RAG', ords: [0], path: ['Agent'] }]), ['rag']);
+  assert.ok(getPage(db, 'rag'));
+  assert.ok(getPage(db, `src-${doc}`));
+  assert.match(r.note, /个页面未能分类/);
+  assert.equal(n(db, 'SELECT count(*) AS n FROM wiki_page_node'), 0);
+  done();
+});

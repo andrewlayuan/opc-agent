@@ -1,7 +1,9 @@
 // Wiki 分类树：左侧「领域 → 主题 → 页面」。节点不是页面（没有正文、没有出处），只有名称、层级、排序。
 // 写函数不自己开事务，调用方用 tx() 包起来（与 store.ts 一致）
 import type { DB } from '../../packages/core/db.ts';
+import { fence } from '../memory/events.ts';
 import { WIKI_LIMITS, WikiError } from './types.ts';
+import type { PageKind } from './types.ts';
 
 export interface TreeNode {
   id: number;
@@ -180,4 +182,94 @@ export function systemNode(db: DB, title: '资料摘要' | '问答', now: number
   if (found != null) return found;
   if (nodeCount(db) >= WIKI_LIMITS.nodes) return null;
   return insertNode(db, title, null, false, now);
+}
+
+// ---------------- 摄入时分类 ----------------
+
+/**
+ * 校验模型给的 path：必须是 1–3 个字符串，清洗后都非空、且不含 / 或 >（避免模型把整条路径塞进一个名字）。
+ * 不合法返回 null（页面保持未分类）；超过 3 层截断到第 3 层
+ */
+export function cleanPath(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || !raw.length) return null;
+  const out: string[] = [];
+  for (const x of raw.slice(0, WIKI_LIMITS.nodeDepth)) {
+    const t = cleanNodeTitle(x);
+    if (!t || /[/>＞／]/.test(t)) return null;
+    out.push(t);
+  }
+  return out;
+}
+
+/** 分类树的缩进文本（每层两个空格，节点名经 fence 转义），给规划提示词用；最多 200 行 */
+export function renderTree(db: DB): string {
+  const nodes = listNodes(db);
+  if (!nodes.length) return '（还没有分类）';
+  const kids = new Map<number | null, TreeNode[]>();
+  for (const n of nodes) {
+    const a = kids.get(n.parent_id) ?? [];
+    a.push(n);
+    kids.set(n.parent_id, a);
+  }
+  const lines: string[] = [];
+  const walk = (parent: number | null, depth: number): void => {
+    for (const n of kids.get(parent) ?? []) {
+      if (lines.length >= WIKI_LIMITS.nodes) return;
+      lines.push(`${'  '.repeat(depth)}- ${fence(n.title)}`);
+      walk(n.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return lines.join('\n');
+}
+
+/**
+ * 给本次摄入写入的页面落位（设计 §4.1）：已有归属的不动；source / answer 放系统节点；
+ * 其余按 path 匹配或新建（一次摄入最多新建 5 个节点）；path 非法的保持未分类。
+ * 单个页面出错只记入 failed，不影响其他页面
+ */
+export function placeIngested(
+  db: DB,
+  items: { slug: string; kind: PageKind; path: unknown }[],
+  now: number,
+): { placed: number; failed: string[] } {
+  const have = pageNodes(db);
+  const budget = { left: WIKI_LIMITS.ingestNewNodes };
+  const failed: string[] = [];
+  let placed = 0;
+  for (const it of items) {
+    // 每个页面一个 SAVEPOINT：这个页面落位失败时，连它刚建出来的节点一起回滚，不留空节点
+    db.exec('SAVEPOINT place_one');
+    const left = budget.left;
+    try {
+      const row = db.prepare('SELECT id FROM wiki_pages WHERE slug = ?').get(it.slug) as { id: number } | undefined;
+      if (!row) {
+        db.exec('RELEASE place_one');
+        failed.push(it.slug);
+        continue;
+      }
+      if (have.has(row.id)) {
+        db.exec('RELEASE place_one');
+        continue;
+      }
+      let node: number | null = null;
+      if (it.kind === 'source') node = systemNode(db, '资料摘要', now);
+      else if (it.kind === 'answer') node = systemNode(db, '问答', now);
+      else {
+        const path = cleanPath(it.path);
+        if (path) node = ensurePath(db, path, { budget, now });
+      }
+      if (node != null) {
+        placePage(db, row.id, node);
+        placed++;
+      }
+      db.exec('RELEASE place_one');
+    } catch {
+      db.exec('ROLLBACK TO place_one');
+      db.exec('RELEASE place_one');
+      budget.left = left;
+      failed.push(it.slug);
+    }
+  }
+  return { placed, failed };
 }

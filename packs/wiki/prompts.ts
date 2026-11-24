@@ -46,16 +46,17 @@ export function digestPrompt(title: string, part: string, idx: number, total: nu
   ];
 }
 
-export function planPrompt(doc: { id: number; title: string }, material: string, cat: CatalogEntry[], digested: boolean): ChatMessage[] {
+export function planPrompt(doc: { id: number; title: string }, material: string, cat: CatalogEntry[], digested: boolean, tree = '（还没有分类）'): ChatMessage[] {
   return [
     sys(
       '任务：把一份新资料编入 Wiki，先做规划。决定要新建或更新哪些页面（不含资料摘要页，最多 14 个），优先更新目录里已有的页面，slug 沿用目录中的写法；新页面的 slug 用简短标题。' +
+        '每个页面再给一条 path：它在「现有分类树」里应该放的位置，1–3 个层名，从大领域到具体主题，优先沿用树里已有的名称，确实没有合适的才新起一个（名称里不要出现 / 或 >）。' +
         '同时列出这份资料与已有页面可能矛盾的地方。只输出 JSON：' +
-        '{"source":{"title":"资料摘要页标题","summary":"一句话摘要"},"pages":[{"slug":"","kind":"entity|concept|compare|overview","title":"","reason":"为什么要改","ords":[相关段号]}],"conflicts":[{"slug":"","claim":"矛盾点","ords":[段号]}]}',
+        '{"source":{"title":"资料摘要页标题","summary":"一句话摘要"},"pages":[{"slug":"","kind":"entity|concept|compare|overview","title":"","reason":"为什么要改","path":["领域","主题"],"ords":[相关段号]}],"conflicts":[{"slug":"","claim":"矛盾点","ords":[段号]}]}',
     ),
     {
       role: 'user',
-      content: `现有页面目录（slug | 类型 | 标题：摘要）：\n${renderCatalog(cat)}\n\n资料 ID ${doc.id}《${fence(doc.title)}》${digested ? '（内容过长，以下是分块提炼的要点）' : ''}：\n${
+      content: `现有页面目录（slug | 类型 | 标题：摘要）：\n${renderCatalog(cat)}\n\n现有分类树：\n${tree}\n\n资料 ID ${doc.id}《${fence(doc.title)}》${digested ? '（内容过长，以下是分块提炼的要点）' : ''}：\n${
         digested ? `<digest>\n${material}\n</digest>` : `<source>\n${material}\n</source>`
       }`,
     },
