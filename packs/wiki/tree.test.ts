@@ -121,6 +121,36 @@ test('renameNode：同级与自己同名（改大小写）允许，与兄弟重�
   done();
 });
 
+test('createNode / renameNode：大小写、全半角不同的同级重名也是 409（唯一索引区分大小写，必须由应用层先拦住）', () => {
+  const { db, done } = tmpWikiDb();
+  const a = createNode(db, 'Agent', null);
+  const b = createNode(db, '商业', null);
+  assert.deepEqual(code(() => createNode(db, 'agent', null)), { status: 409, message: '同级已有同名节点' });
+  assert.deepEqual(code(() => createNode(db, 'ＡＧＥＮＴ', null)), { status: 409, message: '同级已有同名节点' });
+  assert.deepEqual(code(() => renameNode(db, b, 'AGENT')), { status: 409, message: '同级已有同名节点' });
+  assert.equal(listNodes(db).find((n) => n.id === b)?.title, '商业', '失败的改名不改动');
+  assert.ok(a);
+  done();
+});
+
+test('ensurePath：manual 选项写入节点，budget 被扣减', () => {
+  const { db, done } = tmpWikiDb();
+  const budget = { left: 5 };
+  const id = ensurePath(db, ['甲', '乙'], { manual: true, budget });
+  assert.equal(budget.left, 3);
+  assert.equal(listNodes(db).find((n) => n.id === id)?.manual, true);
+  ensurePath(db, ['甲', '乙'], { budget });
+  assert.equal(budget.left, 3, '复用已有节点不扣减');
+  done();
+});
+
+test('createNode：节点已满时，同名请求仍返回 409 而不是 400', () => {
+  const { db, done } = tmpWikiDb();
+  for (let i = 0; i < 200; i++) db.prepare('INSERT INTO wiki_nodes(parent_id, title, created_at) VALUES (NULL, ?, 1)').run(`n${i}`);
+  assert.deepEqual(code(() => createNode(db, 'N0', null)), { status: 409, message: '同级已有同名节点' });
+  done();
+});
+
 test('createNode：总数到 200 时 400', () => {
   const { db, done } = tmpWikiDb();
   for (let i = 0; i < 200; i++) db.prepare('INSERT INTO wiki_nodes(parent_id, title, created_at) VALUES (NULL, ?, 1)').run(`n${i}`);

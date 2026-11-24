@@ -148,8 +148,8 @@ export function createNode(db: DB, title: unknown, parentId: number | null, now:
     if (!byId.has(parentId)) throw new WikiError(404, '节点不存在');
     if (depthOf(byId, parentId) >= WIKI_LIMITS.nodeDepth) throw new WikiError(400, `最多 ${WIKI_LIMITS.nodeDepth} 层`);
   }
-  if (rows.length >= WIKI_LIMITS.nodes) throw new WikiError(400, `最多 ${WIKI_LIMITS.nodes} 个节点`);
   if (rows.some((r) => r.parent_id === parentId && key(r.title) === key(t))) throw new WikiError(409, '同级已有同名节点');
+  if (rows.length >= WIKI_LIMITS.nodes) throw new WikiError(400, `最多 ${WIKI_LIMITS.nodes} 个节点`);
   return insertNode(db, t, parentId, true, now);
 }
 
