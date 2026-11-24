@@ -154,7 +154,8 @@ export function ensureFolders(db: DB, parentId: number | null, paths: string[], 
     let total = all.size;
     const base = parentId == null ? 0 : depthOf(all, parentId);
     const ins = db.prepare('INSERT INTO kb_folders(parent_id, name, created_at) VALUES (?, ?, ?)');
-    const map: Record<string, number | null> = {};
+    // 无原型：目录名可能是 constructor / toString 等，普通对象的 `p in map` 会误判为已处理
+    const map: Record<string, number | null> = Object.create(null);
     let capped = false;
     for (const p of paths) {
       if (typeof p !== 'string') throw new KbError(400, '路径不合法');

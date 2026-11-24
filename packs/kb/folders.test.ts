@@ -118,6 +118,17 @@ test('ensureFolders：清洗名称（首尾空白、控制字符与反斜杠变�
   done();
 });
 
+test('ensureFolders：名字是原型属性（constructor / toString / __proto__）时照常建目录并映射', () => {
+  const { db, done } = tmpKbDb();
+  const r = ensureFolders(db, null, ['constructor', 'toString/子', '__proto__']);
+  assert.equal(folderPath(db, r.map['constructor']), 'constructor');
+  assert.equal(folderPath(db, r.map['toString/子']), 'toString/子');
+  assert.equal(folderPath(db, r.map['__proto__']), '__proto__');
+  assert.equal(count(db), 4);
+  for (const v of Object.values(r.map)) assert.equal(typeof v, 'number');
+  done();
+});
+
 test('ensureFolders：超过 5 层的段不再建，映射到第 5 层', () => {
   const { db, done } = tmpKbDb();
   const p = createFolder(db, '一', null);

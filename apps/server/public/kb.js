@@ -956,14 +956,15 @@ export function initKb({ h, api, toast, show, openReview, openItem, renderMarkdo
       const take = await confirmImport(entries, base);
       if (!take?.length) return;
       const dirs = [...new Set(take.map((e) => e.dir))];
-      let map = { '': base };
+      // Map：目录名可能是 constructor / toString 等，普通对象会取到原型上的值
+      const map = new Map([['', base]]);
       if (dirs.some(Boolean)) {
         const r = await api('/api/kb/folders/ensure', { method: 'POST', body: { parentId: base, paths: dirs } });
-        map = r.map;
+        for (const k of Object.keys(r.map ?? {})) map.set(k, r.map[k]);
         if (r.capped) toast('目录数量已达上限，部分文件放在了上级目录');
         loadTree().catch(() => {});
       }
-      imp.items = take.map((e) => ({ e, folder: e.dir in map ? map[e.dir] : base, state: 'wait', error: null, docId: null }));
+      imp.items = take.map((e) => ({ e, folder: map.has(e.dir) ? map.get(e.dir) : base, state: 'wait', error: null, docId: null }));
       await pumpImport();
     } catch (e) {
       toast(e.message);
@@ -974,7 +975,8 @@ export function initKb({ h, api, toast, show, openReview, openItem, renderMarkdo
     it.docId = doc.id;
     if (doc.status === 'processing') it.state = 'proc';
     else if (doc.status === 'ready') it.state = 'ok';
-    else ((it.state = 'fail'), (it.error = doc.error || '处理失败'));
+    // 已入库，重试不会重传（见 paintImport）
+    else ((it.state = 'fail'), (it.error = `${doc.error || '处理失败'}（已入库，需要重做请先删除该条目）`));
   }
 
   async function uploadOne(it) {
@@ -1063,12 +1065,14 @@ export function initKb({ h, api, toast, show, openReview, openItem, renderMarkdo
     const fails = imp.items.filter((x) => x.state === 'fail');
     const uploaded = imp.items.filter((x) => x.docId != null).length;
     const btn = (text, onclick, cls = 'ghost') => h('button', { type: 'button', class: cls, text, onclick });
+    // 只重传没进库的；已上传但处理失败（或已被删除）的重传会多出一份同名条目
+    const retry = fails.filter((x) => x.docId == null);
     const actions = imp.running
       ? [btn(imp.stopped ? '正在停止…' : '停止', () => ((imp.stopped = true), paintImport()))]
       : [
-          fails.length
-            ? btn('重试失败的', () => {
-                for (const it of fails) ((it.state = 'wait'), (it.error = null), (it.docId = null));
+          retry.length
+            ? btn(`重试失败的（${retry.length}）`, () => {
+                for (const it of retry) ((it.state = 'wait'), (it.error = null));
                 pumpImport().catch((e) => toast(e.message));
               })
             : null,

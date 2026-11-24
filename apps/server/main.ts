@@ -49,6 +49,7 @@ const kbFiles = new KbFiles(db, path.join(cfg.dataDir, 'kb'), radar.llm);
 const kbExpander = new KbExpander(db, radar.llm, { enabled: cfg.kbExpand, dailyCalls: cfg.kbExpandDailyCalls, log: (s) => console.log(s) });
 const wikiAssets = new WikiAssets(db, path.join(cfg.dataDir, 'wiki-assets'));
 const wikiTmp = path.join(cfg.dataDir, 'wiki-export');
+const kbTmp = path.join(cfg.dataDir, 'kb-export');
 const wikiQueue = new WikiQueue(db, radar.llm, { dailyCalls: cfg.wikiDailyCalls });
 const pm = new PmAdvisor(
   db,
@@ -354,7 +355,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   }
 
   if (await handleMemoryApi({ db, keeper, skills: skillKeeper, llmEnabled: radar.llm.enabled }, req, res, method, p)) return;
-  if (await handleKbApi({ db, files: kbFiles, llm: radar.llm, expander: kbExpander, tmpDir: path.join(cfg.dataDir, 'kb-export') }, req, res, method, url)) return;
+  if (await handleKbApi({ db, files: kbFiles, llm: radar.llm, expander: kbExpander, tmpDir: kbTmp }, req, res, method, url)) return;
   if (await handleWikiApi({ db, llm: radar.llm, queue: wikiQueue, assets: wikiAssets, tmpDir: wikiTmp }, req, res, method, url)) return;
   if (await handleProtoApi({ db, runner: protoRunner }, req, res, method, url)) return;
   if (await handleComplianceApi({ db, llm: radar.llm, record }, req, res, method, url)) return;
@@ -615,9 +616,15 @@ server.listen(cfg.port, cfg.host, () => {
   console.log(`[opc] 模型：${radar.llm.enabled ? `DeepSeek ${cfg.llm.model}` : '未配置 DEEPSEEK_API_KEY，分析/翻译不可用'}；每 ${cfg.fetchIntervalMin} 分钟采集一次`);
   radar.startSchedule();
   keeper.start();
+  // 上次运行中断时遗留的导出临时文件
+  for (const d of [wikiTmp, kbTmp]) {
+    try {
+      fs.rmSync(d, { recursive: true, force: true });
+    } catch (e) {
+      console.error(`[opc] 清理导出临时目录失败 ${d}`, e);
+    }
+  }
   try {
-    // 上次运行中断时遗留的导出临时文件
-    fs.rmSync(wikiTmp, { recursive: true, force: true });
     wikiQueue.start();
     const ws = wikiQueue.status();
     const pages = Number((db.prepare('SELECT count(*) AS n FROM wiki_pages WHERE deleted = 0').get() as { n: number }).n);

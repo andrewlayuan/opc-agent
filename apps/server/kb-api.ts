@@ -1,6 +1,7 @@
 // 知识库 API：目录、条目、上传、下载、搜索、目录建议、来源查询。调用方已完成登录与同源校验。
 import fs from 'node:fs';
 import type http from 'node:http';
+import { pipeline } from 'node:stream';
 import type { DB } from '../../packages/core/db.ts';
 import type { Llm } from '../../packages/core/llm.ts';
 import { createDoc, deleteDoc, docViews, findBySource, getDoc, listDocs, refreshStale, sourceText, updateDoc } from '../../packs/kb/docs.ts';
@@ -193,12 +194,10 @@ function sendExport(deps: KbApiDeps, res: http.ServerResponse): void {
     'content-length': r.bytes,
     'cache-control': 'no-store',
   });
-  const rs = fs.createReadStream(r.file);
-  rs.on('error', (e) => {
-    console.error('[kb] 发送导出文件失败', e);
-    res.destroy();
+  // pipeline：客户端中途断开时一并销毁读流，避免临时文件已删除却仍占着磁盘
+  pipeline(fs.createReadStream(r.file), res, (e) => {
+    if (e && (e as NodeJS.ErrnoException).code !== 'ERR_STREAM_PREMATURE_CLOSE') console.error('[kb] 发送导出文件失败', e);
   });
-  rs.pipe(res);
 }
 
 async function route(deps: KbApiDeps, req: http.IncomingMessage, res: http.ServerResponse, method: string, url: URL): Promise<boolean> {
