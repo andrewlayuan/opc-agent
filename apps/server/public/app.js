@@ -6,12 +6,13 @@ import { initGrowth } from './growth.js';
 import { initSkills } from './skills.js';
 // 所有外部数据只通过 textContent 写入 DOM，链接只接受 http(s)
 const $ = (id) => document.getElementById(id);
-const TAB_VIEWS = ['intel', 'pm', 'compliance', 'growth', 'kb', 'memory'];
+const TAB_VIEWS = ['intel', 'kb', 'pm', 'growth', 'compliance', 'memory'];
 /** 「情报」菜单下的子页面：动态、简报、信息源 */
 const INTEL_TABS = [['feed', '动态'], ['brief', '简报'], ['sources', '信息源']];
 const isIntel = (v) => INTEL_TABS.some(([k]) => k === v);
 let intelTab = 'feed';
-const TAB_ORDER_KEY = 'opc.tabOrder';
+// v2：默认顺序改为 情报、知识库、产品顾问、运营、合规、我的记忆；旧键 opc.tabOrder 保存的顺序不再沿用，需要时重新拖动
+const TAB_ORDER_KEY = 'opc.tabOrder.v2';
 
 function savedTabOrder() {
   let saved = [];

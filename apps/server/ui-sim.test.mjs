@@ -118,7 +118,8 @@ const winListeners = {};
 const dispatchMessage = async (data, source) => {
   for (const fn of winListeners.message ?? []) await fn({ data, source });
 };
-const store = new Map([['opc.tabOrder', '["pm","sources","feed","brief","kb","memory"]']]);
+// 旧键 opc.tabOrder 必须被忽略；新键 opc.tabOrder.v2 里是（含旧版子页面名的）已保存顺序，用来验证迁移
+const store = new Map([['opc.tabOrder', '["memory","growth","kb"]'], ['opc.tabOrder.v2', '["pm","sources","feed","brief","kb","memory"]']]);
 const ctx = {
   localStorage: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) },
   document: {
@@ -174,7 +175,7 @@ vm.runInContext(src + "\nwindow.proto = typeof proto === 'undefined' ? null : pr
 const tick = () => new Promise((r) => setTimeout(r, 30));
 await tick();
 
-assert.deepEqual(tabList.children.filter((c) => c.tagName === 'BUTTON').map((c) => c.dataset.view), ['pm', 'intel', 'kb', 'memory', 'compliance', 'growth'], '旧的菜单顺序迁移为「情报」（动态/简报/信息源合并），其余顺序保留');
+assert.deepEqual(tabList.children.filter((c) => c.tagName === 'BUTTON').map((c) => c.dataset.view), ['pm', 'intel', 'kb', 'memory', 'growth', 'compliance'], '已保存的顺序迁移为「情报」（动态/简报/信息源合并）并保留，缺的菜单按新默认顺序（运营、合规）补在后面');
 
 const $ = (id) => byId.get(id);
 const intelSub = (t) => ($('intel-tabs')?.children ?? []).find((b) => b.textContent === t);
@@ -1148,7 +1149,7 @@ $('toast').hidden = true;
 
 // 9.1 知识库页：目录树与列表
 assert.ok(kbTab(), '导航栏应有知识库');
-assert.ok(tabs.indexOf(kbTab()) === tabs.findIndex((t) => t.dataset.view === 'memory') - 1, '知识库在我的记忆之前');
+assert.ok(tabs.indexOf(kbTab()) === tabs.findIndex((t) => t.dataset.view === 'intel') + 1, '知识库紧跟在情报之后');
 await kbTab().fire('click');
 await tick();
 assert.equal($('view-kb').hidden, false, '知识库视图应显示');
@@ -1714,16 +1715,17 @@ const over = await intelTab.fire('dragover', { dataTransfer: dragData });
 assert.equal(over.defaultPrevented, true, '拖到标签上应允许放置');
 await intelTab.fire('drop', { dataTransfer: dragData });
 await kbTabDrag.fire('dragend', { dataTransfer: dragData });
-assert.deepEqual(order(), ['pm', 'kb', 'intel', 'memory', 'compliance', 'growth'], '拖动后菜单顺序应改变');
-assert.equal(store.get('opc.tabOrder'), JSON.stringify(order()), '拖动后应保存顺序');
+assert.deepEqual(order(), ['pm', 'kb', 'intel', 'memory', 'growth', 'compliance'], '拖动后菜单顺序应改变');
+assert.equal(store.get('opc.tabOrder.v2'), JSON.stringify(order()), '拖动后应保存顺序');
 await new Promise((r) => setTimeout(r, 260));
 await tab('memory').fire('click');
 await tick();
 assert.equal($('view-memory').hidden, false, '拖动后点击仍应切换视图');
 const keyEv = await intelTab.fire('keydown', { key: 'ArrowRight', altKey: true });
 assert.equal(keyEv.defaultPrevented, true, 'Alt+方向键应被处理');
-assert.deepEqual(order(), ['pm', 'kb', 'memory', 'intel', 'compliance', 'growth'], 'Alt+→ 应把标签后移一位');
-assert.equal(store.get('opc.tabOrder'), JSON.stringify(order()), '键盘排序也应保存');
+assert.deepEqual(order(), ['pm', 'kb', 'memory', 'intel', 'growth', 'compliance'], 'Alt+→ 应把标签后移一位');
+assert.equal(store.get('opc.tabOrder.v2'), JSON.stringify(order()), '键盘排序也应保存');
+assert.equal(store.get('opc.tabOrder'), '["memory","growth","kb"]', '旧键不再读写');
 console.log('✓ 顶部菜单：拖动排序、本地保存、键盘排序与点击兼容');
 
 // 追加框架：历史评审在追问时追加新框架
@@ -1839,7 +1841,7 @@ console.log('✓ 情报菜单：动态 / 简报 / 信息源子标签切换');
   routes['PATCH /api/compliance/items/31'] = (b) => ({ item: { ...D3.items[0], ...b } });
   routes['PATCH /api/compliance/items/33'] = () => ({ item: { ...D3.items[2], stale: false } });
   routes['GET /api/compliance/reminders'] = { reminders: [{ itemId: 31 }, { itemId: 32 }] };
-  assert.deepEqual(tabs.map((t) => t.dataset.view), ['intel', 'pm', 'compliance', 'growth', 'kb', 'memory'], 'HTML 默认顺序：合规紧跟产品顾问，运营紧跟合规');
+  assert.deepEqual(tabs.map((t) => t.dataset.view), ['intel', 'kb', 'pm', 'growth', 'compliance', 'memory'], 'HTML 默认顺序：情报、知识库、产品顾问、运营、合规、我的记忆');
   const cpTab = tabs.find((t) => t.dataset.view === 'compliance');
   await new Promise((r) => setTimeout(r, 260));
   await cpTab.fire('click');
