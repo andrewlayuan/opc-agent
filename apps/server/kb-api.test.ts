@@ -106,6 +106,18 @@ test('GET /api/kb/docs?ids=：按 id 返回条目，不存在的跳过；超过 
   await s.close();
 });
 
+test('GET /api/kb/docs?limit=：默认列表不变，limit 取前 N 条，非法值回到默认', async () => {
+  const s = await kbServer();
+  try {
+    for (const t of ['甲', '乙', '丙']) createDoc(s.db, { kind: 'note', title: t, body: t });
+    assert.equal((await s.call('GET', '/api/kb/docs')).data.docs.length, 3);
+    assert.equal((await s.call('GET', '/api/kb/docs?limit=2')).data.docs.length, 2);
+    for (const bad of ['0', '-1', 'x', '1.5']) assert.equal((await s.call('GET', `/api/kb/docs?limit=${bad}`)).data.docs.length, 3, bad);
+  } finally {
+    await s.close();
+  }
+});
+
 test('GET /api/kb/export：200、application/zip、文件名 tianshu-kb-YYYYMMDD.zip，发送后临时文件被删除', async () => {
   const s = await kbServer();
   try {

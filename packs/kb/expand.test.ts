@@ -88,6 +88,33 @@ test('expand：缓存 7 天过期；缓存超过 2000 条删最旧的', async ()
   done();
 });
 
+test('cleanTerms：保留 C++ / C# / .NET 这类带符号的词，孤立的符号照常去掉', () => {
+  assert.deepEqual(cleanTerms({ terms: ['C++', ' c# ', '.NET', '。定价。', '+++', '...', '价格+', '（Node.js）'] }, 'x'), ['c++', 'c#', '.net', '定价', '价格', 'node.js']);
+});
+
+test('expand：不同问题并发时，在途的调用也占每日额度', async () => {
+  const { db, done } = setup();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let n = 0;
+  const llm = {
+    enabled: true,
+    json: async () => {
+      n++;
+      await gate;
+      return JSON.parse(reply(['价格'])) as unknown;
+    },
+  } as unknown as ConstructorParameters<typeof KbExpander>[1];
+  const x = new KbExpander(db, llm, { enabled: true, dailyCalls: 2, log: () => {} });
+  const rs = Promise.all(['问题一', '问题二', '问题三', '问题四'].map((q) => x.expand(q)));
+  release();
+  const out = await rs;
+  assert.equal(n, 2, '额度 2，只会真正调用 2 次');
+  assert.deepEqual(out.map((r) => r.source), ['llm', 'llm', 'skip', 'skip']);
+  assert.equal(calls(db), 2);
+  done();
+});
+
 test('expand：每日次数用完返回 skip；模型失败也计次；第二天恢复', async () => {
   const { db, done } = setup();
   const c = clock();

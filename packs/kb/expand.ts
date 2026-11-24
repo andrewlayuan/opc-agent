@@ -46,7 +46,9 @@ export function cleanTerms(raw: unknown, query: string): string[] {
     if (typeof v !== 'string') continue;
     const t = norm(v)
       .trim()
-      .replace(/^[\s\p{P}\p{S}]+|[\s\p{P}\p{S}]+$/gu, '')
+      // 去首尾标点；但保留词尾紧跟字母数字的 + / #（C++、C#）和词首紧跟字母数字的 .（.NET）
+      .replace(/^[\s\p{P}\p{S}]+/u, (m, at: number, s: string) => (m.endsWith('.') && /^[\p{L}\p{N}]/u.test(s.slice(at + m.length)) ? '.' : ''))
+      .replace(/[\s\p{P}\p{S}]+$/u, (m, at: number, s: string) => (/[a-z0-9]/i.test(s[at - 1] ?? '') ? (/^[+#]+/.exec(m)?.[0] ?? '') : ''))
       .replace(/\s+/g, ' ');
     const n = len(t);
     if (n < EXPAND.termMin || n > EXPAND.termMax) continue;
@@ -115,7 +117,8 @@ export class KbExpander {
     let p = this.inflight.get(key);
     if (!p) {
       if (this.isEmpty()) return { terms: [], source: 'skip', reason: '知识库为空' };
-      if (this.usedToday(now) >= this.daily) return { terms: [], source: 'skip', reason: '今天的智能搜索次数已用完' };
+      // 在途的调用还没写入计数，一并算上，否则并发的不同问题会一起越过上限
+      if (this.usedToday(now) + this.inflight.size >= this.daily) return { terms: [], source: 'skip', reason: '今天的智能搜索次数已用完' };
       p = this.call(key, query, now).finally(() => this.inflight.delete(key));
       this.inflight.set(key, p);
     }

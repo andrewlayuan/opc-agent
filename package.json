@@ -15,6 +15,6 @@
     "hash-password": "node --disable-warning=ExperimentalWarning scripts/hash-password.ts",
     "mcp": "node --disable-warning=ExperimentalWarning mcp/opc-radar/server.ts",
     "dsh:web": "bash scripts/dsh-web.sh",
-    "test": "node --disable-warning=ExperimentalWarning --test \"packages/**/*.test.ts\" \"packs/**/*.test.ts\" \"apps/**/*.test.ts\" \"mcp/**/*.test.ts\""
+    "test": "node --disable-warning=ExperimentalWarning --test \"packages/**/*.test.ts\" \"packs/**/*.test.ts\" \"apps/**/*.test.ts\" \"apps/**/*.test.mjs\" \"mcp/**/*.test.ts\""
   }
 }

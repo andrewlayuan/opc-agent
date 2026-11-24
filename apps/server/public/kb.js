@@ -898,7 +898,7 @@ export function initKb({ h, api, toast, show, openReview, openItem, renderMarkdo
       if (!byFolder.has(id)) {
         byFolder.set(
           id,
-          api(`/api/kb/docs?folder=${id ?? 'none'}`).then(
+          api(`/api/kb/docs?folder=${id ?? 'none'}&limit=${DOCS_MAX}`).then(
             (r) => new Set((r.docs ?? []).filter((d) => d.kind === 'upload' && d.file_name).map((d) => `${d.file_name}\u0000${d.file_size}`)),
             () => new Set(),
           ),
@@ -1185,6 +1185,26 @@ export function initKb({ h, api, toast, show, openReview, openItem, renderMarkdo
     else upload(files);
   });
   $('kb-import-dir').addEventListener('click', () => $('kb-dir').click());
+  // 「导出全部」：用隐藏 iframe 发起下载。成功时是附件，页面不跳转、不触发 load；
+  // 失败（413 超过上限、401 等）返回的是 JSON，会触发 load，读出 error 提示给用户
+  $('kb-export').addEventListener('click', (e) => {
+    e.preventDefault();
+    const f = document.createElement('iframe');
+    f.hidden = true;
+    f.addEventListener('load', () => {
+      const doc = f.contentDocument;
+      if (!doc || doc.URL === 'about:blank') return;
+      let msg = '导出失败';
+      try {
+        msg = JSON.parse(doc.body.textContent).error || msg;
+      } catch {}
+      toast(msg);
+      f.remove();
+    });
+    f.src = '/api/kb/export';
+    document.body.append(f);
+    setTimeout(() => f.remove(), 10 * 60 * 1000);
+  });
   $('kb-dir').addEventListener('change', (e) => {
     const files = [...(e.target.files ?? [])];
     e.target.value = '';

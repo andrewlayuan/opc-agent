@@ -263,7 +263,9 @@ async function route(deps: KbApiDeps, req: http.IncomingMessage, res: http.Serve
       }
       sendJson(res, 200, { hits: searchKb(db, term).filter(inFolder) });
     } else {
-      sendJson(res, 200, { docs: listDocs(db, folder, 500) });
+      // limit：默认 500；批量导入查重要看目录里全部条目，最多 2000（= 知识库条目总上限）
+      const lim = Number(q.get('limit'));
+      sendJson(res, 200, { docs: listDocs(db, folder, Number.isInteger(lim) && lim > 0 ? Math.min(lim, 2000) : 500) });
     }
     return true;
   }
