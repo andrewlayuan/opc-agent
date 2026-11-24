@@ -4,6 +4,7 @@ import type { DB } from '../../packages/core/db.ts';
 import { LlmError } from '../../packages/core/llm.ts';
 import type { ChatMessage } from '../../packages/core/llm.ts';
 import { docHash, generatePage, ingestDoc } from './ingest.ts';
+import { planPrompt } from './prompts.ts';
 import { createOp, finishOp, getOp, getPage, tx, writePages } from './store.ts';
 import { seedDoc, stubLlm, tmpWikiDb } from './testutil.ts';
 
@@ -181,7 +182,8 @@ const ingestWith = async (db: DB, docTitle: string, planJson: string, slugs: str
     batches.push(written(all.slice(i, i + 3).map((s) => ({ slug: s, body: s.startsWith('src-') ? `摘要[^${doc}:0]` : `正文[^${doc}:0]` }))));
   }
   const llm = stubLlm([planJson, ...batches]);
-  const r = await ingestDoc(db, llm, createOp(db, 'ingest', { docId: doc, status: 'running' }), doc);
+  const op = createOp(db, 'ingest', { docId: doc, status: 'running' });
+  const r = { ...(await ingestDoc(db, llm, op, doc)), opId: op };
   return { doc, llm, r };
 };
 
@@ -254,9 +256,7 @@ test('ingestDoc 分类：一次摄入最多新建 5 个节点', async () => {
   const { db, done } = tmpWikiDb();
   const pages = ['a', 'b', 'c', 'd'].map((s) => ({ slug: s, kind: 'concept', title: s, ords: [0], path: [`${s}领域`, `${s}主题`] }));
   await ingestWith(db, '资料', planP(pages), ['a', 'b', 'c', 'd']);
-  const doc = Number((db.prepare('SELECT id FROM kb_docs').get() as { id: number }).id);
   assert.equal(n(db, "SELECT count(*) AS n FROM wiki_nodes WHERE title <> '资料摘要'"), 5);
-  assert.ok(doc);
   done();
 });
 
@@ -273,26 +273,55 @@ test('ingestDoc 分类：问答页保留 answer 类型，且归入「问答」',
   done();
 });
 
-test('ingestDoc 分类：落位出错不影响页面写入与摄入结果，note 里写明', async () => {
+// 逐页落位出错（INSERT 失败）：被 placeIngested 的逐页 SAVEPOINT 接住，其他页面照常，失败的页面连节点一起回滚
+test('ingestDoc 分类：某页落位失败 → 页面照常写入，不留空节点，note 写明未能分类的页数', async () => {
   const { db, done } = tmpWikiDb();
-  // 把 wiki_page_node 换成会让 INSERT 失败的表，模拟落位异常
-  db.exec('DROP TABLE wiki_page_node; CREATE TABLE wiki_page_node (page_id INTEGER PRIMARY KEY, node_id INTEGER NOT NULL CHECK (node_id < 0), manual INTEGER NOT NULL DEFAULT 0);');
-  const { doc, r } = await ingestWith(db, '资料', planP([{ slug: 'rag', kind: 'concept', title: 'RAG', ords: [0], path: ['Agent'] }]), ['rag']);
+  db.exec(`CREATE TRIGGER boom BEFORE INSERT ON wiki_page_node WHEN (SELECT slug FROM wiki_pages WHERE id = NEW.page_id) = 'rag' BEGIN SELECT RAISE(ABORT, 'boom'); END;`);
+  const { doc, r } = await ingestWith(db, '资料', planP([{ slug: 'rag', kind: 'concept', title: 'RAG', ords: [0], path: ['坏领域', '坏主题'] }]), ['rag']);
   assert.ok(getPage(db, 'rag'));
   assert.ok(getPage(db, `src-${doc}`));
-  assert.equal(getOp(db, 1)?.status, 'done');
-  assert.match(r.note, /个页面未能分类/);
+  assert.equal(getOp(db, r.opId)?.status, 'done');
+  assert.match(r.note, /1 个页面未能分类/);
+  assert.equal(nodeOf(db, 'rag'), undefined);
+  assert.equal(n(db, "SELECT count(*) AS n FROM wiki_nodes WHERE title IN ('坏领域', '坏主题')"), 0, '失败页面刚建的节点被回滚');
+  assert.equal(nodeOf(db, `src-${doc}`), '资料摘要', '其他页面不受影响');
   done();
 });
 
-test('ingestDoc 分类：落位整体抛错时回滚这一步，页面与摄入结果不受影响，也不留下半个节点', async () => {
+// 外层兜底：placeIngested 逐页 catch 之外的代码抛错时，回滚整个落位，全部记为未能分类。
+// 规划阶段的 renderTree 走 listNodes（不读 wiki_page_node.manual），落位开头的 pageNodes 才读它：
+// 把 manual 换成一个读取时出错的视图列，只让 pageNodes 失败
+test('ingestDoc 分类：落位整体抛错 → 回滚整个落位（含系统节点），页面与摄入结果不受影响', async () => {
   const { db, done } = tmpWikiDb();
-  // 让每次 INSERT INTO wiki_nodes 之后的下一步必然失败：节点能建出来，但读 wiki_pages 的触发器式失败改由丢表模拟
-  db.exec(`CREATE TRIGGER boom BEFORE INSERT ON wiki_page_node BEGIN SELECT RAISE(ABORT, 'boom'); END;`);
+  db.exec('DROP TABLE wiki_page_node; CREATE VIEW wiki_page_node AS SELECT 1 AS page_id, 1 AS node_id, abs(-9223372036854775807 - 1) AS manual WHERE 0 = 0 UNION ALL SELECT 0, 0, 0 WHERE 0;');
   const { doc, r } = await ingestWith(db, '资料', planP([{ slug: 'rag', kind: 'concept', title: 'RAG', ords: [0], path: ['Agent'] }]), ['rag']);
   assert.ok(getPage(db, 'rag'));
   assert.ok(getPage(db, `src-${doc}`));
-  assert.match(r.note, /个页面未能分类/);
-  assert.equal(n(db, 'SELECT count(*) AS n FROM wiki_page_node'), 0);
+  assert.equal(getOp(db, r.opId)?.status, 'done');
+  assert.match(r.note, /2 个页面未能分类/, '摘要页 + rag 页都记为未能分类');
+  assert.equal(n(db, 'SELECT count(*) AS n FROM wiki_nodes'), 0, '整个落位被回滚，没有残留节点');
   done();
+});
+
+test('planPrompt：分类树放在 user 消息里（不在 system），system 里要求 path；默认是占位文本', () => {
+  const doc = { id: 7, title: '资料' };
+  const withTree = planPrompt(doc, '正文', [], false, '- Agent 开发\n  - 记忆');
+  const sys = withTree.filter((m) => m.role === 'system').map((m) => String(m.content)).join('\n');
+  const usr = withTree.filter((m) => m.role === 'user').map((m) => String(m.content)).join('\n');
+  assert.match(usr, /现有分类树：\n- Agent 开发\n {2}- 记忆/);
+  assert.ok(!sys.includes('Agent 开发'), '分类树内容不进 system');
+  assert.match(sys, /"path":\["领域","主题"\]/);
+  assert.match(sys, /名称里不要出现 \/ 或 >/);
+  assert.match(planPrompt(doc, '正文', [], false).map((m) => String(m.content)).join('\n'), /现有分类树：\n（还没有分类）/);
+});
+
+test('ingestDoc 分类：带 path 与不带 path 的摄入，模型调用次数相同', async () => {
+  const a = tmpWikiDb();
+  const withPath = await ingestWith(a.db, '资料', planP([{ slug: 'rag', kind: 'concept', title: 'RAG', ords: [0], path: ['甲', '乙'] }]), ['rag']);
+  const b = tmpWikiDb();
+  const noPath = await ingestWith(b.db, '资料', planP([{ slug: 'rag', kind: 'concept', title: 'RAG', ords: [0] }]), ['rag']);
+  assert.equal(withPath.r.llmCalls, noPath.r.llmCalls);
+  assert.equal(withPath.llm.calls.length, noPath.llm.calls.length);
+  a.done();
+  b.done();
 });
