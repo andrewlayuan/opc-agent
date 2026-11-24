@@ -8,10 +8,12 @@ import { askWiki, saveAnswer } from '../../packs/wiki/ask.ts';
 import type { WikiAssets } from '../../packs/wiki/assets.ts';
 import { lineDiff } from '../../packs/wiki/diff.ts';
 import { exportWiki, parseScope } from '../../packs/wiki/export.ts';
+import { revertOrganize } from '../../packs/wiki/organize.ts';
 import { slugify } from '../../packs/wiki/parse.ts';
 import type { WikiQueue } from '../../packs/wiki/queue.ts';
 import { restorePage, revertOp } from '../../packs/wiki/revert.ts';
 import { pageTopics } from '../../packs/wiki/topics.ts';
+import { createNode, deleteNode, listNodes, pageNodes, placePage, renameNode } from '../../packs/wiki/tree.ts';
 import { createOp, finishOp, getOp, getPage, getPageRow, getRevision, listOps, listPages, listRevisions, tx, writePages } from '../../packs/wiki/store.ts';
 import { WIKI_LIMITS, WikiError, isPageKind } from '../../packs/wiki/types.ts';
 import { HttpError, contentDisposition, readBodyToFile, readJson, sendJson } from './http.ts';
@@ -36,6 +38,13 @@ function idOf(s: string): number {
   const id = Number(s);
   if (!Number.isSafeInteger(id) || id <= 0) throw new HttpError(400, '非法 id');
   return id;
+}
+
+/** body 里的节点 id：null 表示「无」，否则必须是正整数 */
+function nullableId(v: unknown, name: string): number | null {
+  if (v === null) return null;
+  if (typeof v !== 'number' || !Number.isSafeInteger(v) || v <= 0) throw new HttpError(400, `${name} 不合法`);
+  return v;
 }
 
 /** 路径或查询中的 slug：解码后必须已经是规范形式，否则 400 */
@@ -197,11 +206,12 @@ async function route(deps: WikiApiDeps, req: http.IncomingMessage, res: http.Ser
     const kind = q.get('kind') || undefined;
     if (kind !== undefined && !isPageKind(kind)) throw new HttpError(400, '页面类型不合法');
     const { topics, of } = pageTopics(db);
-    const pages = listPages(db, { kind, q: (q.get('q') ?? '').slice(0, 200) }).map((p) => ({ ...p, topic: of.get(p.slug) ?? null }));
-    sendJson(res, 200, { pages, topics });
+    const placed = pageNodes(db);
+    const pages = listPages(db, { kind, q: (q.get('q') ?? '').slice(0, 200) }).map((p) => ({ ...p, topic: of.get(p.slug) ?? null, node_id: placed.get(p.id)?.node_id ?? null }));
+    sendJson(res, 200, { pages, topics, nodes: listNodes(db) });
     return true;
   }
-  let m = p.match(/^\/api\/wiki\/pages\/([^/]+)(?:\/(generate|revisions|restore))?$/);
+  let m = p.match(/^\/api\/wiki\/pages\/([^/]+)(?:\/(generate|revisions|restore|node))?$/);
   if (m) {
     const slug = slugParam(m[1]);
     const sub = m[2];
@@ -235,6 +245,19 @@ async function route(deps: WikiApiDeps, req: http.IncomingMessage, res: http.Ser
       sendJson(res, 200, { revision, diff, rev: page.rev });
       return true;
     }
+    if (sub === 'node' && method === 'PUT') {
+      const body = await readJson(req, BODY_SMALL);
+      if (!('nodeId' in body)) throw new HttpError(400, 'nodeId 不合法');
+      const nodeId = nullableId(body.nodeId, 'nodeId');
+      tx(db, () => {
+        const page = getPageRow(db, slug);
+        if (!page || page.deleted) throw new HttpError(404, '页面不存在');
+        if (nodeId != null && !db.prepare('SELECT 1 FROM wiki_nodes WHERE id = ?').get(nodeId)) throw new HttpError(404, '节点不存在');
+        placePage(db, page.id, nodeId, { manual: true });
+      });
+      sendJson(res, 200, { ok: true });
+      return true;
+    }
     if (sub === 'restore' && method === 'POST') {
       const body = await readJson(req, BODY_SMALL);
       if (!Number.isSafeInteger(body.rev) || (body.rev as number) <= 0) throw new HttpError(400, '版本号不合法');
@@ -242,6 +265,34 @@ async function route(deps: WikiApiDeps, req: http.IncomingMessage, res: http.Ser
       return true;
     }
     return false;
+  }
+
+  m = p.match(/^\/api\/wiki\/nodes(?:\/(\d+))?$/);
+  if (m) {
+    if (!m[1] && method === 'POST') {
+      const body = await readJson(req, BODY_SMALL);
+      const parentId = nullableId(body.parentId, 'parentId');
+      sendJson(res, 201, { id: tx(db, () => createNode(db, body.title, parentId)) });
+      return true;
+    }
+    if (m[1] && method === 'PATCH') {
+      const body = await readJson(req, BODY_SMALL);
+      tx(db, () => renameNode(db, idOf(m![1]), body.title));
+      sendJson(res, 200, { ok: true });
+      return true;
+    }
+    if (m[1] && method === 'DELETE') {
+      tx(db, () => deleteNode(db, idOf(m![1])));
+      sendJson(res, 200, { ok: true });
+      return true;
+    }
+    return false;
+  }
+  if (p === '/api/wiki/organize' && method === 'POST') {
+    const opId = queue.enqueueOrganize();
+    queue.kick();
+    sendJson(res, 202, { opId });
+    return true;
   }
 
   if (p === '/api/wiki/assets' && method === 'POST') {
@@ -290,7 +341,14 @@ async function route(deps: WikiApiDeps, req: http.IncomingMessage, res: http.Ser
     return true;
   }
   if (p === '/api/wiki/status' && method === 'GET') {
-    sendJson(res, 200, { ...queue.status(), docs: Object.fromEntries(queue.docStates()) });
+    const unplaced = Number(
+      (
+        db
+          .prepare("SELECT count(*) AS n FROM wiki_pages p WHERE p.deleted = 0 AND p.kind NOT IN ('source', 'answer') AND NOT EXISTS (SELECT 1 FROM wiki_page_node pn WHERE pn.page_id = p.id)")
+          .get() as { n: number }
+      ).n,
+    );
+    sendJson(res, 200, { ...queue.status(), unplaced, docs: Object.fromEntries(queue.docStates()) });
     return true;
   }
   m = p.match(/^\/api\/wiki\/ingest\/(\d+)$/);
@@ -328,6 +386,10 @@ async function route(deps: WikiApiDeps, req: http.IncomingMessage, res: http.Ser
     }
     if (m[2] === 'revert' && method === 'POST') {
       const body = await readJson(req, BODY_SMALL);
+      if (getOp(db, id)?.kind === 'organize') {
+        sendJson(res, 200, revertOrganize(db, id));
+        return true;
+      }
       const r = revertOp(db, id, { force: body.force === true });
       if (r.conflicts.length) sendJson(res, 409, { error: '部分页面已被后来的操作修改', conflicts: r.conflicts });
       else sendJson(res, 200, { revertOp: r.revertOp });

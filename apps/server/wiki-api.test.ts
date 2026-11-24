@@ -7,6 +7,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { WikiAssets } from '../../packs/wiki/assets.ts';
 import { WikiQueue } from '../../packs/wiki/queue.ts';
+import { organize } from '../../packs/wiki/organize.ts';
 import { createOp, finishOp } from '../../packs/wiki/store.ts';
 import { seedDoc, stubLlm, tmpWikiDb } from '../../packs/wiki/testutil.ts';
 import { HttpError, sendJson } from './http.ts';
@@ -220,6 +221,121 @@ test('GET /pages 每页带 topic 并返回主题列表；GET /pages/:slug 带所
     assert.deepEqual(t, { hub: 'hub', tuya: 'hub', lone: null });
     assert.deepEqual((await s.call('GET', '/api/wiki/pages/tuya')).data.page.topic, { slug: 'hub', title: '音箱总览' });
     assert.equal((await s.call('GET', '/api/wiki/pages/lone')).data.page.topic, null);
+  } finally {
+    await s.close();
+  }
+});
+
+const put = (s: Awaited<ReturnType<typeof setup>>, slug: string, kind = 'concept') =>
+  s.call('PUT', `/api/wiki/pages/${slug}`, { title: slug.toUpperCase(), summary: '', body: 'x', baseRev: 0, kind });
+
+test('分类树：GET /pages 带 node_id 与 nodes（own/total）；PUT /pages/:slug/node 移动并置 manual', async () => {
+  const s = await setup();
+  try {
+    await put(s, 'a');
+    await put(s, 'b');
+    const top = await s.call('POST', '/api/wiki/nodes', { title: '领域', parentId: null });
+    assert.equal(top.status, 201, JSON.stringify(top.data));
+    const sub = await s.call('POST', '/api/wiki/nodes', { title: '主题', parentId: top.data.id });
+    assert.equal((await s.call('PUT', '/api/wiki/pages/a/node', { nodeId: sub.data.id })).data.ok, true);
+    assert.equal((await s.call('PUT', '/api/wiki/pages/b/node', { nodeId: top.data.id })).status, 200);
+    const l = await s.call('GET', '/api/wiki/pages');
+    const nid = Object.fromEntries(l.data.pages.map((p: { slug: string; node_id: number | null }) => [p.slug, p.node_id]));
+    assert.deepEqual(nid, { a: sub.data.id, b: top.data.id });
+    const n = Object.fromEntries(l.data.nodes.map((x: { id: number }) => [x.id, x]));
+    assert.deepEqual([n[top.data.id].own, n[top.data.id].total, n[sub.data.id].own, n[sub.data.id].total], [1, 2, 1, 1]);
+    assert.equal(n[sub.data.id].parent_id, top.data.id);
+    assert.equal(s.db.prepare('SELECT manual FROM wiki_page_node WHERE node_id = ?').get(sub.data.id)!.manual, 1);
+    assert.equal((await s.call('PUT', '/api/wiki/pages/a/node', { nodeId: null })).status, 200);
+    assert.equal((await s.call('GET', '/api/wiki/pages')).data.pages.find((p: { slug: string }) => p.slug === 'a').node_id, null);
+  } finally {
+    await s.close();
+  }
+});
+
+test('分类树：PUT node 页面不存在 / 节点不存在 404，nodeId 非法 400', async () => {
+  const s = await setup();
+  try {
+    await put(s, 'a');
+    const top = await s.call('POST', '/api/wiki/nodes', { title: '领域', parentId: null });
+    assert.equal((await s.call('PUT', '/api/wiki/pages/nope/node', { nodeId: top.data.id })).status, 404);
+    assert.equal((await s.call('PUT', '/api/wiki/pages/a/node', { nodeId: 999 })).status, 404);
+    assert.equal((await s.call('PUT', '/api/wiki/pages/a/node', { nodeId: 'x' })).status, 400);
+    assert.equal((await s.call('PUT', '/api/wiki/pages/a/node', {})).status, 400);
+    assert.equal((await s.call('PUT', '/api/wiki/pages/a/node', { nodeId: 0 })).status, 400);
+    assert.equal(s.db.prepare('SELECT count(*) AS n FROM wiki_page_node').get()!.n, 0);
+  } finally {
+    await s.close();
+  }
+});
+
+test('分类树：POST / PATCH / DELETE nodes 的成功与 400 / 404 / 409', async () => {
+  const s = await setup();
+  try {
+    const a = await s.call('POST', '/api/wiki/nodes', { title: '甲', parentId: null });
+    assert.equal((await s.call('POST', '/api/wiki/nodes', { title: '甲', parentId: null })).status, 409);
+    assert.equal((await s.call('POST', '/api/wiki/nodes', { title: '  ', parentId: null })).status, 400);
+    assert.equal((await s.call('POST', '/api/wiki/nodes', { title: '乙', parentId: 999 })).status, 404);
+    assert.equal((await s.call('POST', '/api/wiki/nodes', { title: '乙', parentId: 'x' })).status, 400);
+    assert.equal((await s.call('POST', '/api/wiki/nodes', { title: '乙' })).status, 400);
+    const b = await s.call('POST', '/api/wiki/nodes', { title: '乙', parentId: a.data.id });
+    const c = await s.call('POST', '/api/wiki/nodes', { title: '丙', parentId: b.data.id });
+    assert.equal((await s.call('POST', '/api/wiki/nodes', { title: '丁', parentId: c.data.id })).status, 400, '第 4 层');
+    assert.equal((await s.call('PATCH', `/api/wiki/nodes/${b.data.id}`, { title: '乙2' })).data.ok, true);
+    assert.equal((await s.call('PATCH', `/api/wiki/nodes/${b.data.id}`, { title: '' })).status, 400);
+    assert.equal((await s.call('PATCH', '/api/wiki/nodes/999', { title: 'x' })).status, 404);
+    assert.equal((await s.call('DELETE', `/api/wiki/nodes/${a.data.id}`)).status, 409, '有子节点');
+    assert.equal((await s.call('DELETE', `/api/wiki/nodes/${c.data.id}`)).data.ok, true);
+    assert.equal((await s.call('DELETE', `/api/wiki/nodes/${c.data.id}`)).status, 404);
+    assert.equal((await s.call('DELETE', '/api/wiki/nodes')).status, 404);
+  } finally {
+    await s.close();
+  }
+});
+
+test('分类树：POST /organize 返回 202 并去重；status.unplaced 随分类变化（source / answer / 已删除不计）', async () => {
+  const s = await setup();
+  try {
+    await put(s, 'a');
+    await put(s, 'b');
+    await put(s, 'src-1', 'source');
+    await put(s, 'q-1', 'answer');
+    assert.equal((await s.call('GET', '/api/wiki/status')).data.unplaced, 2);
+    const top = await s.call('POST', '/api/wiki/nodes', { title: '领域', parentId: null });
+    await s.call('PUT', '/api/wiki/pages/a/node', { nodeId: top.data.id });
+    assert.equal((await s.call('GET', '/api/wiki/status')).data.unplaced, 1);
+    s.db.prepare("UPDATE wiki_pages SET deleted = 1 WHERE slug = 'b'").run();
+    assert.equal((await s.call('GET', '/api/wiki/status')).data.unplaced, 0);
+    const o1 = await s.call('POST', '/api/wiki/organize');
+    assert.equal(o1.status, 202);
+    const o2 = await s.call('POST', '/api/wiki/organize');
+    assert.equal(o2.data.opId, o1.data.opId);
+    assert.equal(s.db.prepare("SELECT kind FROM wiki_ops WHERE id = ?").get(o1.data.opId)!.kind, 'organize');
+  } finally {
+    await s.close();
+  }
+});
+
+test('分类树：revert 对 organize 操作恢复分类；对不可撤销操作 400', async () => {
+  const s = await setup();
+  try {
+    await put(s, 'rag');
+    const before = (await s.call('GET', '/api/wiki/pages')).data;
+    const op = createOp(s.db, 'organize', { status: 'running' });
+    const llm = stubLlm([JSON.stringify({ nodes: [{ path: ['Agent', '检索'], pages: ['rag'] }] })]);
+    await organize(s.db, llm, op);
+    assert.equal((await s.call('GET', '/api/wiki/pages')).data.nodes.length, 2);
+    const r = await s.call('POST', `/api/wiki/ops/${op}/revert`, {});
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.ok(r.data.revertOp > op);
+    const after = (await s.call('GET', '/api/wiki/pages')).data;
+    assert.deepEqual(after.nodes, before.nodes);
+    assert.equal(after.pages[0].node_id, null);
+    assert.equal((await s.call('POST', `/api/wiki/ops/${op}/revert`, {})).status, 400, '已撤销');
+    const lint = createOp(s.db, 'lint', { status: 'running' });
+    finishOp(s.db, lint, { status: 'done' });
+    assert.equal((await s.call('POST', `/api/wiki/ops/${lint}/revert`, {})).status, 400);
+    assert.equal((await s.call('POST', '/api/wiki/ops/999/revert', {})).status, 404);
   } finally {
     await s.close();
   }
