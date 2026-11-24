@@ -121,7 +121,7 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
       organizing
         ? h('span', { class: 'muted', text: '正在整理目录…' })
         : un > 0
-          ? [h('span', { class: 'muted', text: `有 ${un} 个页面还没有分类` }), h('button', { type: 'button', class: 'ghost', text: '整理目录', onclick: organizeNow })]
+          ? [h('span', { class: 'muted', text: `有 ${un} 个页面还没有分类` }), h('button', { type: 'button', class: 'ghost', text: '整理目录', disabled: s.enabled ? false : true, title: s.enabled ? undefined : '未配置模型', onclick: organizeNow })]
           : null,
     );
   }
@@ -224,9 +224,11 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     return { byId, kids, chain, path };
   }
 
+  let loadSeq = 0;
   async function loadPages() {
+    const mine = ++loadSeq;
     const data = await act(() => api(`/api/wiki/pages${st.q ? `?q=${enc(st.q)}` : ''}`));
-    if (!data || !st.el) return;
+    if (!data || !st.el || mine !== loadSeq) return;
     st.data = data;
     renderList();
   }
@@ -234,11 +236,11 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
   function renderList() {
     const data = st.data;
     if (!data || !st.el) return;
-    if (!data.pages.length) {
+    const nodes = data.nodes ?? [];
+    if (!data.pages.length && (st.q || !nodes.length)) {
       put(st.el.list, h('p', { class: 'muted wiki-empty-side', text: st.q ? '没有找到相关页面' : '还没有页面' }));
       return;
     }
-    const nodes = data.nodes ?? [];
     if (st.q) return renderFlat(data, nodes);
     if (!nodes.length) {
       put(st.el.list, ...pageGroups(data).map(([label, ps]) => h('div', { class: 'wiki-group' }, h('div', { class: 'wiki-group-title' }, h('span', { class: 'wiki-group-name', text: label, title: label }), h('span', { class: 'kb-count', text: String(ps.length) })), h('ul', {}, ps.map(pageItem)))));
@@ -335,16 +337,16 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     if (t == null || !t.trim() || t.trim() === n.title) return;
     await act(async () => {
       await api(`/api/wiki/nodes/${n.id}`, { method: 'PATCH', body: { title: t } });
-      await loadPages();
     });
+    await loadPages();
   }
 
   async function removeNode(n) {
     if (!confirm(`删除「${n.title}」？只有空节点可以删除。`)) return;
     await act(async () => {
       await api(`/api/wiki/nodes/${n.id}`, { method: 'DELETE' });
-      await loadPages();
     });
+    await loadPages();
   }
 
   async function organizeNow() {
@@ -372,11 +374,13 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     sel.value = page.node_id != null && ix.byId.has(page.node_id) ? String(page.node_id) : '';
     sel.addEventListener('change', async () => {
       const nodeId = sel.value ? Number(sel.value) : null;
-      await act(async () => {
+      const ok = await act(async () => {
         await api(`${pageUrl(page.slug)}/node`, { method: 'PUT', body: { nodeId } });
         toast('已移动');
         await openPage(page.slug);
+        return true;
       });
+      if (!ok) sel.value = page.node_id != null && ix.byId.has(page.node_id) ? String(page.node_id) : '';
     });
     const path = page.node_id != null ? ix.path(page.node_id) : [];
     return {
@@ -1007,7 +1011,7 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
           'span',
           { class: 'wiki-op-acts' },
           h('button', { type: 'button', class: 'link', text: '详情', onclick: expand }),
-          REVERTABLE.has(op.kind) && op.status === 'done' ? h('button', { type: 'button', class: 'link', text: '撤销', onclick: () => revert(false) }) : null,
+          REVERTABLE.has(op.kind) && op.status === 'done' && !(op.kind === 'organize' && !op.pages.length && /^没有需要整理/.test(op.note || '')) ? h('button', { type: 'button', class: 'link', text: '撤销', onclick: () => revert(false) }) : null,
           op.status === 'error' ? h('button', { type: 'button', class: 'link', text: '重试', onclick: retry }) : null,
         ),
       ),

@@ -779,9 +779,9 @@ button.wiki-home.on { background: var(--soft); color: var(--fg); font-weight: 60
 button.link.wiki-topic:hover { text-decoration: underline; color: var(--accent); }
 
 /* 分类树：嵌套列表 + 折叠箭头；页面行沿用 .wiki-group 的外观 */
-.wiki-tree ul, .wiki-flat, .wiki-node-pages, .wiki-node-kids { list-style: none; margin: 0; padding: 0; }
+.wiki-flat, .wiki-node-pages, .wiki-node-kids { list-style: none; margin: 0; padding: 0; }
 .wiki-tree { list-style: none; margin: 12px 0 0; padding: 0; }
-.wiki-node-kids, .wiki-node-pages { margin-left: 12px; padding-left: 6px; border-left: 1px solid var(--line); }
+.wiki-tree .wiki-node-kids, .wiki-tree .wiki-node-pages { margin-left: 12px; padding-left: 6px; border-left: 1px solid var(--line); }
 .wiki-node-row { display: flex; align-items: center; gap: 4px; padding: 3px 4px; border-radius: 6px; color: var(--fg); font-size: 12.5px; font-weight: 600; }
 .wiki-node-row:hover, .wiki-node-row:focus-within { background: var(--soft); }
 .wiki-twisty { flex: none; width: 18px; height: 18px; padding: 0; border: 0; background: none; color: var(--muted); font-size: 11px; line-height: 1; cursor: pointer; }
@@ -791,6 +791,7 @@ button.link.wiki-topic:hover { text-decoration: underline; color: var(--accent);
 .wiki-node-row:hover .wiki-node-acts, .wiki-node-row:focus-within .wiki-node-acts { display: inline-flex; }
 .wiki-node-act { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--muted); font-size: 12px; line-height: 1; cursor: pointer; }
 .wiki-node-act:hover { background: var(--line); color: var(--fg); }
+@media (hover: none), (max-width: 720px) { .wiki-node-acts { display: inline-flex; } }
 .wiki-tree li li a.wiki-item, .wiki-flat li a.wiki-item, .wiki-unplaced li a.wiki-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; color: var(--muted); line-height: 1.5; overflow: hidden; white-space: nowrap; }
 .wiki-tree li li a.wiki-item:hover, .wiki-flat li a.wiki-item:hover { background: var(--soft); color: var(--fg); }
 .wiki-tree li.on > a.wiki-item, .wiki-flat li.on > a.wiki-item { background: var(--soft); color: var(--fg); font-weight: 600; box-shadow: inset 2px 0 0 var(--accent); }

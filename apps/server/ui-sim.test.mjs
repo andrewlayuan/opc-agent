@@ -1791,6 +1791,9 @@ console.log('✓ 知识库网页条目：预览/文字标签与沙箱 iframe');
   await tick();
   assert.ok(calls.some((c) => c.method === 'POST' && c.url === '/api/wiki/organize'));
   assert.match($('toast').textContent, /已开始整理/);
+  routes['GET /api/wiki/status'] = { queued: 0, running: null, usedToday: 1, limit: 200, enabled: false, lastLint: null, unplaced: 1, docs: {} };
+  await reopen();
+  assert.equal(els().find((el) => el.tagName === 'BUTTON' && el.textContent === '整理目录').attrs.disabled, '', '未配置模型时整理按钮不可点');
   routes['GET /api/wiki/status'] = { queued: 0, running: null, usedToday: 1, limit: 200, enabled: true, lastLint: null, unplaced: 0, docs: {} };
   await reopen();
   assert.ok(!/还没有分类/.test(pane().textContent) && !els().some((el) => el.tagName === 'BUTTON' && el.textContent === '整理目录'), '没有未分类页面时不提示');
@@ -1801,12 +1804,26 @@ console.log('✓ 知识库网页条目：预览/文字标签与沙箱 iframe');
   await tick();
   assert.match($('kb-pane-lint').textContent, /整理目录/);
   const lintBtn = (t) => walk($('kb-pane-lint')).find((el) => el.tagName === 'BUTTON' && el.textContent === t);
+  routes['GET /api/wiki/ops'] = { ops: [{ id: 92, kind: 'organize', doc_id: null, doc_title: null, status: 'done', pages: [], note: '没有需要整理的页面', error: null, llm_calls: 0, created_at: now, finished_at: now, target_op: null }] };
+  await kbTab('资料').fire('click');
+  await kbTab('体检与日志').fire('click');
+  await tick();
+  assert.ok(!lintBtn('撤销'), '没有快照的整理操作不显示撤销');
+  routes['GET /api/wiki/ops'] = { ops: [{ id: 90, kind: 'organize', doc_id: null, doc_title: null, status: 'done', pages: [], note: '整理 2 个页面，新建 3 个节点', error: null, llm_calls: 1, created_at: now, finished_at: now, target_op: null }] };
+  await kbTab('资料').fire('click');
+  await kbTab('体检与日志').fire('click');
+  await tick();
   routes['POST /api/wiki/ops/90/revert'] = { revertOp: 91 };
   const nConf = confirms.length;
   await lintBtn('撤销').fire('click');
   await tick();
   assert.match(confirms[nConf], /整棵分类树恢复到整理之前/, '撤销整理的确认文案');
   assert.ok(calls.some((c) => c.method === 'POST' && c.url === '/api/wiki/ops/90/revert'));
+
+  // 只有节点没有页面时仍显示树
+  routes['GET /api/wiki/pages'] = { pages: [], nodes: NODES, topics: [] };
+  await reopen();
+  assert.ok(rowOf('空领域'), '没有页面时仍显示已建的节点');
 
   // 所有名称经 textContent 写入
   const EVIL = '<img src=x onerror=alert(1)>';
