@@ -591,6 +591,28 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX kb_expand_calls_at ON kb_expand_calls(at);
   `,
+  // 16：Wiki 分类树（左侧「领域 → 主题 → 页面」）。节点不是页面，没有正文和出处
+  `
+  CREATE TABLE wiki_nodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER REFERENCES wiki_nodes(id),
+    title TEXT NOT NULL,
+    sort INTEGER NOT NULL DEFAULT 0,
+    manual INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX wiki_nodes_name ON wiki_nodes(coalesce(parent_id, 0), title);
+  CREATE TABLE wiki_page_node (
+    page_id INTEGER PRIMARY KEY REFERENCES wiki_pages(id) ON DELETE CASCADE,
+    node_id INTEGER NOT NULL REFERENCES wiki_nodes(id),
+    manual INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX wiki_page_node_node ON wiki_page_node(node_id);
+  CREATE TABLE wiki_node_undo (
+    op_id INTEGER PRIMARY KEY REFERENCES wiki_ops(id),
+    snapshot TEXT NOT NULL
+  );
+  `,
 ];
 
 export type DB = DatabaseSync;

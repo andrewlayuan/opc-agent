@@ -23,7 +23,7 @@ const calls = (db: DB) => Number((db.prepare('SELECT COUNT(*) AS n FROM kb_expan
 
 test('迁移 15：kb_expand 与 kb_expand_calls 存在', () => {
   const { db, done } = setup({ seed: false });
-  assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 15);
+  assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 16);
   db.prepare("INSERT INTO kb_expand(key, terms, created_at) VALUES ('k', '[]', 1)").run();
   db.prepare('INSERT INTO kb_expand_calls(at, ok) VALUES (1, 1)').run();
   done();

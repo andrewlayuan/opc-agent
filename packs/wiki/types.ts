@@ -20,7 +20,7 @@ export const KIND_LABEL: Record<PageKind, string> = {
 };
 
 /** ask 只用来计入每日额度，不能撤销 */
-export type OpKind = 'ingest' | 'lint' | 'fix' | 'generate' | 'query_save' | 'edit' | 'restore' | 'revert' | 'ask';
+export type OpKind = 'ingest' | 'lint' | 'fix' | 'generate' | 'query_save' | 'edit' | 'restore' | 'revert' | 'ask' | 'organize';
 export type OpStatus = 'queued' | 'running' | 'done' | 'error' | 'reverted';
 
 const MB = 1024 * 1024;
@@ -47,6 +47,12 @@ export const WIKI_LIMITS = {
   chunkLimit: 100_000,
   chunkPart: 30_000,
   questionChars: 500,
+  nodes: 200,
+  nodeDepth: 3,
+  nodeTitle: 40,
+  ingestNewNodes: 5,
+  organizeBatch: 100,
+  organizeCalls: 10,
 };
 
 export const isPageKind = (v: unknown): v is PageKind => typeof v === 'string' && (PAGE_KINDS as readonly string[]).includes(v);

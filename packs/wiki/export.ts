@@ -197,6 +197,7 @@ const OP_LABEL: Record<OpKind, string> = {
   restore: '恢复版本',
   revert: '撤销',
   ask: '提问',
+  organize: '整理目录',
 };
 const STATUS_LABEL: Record<OpStatus, string> = { queued: '排队中', running: '进行中', done: '完成', error: '失败', reverted: '已撤销' };
 const pad = (n: number) => String(n).padStart(2, '0');
