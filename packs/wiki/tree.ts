@@ -273,3 +273,70 @@ export function placeIngested(
   }
   return { placed, failed };
 }
+
+// ---------------- 内存里的虚拟树（整理目录用） ----------------
+
+/**
+ * 与 ensurePath 规则一致的纯内存分类树：整理目录要在模型调用期间（可能几分钟）让下一批看到已形成的树，
+ * 但数据库事务不能跨 await 打开（会让别的请求的 BEGIN 报错），所以先在内存里算，全部算完再一次性写库
+ */
+export class VirtualTree {
+  /** 负数 id 表示尚未入库的新节点 */
+  private rows: { id: number; parent_id: number | null; title: string; manual: boolean }[];
+  private next = -1;
+
+  constructor(db: DB) {
+    this.rows = allRows(db).map((r) => ({ id: r.id, parent_id: r.parent_id, title: r.title, manual: r.manual === 1 }));
+  }
+
+  get size(): number {
+    return this.rows.length;
+  }
+
+  /** 与 ensurePath 相同的匹配与新建规则；返回最深一层的 id，一层都放不下返回 null */
+  ensure(path: string[]): number | null {
+    let parent: number | null = null;
+    let hit: number | null = null;
+    for (const name of path.map(cleanNodeTitle).filter(Boolean).slice(0, WIKI_LIMITS.nodeDepth)) {
+      const found = this.rows.find((r) => r.parent_id === parent && key(r.title) === key(name));
+      if (found) {
+        parent = hit = found.id;
+        continue;
+      }
+      if (this.rows.length >= WIKI_LIMITS.nodes) return hit;
+      const id = this.next--;
+      this.rows.push({ id, parent_id: parent, title: name, manual: false });
+      parent = hit = id;
+    }
+    return hit;
+  }
+
+  /** 节点的路径文本（层名经 fence），用于提示词 */
+  pathOf(id: number): string {
+    const out: string[] = [];
+    for (let cur: number | null = id, g = 0; cur != null && g < 10; cur = this.rows.find((r) => r.id === cur)?.parent_id ?? null, g++) {
+      out.unshift(fence(this.rows.find((r) => r.id === cur)?.title ?? '?'));
+    }
+    return out.join(' / ');
+  }
+
+  /** 与 renderTree 同样的缩进文本 */
+  render(): string {
+    if (!this.rows.length) return '（还没有分类）';
+    const lines: string[] = [];
+    const walk = (parent: number | null, depth: number): void => {
+      for (const n of this.rows.filter((r) => r.parent_id === parent)) {
+        if (lines.length >= WIKI_LIMITS.nodes) return;
+        lines.push(`${'  '.repeat(depth)}- ${fence(n.title)}`);
+        walk(n.id, depth + 1);
+      }
+    };
+    walk(null, 0);
+    return lines.join('\n');
+  }
+
+  /** 把一条（已清洗的）路径提交到真实表：逐层按 ensurePath 的规则匹配或新建。调用方负责在 tx() 里调用 */
+  static commit(db: DB, path: string[], now: number): number | null {
+    return ensurePath(db, path, { now });
+  }
+}
