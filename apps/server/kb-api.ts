@@ -10,6 +10,7 @@ import { suggestFolder } from '../../packs/kb/suggest.ts';
 import { KB_LIMITS, KbError } from '../../packs/kb/types.ts';
 import type { KbFiles } from '../../packs/kb/uploads.ts';
 import { EXPAND } from '../../packs/kb/expand.ts';
+import { exportKb } from '../../packs/kb/export.ts';
 import type { Expansion, KbExpander } from '../../packs/kb/expand.ts';
 import { ExtractError } from '../../packs/pm/extract.ts';
 import { decodeHtml } from '../../packs/pm/html.ts';
@@ -174,11 +175,41 @@ function suggestInput(db: DB, body: Record<string, unknown>): { title: string; t
   return { title: typeof body.title === 'string' ? body.title : '', text: typeof body.text === 'string' ? body.text : '' };
 }
 
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const today = () => {
+  const d = new Date();
+  return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`;
+};
+
+/** 导出整库：写完临时 zip 再发送，连接关闭后删除 */
+function sendExport(deps: KbApiDeps, res: http.ServerResponse): void {
+  safeRefresh(deps.db);
+  fs.mkdirSync(deps.tmpDir, { recursive: true, mode: 0o700 });
+  const r = exportKb(deps.db, deps.files, { tmpDir: deps.tmpDir });
+  res.on('close', () => fs.rm(r.file, { force: true }, () => {}));
+  res.writeHead(200, {
+    'content-type': 'application/zip',
+    'content-disposition': contentDisposition(`tianshu-kb-${today()}.zip`, false),
+    'content-length': r.bytes,
+    'cache-control': 'no-store',
+  });
+  const rs = fs.createReadStream(r.file);
+  rs.on('error', (e) => {
+    console.error('[kb] 发送导出文件失败', e);
+    res.destroy();
+  });
+  rs.pipe(res);
+}
+
 async function route(deps: KbApiDeps, req: http.IncomingMessage, res: http.ServerResponse, method: string, url: URL): Promise<boolean> {
   const { db, files } = deps;
   const p = url.pathname;
   const q = url.searchParams;
 
+  if (p === '/api/kb/export' && method === 'GET') {
+    sendExport(deps, res);
+    return true;
+  }
   if (p === '/api/kb/tree' && method === 'GET') {
     sendJson(res, 200, listFolders(db));
     return true;

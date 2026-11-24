@@ -11,6 +11,7 @@ import type { Llm } from '../../packages/core/llm.ts';
 import { createDoc } from '../../packs/kb/docs.ts';
 import type { Expansion } from '../../packs/kb/expand.ts';
 import { KbFiles } from '../../packs/kb/uploads.ts';
+import { openZip } from '../../packs/pm/zip.ts';
 import { HttpError, sendJson } from './http.ts';
 import { handleKbApi } from './kb-api.ts';
 import type { KbApiDeps } from './kb-api.ts';
@@ -103,4 +104,26 @@ test('GET /api/kb/docs?ids=：按 id 返回条目，不存在的跳过；超过 
   assert.equal((await s.call('GET', `/api/kb/docs?ids=${Array.from({ length: 101 }, (_, i) => i + 1).join(',')}`)).status, 400);
   assert.equal((await s.call('GET', '/api/kb/docs?ids=1,x')).status, 400);
   await s.close();
+});
+
+test('GET /api/kb/export：200、application/zip、文件名 tianshu-kb-YYYYMMDD.zip，发送后临时文件被删除', async () => {
+  const s = await kbServer();
+  try {
+    createDoc(s.db, { kind: 'note', title: '笔记', body: '内容' });
+    const r = await s.raw('GET', '/api/kb/export');
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-type'), 'application/zip');
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+    const d = new Date();
+    const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+    assert.match(r.headers.get('content-disposition') ?? '', new RegExp(`^attachment; .*filename\\*=UTF-8''tianshu-kb-${ymd}\\.zip$`));
+    const zip = openZip(Buffer.from(await r.arrayBuffer()));
+    assert.equal(zip.read('笔记.md').toString('utf8'), '# 笔记\n\n内容\n');
+    assert.ok(zip.has('清单.csv'));
+    for (let i = 0; i < 50 && fs.readdirSync(s.deps.tmpDir).length; i++) await new Promise((x) => setTimeout(x, 20));
+    assert.deepEqual(fs.readdirSync(s.deps.tmpDir), []);
+    assert.equal((await s.raw('POST', '/api/kb/export')).status, 404, '只接受 GET');
+  } finally {
+    await s.close();
+  }
 });
