@@ -289,10 +289,6 @@ export class VirtualTree {
     this.rows = allRows(db).map((r) => ({ id: r.id, parent_id: r.parent_id, title: r.title, manual: r.manual === 1 }));
   }
 
-  get size(): number {
-    return this.rows.length;
-  }
-
   /** 与 ensurePath 相同的匹配与新建规则；返回最深一层的 id，一层都放不下返回 null */
   ensure(path: string[]): number | null {
     let parent: number | null = null;

@@ -260,6 +260,9 @@ test('分类树：PUT node 页面不存在 / 节点不存在 404，nodeId 非法
     const top = await s.call('POST', '/api/wiki/nodes', { title: '领域', parentId: null });
     assert.equal((await s.call('PUT', '/api/wiki/pages/nope/node', { nodeId: top.data.id })).status, 404);
     assert.equal((await s.call('PUT', '/api/wiki/pages/a/node', { nodeId: 999 })).status, 404);
+    s.db.prepare("UPDATE wiki_pages SET deleted = 1 WHERE slug = 'a'").run();
+    assert.equal((await s.call('PUT', '/api/wiki/pages/a/node', { nodeId: top.data.id })).status, 404, '已删除页面');
+    s.db.prepare("UPDATE wiki_pages SET deleted = 0 WHERE slug = 'a'").run();
     assert.equal((await s.call('PUT', '/api/wiki/pages/a/node', { nodeId: 'x' })).status, 400);
     assert.equal((await s.call('PUT', '/api/wiki/pages/a/node', {})).status, 400);
     assert.equal((await s.call('PUT', '/api/wiki/pages/a/node', { nodeId: 0 })).status, 400);
