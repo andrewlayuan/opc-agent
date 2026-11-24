@@ -7,6 +7,7 @@ import type { Clock } from '../memory/consolidate.ts';
 import { docHash, generatePage, ingestDoc } from './ingest.ts';
 import type { IngestResult } from './ingest.ts';
 import { runLint } from './lint.ts';
+import { organize } from './organize.ts';
 import { createOp, finishOp, getOp, startOp } from './store.ts';
 import { WIKI_LIMITS, WikiError } from './types.ts';
 
@@ -14,6 +15,7 @@ type Runner = {
   ingest: (llm: Llm, opId: number, docId: number) => Promise<IngestResult>;
   lint: (llm: Llm, opId: number) => Promise<{ llmCalls: number }>;
   generate: (llm: Llm, opId: number, slug: string) => Promise<IngestResult>;
+  organize: (llm: Llm, opId: number) => Promise<{ llmCalls: number; note: string }>;
 };
 
 export type DocState = 'none' | 'queued' | 'running' | 'done' | 'error' | 'reverted';
@@ -76,6 +78,7 @@ export class WikiQueue {
       ingest: (l, op, doc) => ingestDoc(db, l, op, doc),
       lint: (l, op) => runLint(db, l, op),
       generate: (l, op, slug) => generatePage(db, l, op, slug),
+      organize: (l, op) => organize(db, l, op),
     };
   }
 
@@ -187,6 +190,12 @@ export class WikiQueue {
     return r ? Number(r.id) : createOp(this.db, 'lint', { now: this.clock.now() });
   }
 
+  /** 整理目录结构：已有排队或进行中的整理时返回它，不重复入队 */
+  enqueueOrganize(): number {
+    const r = this.db.prepare("SELECT id FROM wiki_ops WHERE kind = 'organize' AND status IN ('queued', 'running') LIMIT 1").get() as { id: number } | undefined;
+    return r ? Number(r.id) : createOp(this.db, 'organize', { now: this.clock.now() });
+  }
+
   /** 缺页生成：页面名暂存在 note 里，执行时读取 */
   enqueueGenerate(slug: string): number {
     const r = this.db.prepare("SELECT id FROM wiki_ops WHERE kind = 'generate' AND note = ? AND status IN ('queued', 'running') LIMIT 1").get(slug) as { id: number } | undefined;
@@ -202,6 +211,7 @@ export class WikiQueue {
     if (op.status !== 'error') throw new WikiError(400, '只能重试失败的操作');
     if (op.kind === 'ingest' && op.doc_id != null) return this.enqueueIngest(op.doc_id, { manual: true });
     if (op.kind === 'lint') return this.enqueueLint();
+    if (op.kind === 'organize') return this.enqueueOrganize();
     if (op.kind === 'generate' && op.note) return this.enqueueGenerate(op.note);
     throw new WikiError(400, '该操作不能重试');
   }
@@ -220,6 +230,7 @@ export class WikiQueue {
         if (op.kind === 'ingest' && op.doc_id != null) await this.run.ingest(llm, op.id, op.doc_id);
         else if (op.kind === 'lint') await this.run.lint(llm, op.id);
         else if (op.kind === 'generate') await this.run.generate(llm, op.id, op.note);
+        else if (op.kind === 'organize') await this.run.organize(llm, op.id);
         else throw new WikiError(400, '未知的任务类型');
       } catch (e) {
         const msg = (e as Error).message || String(e);

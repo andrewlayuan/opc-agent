@@ -126,3 +126,24 @@ export function gapPrompt(overviews: { title: string; summary: string }[], missi
     },
   ];
 }
+
+export function organizePrompt(
+  pages: { slug: string; kind: string; title: string; summary: string }[],
+  tree: string,
+  fixed: string,
+): ChatMessage[] {
+  return [
+    sys(
+      '任务：给 Wiki 页面分类，决定每个页面在左侧「分类树」里的位置。分类树最多 3 层，从大领域到具体主题；优先沿用「现有分类树」里已有的名称，没有合适的才新起一个，名称简短（不超过 40 字，不要出现 / 或 >）。' +
+        '同一个主题下的页面尽量放在一起，不要为单个页面单独建一层；每个页面只出现一次；只能使用下面给出的 slug。' +
+        '「已固定的页面」是用户手动放好的，不要移动，只作为判断结构的参考。' +
+        '只输出 JSON：{"nodes":[{"path":["领域","主题"],"pages":["slug", …]}]}',
+    ),
+    {
+      role: 'user',
+      content: `现有分类树：\n${tree}\n\n已固定的页面（slug → 路径）：\n${fixed || '（无）'}\n\n待分类的页面（slug | 类型 | 标题：摘要）：\n${pages
+        .map((p) => `- ${p.slug} | ${p.kind} | ${fence(p.title)}：${fence(p.summary)}`)
+        .join('\n')}`,
+    },
+  ];
+}

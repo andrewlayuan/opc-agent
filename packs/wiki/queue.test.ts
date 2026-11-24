@@ -42,6 +42,11 @@ function setup(o: { now?: number; busy?: () => boolean; dailyCalls?: number; ing
         finishOp(env.db, opId, { status: 'done', llmCalls: 1, now });
         return { changes: [], llmCalls: 1, note: '' };
       },
+      organize: async (_llm, opId) => {
+        ran.push('organize');
+        finishOp(env.db, opId, { status: 'done', llmCalls: 1, now });
+        return { llmCalls: 1, note: '' };
+      },
     },
   });
   return { ...env, q, ran, setNow: (t: number) => (now = t) };
@@ -196,5 +201,97 @@ test('defaultBusy：有进行中的评审时为 true', () => {
   assert.equal(defaultBusy(db), false);
   db.prepare("INSERT INTO pm_reviews(created_at, updated_at, status, mode, input) VALUES (1, 1, 'running', 'idea', 'x')").run();
   assert.equal(defaultBusy(db), true);
+  done();
+});
+
+// ---------------- 整理目录结构 ----------------
+
+function setupOrganize(o: { organize?: (opId: number) => Promise<{ llmCalls: number; note: string }>; dailyCalls?: number } = {}) {
+  const env = tmpWikiDb();
+  const now = local(2026, 11, 17, 10);
+  const ran: string[] = [];
+  const q = new WikiQueue(env.db, stubLlm(['{}', '{}', '{}']), {
+    clock: { ...realClock, now: () => now },
+    log: () => {},
+    busy: () => false,
+    dailyCalls: o.dailyCalls ?? 200,
+    run: {
+      ingest: async () => ({ changes: [], llmCalls: 0, note: '' }),
+      lint: async () => ({ llmCalls: 0 }),
+      generate: async () => ({ changes: [], llmCalls: 0, note: '' }),
+      organize: async (llm, opId) => {
+        ran.push(`organize:${opId}`);
+        await llm.chat([{ role: 'user', content: 'x' }]);
+        const r = await (o.organize ?? (async () => ({ llmCalls: 1, note: '整理 0 个页面，新建 0 个节点' })))(opId);
+        finishOp(env.db, opId, { status: 'done', llmCalls: r.llmCalls, note: r.note, now });
+        return r;
+      },
+    },
+  });
+  return { ...env, q, ran };
+}
+
+test('enqueueOrganize：已有排队或进行中的整理时返回同一个 id；完成后可再入队', async () => {
+  const { db, q, done } = setupOrganize();
+  const a = q.enqueueOrganize();
+  assert.equal(q.enqueueOrganize(), a);
+  assert.equal(ops(db, "kind = 'organize'").length, 1);
+  db.prepare("UPDATE wiki_ops SET status = 'running' WHERE id = ?").run(a);
+  assert.equal(q.enqueueOrganize(), a);
+  db.prepare("UPDATE wiki_ops SET status = 'done' WHERE id = ?").run(a);
+  assert.notEqual(q.enqueueOrganize(), a);
+  done();
+});
+
+test('drain：执行 organize 并把调用数计入 llm_calls（计入每日额度）', async () => {
+  const { db, q, ran, done } = setupOrganize({ organize: async () => ({ llmCalls: 3, note: '整理 5 个页面，新建 2 个节点' }) });
+  const id = q.enqueueOrganize();
+  await q.drain();
+  assert.deepEqual(ran, [`organize:${id}`]);
+  const op = getOp(db, id)!;
+  assert.equal(op.status, 'done');
+  assert.equal(op.llm_calls, 3);
+  assert.equal(q.status().usedToday, 3);
+  done();
+});
+
+test('drain：organize 抛错 → 记为 error，调用数照记，错误信息写入；不影响后面的任务', async () => {
+  const { db, q, done } = setupOrganize({
+    organize: async () => {
+      throw new Error('模型不可用');
+    },
+  });
+  const id = q.enqueueOrganize();
+  await q.drain();
+  const op = getOp(db, id)!;
+  assert.equal(op.status, 'error');
+  assert.match(String(op.error), /模型不可用/);
+  assert.equal(op.llm_calls, 1, '失败前已发出的调用也计入');
+  done();
+});
+
+test('retry：失败的 organize 重新入队；非失败的不能重试', async () => {
+  const { db, q, done } = setupOrganize({
+    organize: async () => {
+      throw new Error('boom');
+    },
+  });
+  const id = q.enqueueOrganize();
+  assert.throws(() => q.retry(id), /只能重试失败的操作/);
+  await q.drain();
+  const again = q.retry(id);
+  assert.notEqual(again, id);
+  assert.equal(getOp(db, again)!.kind, 'organize');
+  assert.equal(getOp(db, again)!.status, 'queued');
+  done();
+});
+
+test('recover：重启时运行中的 organize 标为失败，之后可再入队', () => {
+  const { db, q, done } = setupOrganize();
+  const id = q.enqueueOrganize();
+  db.prepare("UPDATE wiki_ops SET status = 'running' WHERE id = ?").run(id);
+  assert.equal(q.recover(), 1);
+  assert.equal(getOp(db, id)!.status, 'error');
+  assert.notEqual(q.enqueueOrganize(), id);
   done();
 });
