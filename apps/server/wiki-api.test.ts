@@ -246,7 +246,9 @@ test('分类树：GET /pages 带 node_id 与 nodes（own/total）；PUT /pages/:
     assert.deepEqual([n[top.data.id].own, n[top.data.id].total, n[sub.data.id].own, n[sub.data.id].total], [1, 2, 1, 1]);
     assert.equal(n[sub.data.id].parent_id, top.data.id);
     assert.equal(s.db.prepare('SELECT manual FROM wiki_page_node WHERE node_id = ?').get(sub.data.id)!.manual, 1);
+    assert.equal((await s.call('GET', '/api/wiki/pages/a')).data.page.node_id, sub.data.id);
     assert.equal((await s.call('PUT', '/api/wiki/pages/a/node', { nodeId: null })).status, 200);
+    assert.equal((await s.call('GET', '/api/wiki/pages/a')).data.page.node_id, null);
     assert.equal((await s.call('GET', '/api/wiki/pages')).data.pages.find((p: { slug: string }) => p.slug === 'a').node_id, null);
   } finally {
     await s.close();

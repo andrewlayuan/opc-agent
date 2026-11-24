@@ -1655,6 +1655,172 @@ console.log('✓ 知识库网页条目：预览/文字标签与沙箱 iframe');
   console.log('✓ Wiki：四个标签、图谱、页面、问 Wiki、体检与日志、参考了跳转');
 }
 
+// 9.9 Wiki 分类树：树渲染、折叠记忆、搜索平铺、移到…、节点增删改、整理目录
+{
+  const NODES = [
+    { id: 1, parent_id: null, title: 'Agent 开发', sort: 1, manual: false, own: 0, total: 3 },
+    { id: 2, parent_id: 1, title: '检索', sort: 1, manual: false, own: 2, total: 2 },
+    { id: 3, parent_id: 1, title: '记忆', sort: 2, manual: false, own: 1, total: 1 },
+    { id: 4, parent_id: null, title: '空领域', sort: 2, manual: true, own: 0, total: 0 },
+  ];
+  const PG = (id, slug, kind, title, node_id) => ({ id, slug, kind, title, summary: 's', updated_at: now, node_id });
+  const PAGES = [PG(1, 'a', 'concept', '概念A', 2), PG(2, 'b', 'entity', '实体B', 3), PG(3, 'c', 'concept', '概念C', 2), PG(4, 'd', 'concept', '概念D', null)];
+  routes['GET /api/wiki/pages'] = { pages: PAGES, nodes: NODES, topics: [] };
+  routes['GET /api/wiki/status'] = { queued: 0, running: null, usedToday: 1, limit: 200, enabled: true, lastLint: null, unplaced: 1, docs: {} };
+  const PAGE = (slug, title, node_id) => ({ page: { id: 1, slug, kind: 'concept', title, summary: '摘要', body: '正文', rev: 3, updated_at: now, created_at: now, backlinks: [], cites: [], links: [], deleted: 0, edited_by_user: 0, source_doc: null, node_id } });
+  routes['GET /api/wiki/pages/a'] = PAGE('a', '概念A', 2);
+  routes['GET /api/wiki/pages/d'] = PAGE('d', '概念D', null);
+  const kbTab = (t) => $('kb-tabs').children.find((b) => b.tagName === 'BUTTON' && b.textContent === t);
+  const pane = () => $('kb-pane-wiki');
+  const els = () => walk(pane());
+  const rowOf = (title) => els().find((el) => cls('wiki-node-row')(el) && el.children.some((c) => cls('wiki-node-name')(c) && c.textContent === title));
+  const twisty = (title) => walk(rowOf(title)).find(cls('wiki-twisty'));
+  const itemOf = (title) => els().find((el) => el.tagName === 'A' && cls('wiki-item')(el) && el.textContent.includes(title));
+  const reopen = async () => {
+    await kbTab('资料').fire('click');
+    await kbTab('Wiki').fire('click');
+    await tick();
+  };
+  store.delete('opc.wikiTree');
+  await reopen();
+  assert.match(rowOf('Agent 开发').textContent, /0\/3/, '顶层节点显示直属数 / 总数');
+  assert.ok(rowOf('检索') && rowOf('记忆') && rowOf('空领域'), '顶层默认展开，第二层节点可见');
+  assert.ok(!itemOf('概念A') && !itemOf('实体B'), '第二层默认折叠，页面不显示');
+  assert.ok(itemOf('概念D'), '未分类页面显示');
+  const lastGroup = els().find(cls('wiki-list')).children.at(-1);
+  assert.ok(cls('wiki-unplaced')(lastGroup) && /未分类/.test(lastGroup.textContent) && /概念D/.test(lastGroup.textContent), '未分类分组在末尾');
+  await twisty('检索').fire('click');
+  assert.ok(itemOf('概念A') && itemOf('概念C') && !itemOf('实体B'), '展开检索');
+  assert.deepEqual(JSON.parse(store.get('opc.wikiTree')), { 2: true }, '展开状态写入 localStorage');
+  await twisty('Agent 开发').fire('click');
+  assert.ok(!rowOf('检索') && !itemOf('概念A'), '折叠顶层后子孙都不显示');
+  assert.equal(JSON.parse(store.get('opc.wikiTree'))[1], false);
+  await reopen();
+  assert.ok(!rowOf('检索'), '重新进入后保持折叠');
+  await twisty('Agent 开发').fire('click');
+  assert.ok(rowOf('检索'));
+
+  // 没有未分类页面时不显示该分组
+  routes['GET /api/wiki/pages'] = { pages: PAGES.slice(0, 3), nodes: NODES, topics: [] };
+  await reopen();
+  assert.ok(!els().some(cls('wiki-unplaced')), '没有未分类页面时不显示');
+  routes['GET /api/wiki/pages'] = { pages: PAGES, nodes: NODES, topics: [] };
+  await reopen();
+
+  // 搜索：平铺，带路径；清空后回到树
+  store.set('opc.wikiTree', '{}');
+  await reopen();
+  assert.ok(!itemOf('概念A'), '检索折叠');
+  const qBox = els().find((el) => el.tagName === 'INPUT' && cls('wiki-q')(el));
+  qBox.value = '概念';
+  await qBox.fire('input');
+  await new Promise((r) => setTimeout(r, 380));
+  assert.ok(calls.some((c) => c.url === '/api/wiki/pages?q=%E6%A6%82%E5%BF%B5'), '搜索请求');
+  assert.ok(!els().some(cls('wiki-twisty')), '搜索时没有树');
+  assert.match(itemOf('概念A').textContent, /Agent 开发 \/ 检索/, '平铺结果带所属路径');
+  assert.ok(!/ \/ /.test(itemOf('概念D').textContent), '未分类的结果没有路径');
+  await itemOf('概念A').fire('click');
+  await tick();
+  qBox.value = '';
+  await qBox.fire('input');
+  await new Promise((r) => setTimeout(r, 380));
+  assert.ok(els().some(cls('wiki-twisty')), '清空搜索后回到树');
+  assert.ok(itemOf('概念A'), '从搜索结果打开页面后，所在节点在树里自动展开');
+
+  // 页面详情：面包屑与「移到…」
+  await itemOf('概念D').fire('click');
+  await tick();
+  assert.ok(!els().some(cls('wiki-crumb')), '未分类页面没有面包屑');
+  await itemOf('概念A').fire('click');
+  await tick();
+  assert.match(els().find(cls('wiki-crumb')).textContent, /Agent 开发.*检索/, '面包屑');
+  const moveSel = () => els().find((el) => el.tagName === 'SELECT' && cls('wiki-move')(el));
+  assert.deepEqual(moveSel().children.map((o) => o.textContent), ['未分类', 'Agent 开发', 'Agent 开发 / 检索', 'Agent 开发 / 记忆', '空领域'], '按路径列出全部节点，再加未分类');
+  routes['PUT /api/wiki/pages/a/node'] = { ok: true };
+  moveSel().value = '3';
+  await moveSel().fire('change');
+  await tick();
+  assert.deepEqual(calls.filter((c) => c.method === 'PUT' && c.url === '/api/wiki/pages/a/node').at(-1).body, { nodeId: 3 });
+  moveSel().value = '';
+  await moveSel().fire('change');
+  await tick();
+  assert.deepEqual(calls.filter((c) => c.method === 'PUT' && c.url === '/api/wiki/pages/a/node').at(-1).body, { nodeId: null }, '选「未分类」发 null');
+
+  // 节点菜单：新建 / 改名 / 删除
+  const act = (title, label) => walk(rowOf(title)).find((el) => el.tagName === 'BUTTON' && el.attrs['aria-label'] === label);
+  assert.ok(act('Agent 开发', '新建子节点') && act('检索', '新建子节点'), '第 1、2 层可新建子节点');
+  routes['POST /api/wiki/nodes'] = { __status: 201, data: { id: 9 } };
+  promptAnswer = '新主题';
+  await act('Agent 开发', '新建子节点').fire('click');
+  await tick();
+  assert.deepEqual(calls.filter((c) => c.method === 'POST' && c.url === '/api/wiki/nodes').at(-1).body, { title: '新主题', parentId: 1 });
+  promptAnswer = '顶层新领域';
+  await els().find((el) => el.tagName === 'BUTTON' && el.textContent === '新建分类').fire('click');
+  await tick();
+  assert.deepEqual(calls.filter((c) => c.method === 'POST' && c.url === '/api/wiki/nodes').at(-1).body, { title: '顶层新领域', parentId: null });
+  promptAnswer = null;
+  const nPost = calls.filter((c) => c.url === '/api/wiki/nodes').length;
+  await act('Agent 开发', '新建子节点').fire('click');
+  await tick();
+  assert.equal(calls.filter((c) => c.url === '/api/wiki/nodes').length, nPost, '取消输入不发请求');
+  routes['PATCH /api/wiki/nodes/4'] = { ok: true };
+  promptAnswer = '改名后';
+  await act('空领域', '改名').fire('click');
+  await tick();
+  assert.deepEqual(calls.filter((c) => c.method === 'PATCH' && c.url === '/api/wiki/nodes/4').at(-1).body, { title: '改名后' });
+  routes['DELETE /api/wiki/nodes/1'] = { __status: 409, data: { error: '节点下还有内容' } };
+  await act('Agent 开发', '删除').fire('click');
+  await tick();
+  assert.match($('toast').textContent, /节点下还有内容/, '409 时提示服务端文案');
+  routes['DELETE /api/wiki/nodes/4'] = { ok: true };
+  await act('空领域', '删除').fire('click');
+  await tick();
+  assert.ok(calls.some((c) => c.method === 'DELETE' && c.url === '/api/wiki/nodes/4'));
+  const L3 = [...NODES, { id: 5, parent_id: 2, title: '第三层', sort: 1, manual: true, own: 0, total: 0 }];
+  routes['GET /api/wiki/pages'] = { pages: PAGES, nodes: L3, topics: [] };
+  store.set('opc.wikiTree', JSON.stringify({ 2: true }));
+  await reopen();
+  assert.ok(rowOf('第三层') && !act('第三层', '新建子节点'), '第 3 层不显示「新建子节点」');
+  routes['GET /api/wiki/pages'] = { pages: PAGES, nodes: NODES, topics: [] };
+
+  // 整理目录
+  await reopen();
+  assert.match(pane().textContent, /有 1 个页面还没有分类/);
+  routes['POST /api/wiki/organize'] = { __status: 202, data: { opId: 80 } };
+  await els().find((el) => el.tagName === 'BUTTON' && el.textContent === '整理目录').fire('click');
+  await tick();
+  assert.ok(calls.some((c) => c.method === 'POST' && c.url === '/api/wiki/organize'));
+  assert.match($('toast').textContent, /已开始整理/);
+  routes['GET /api/wiki/status'] = { queued: 0, running: null, usedToday: 1, limit: 200, enabled: true, lastLint: null, unplaced: 0, docs: {} };
+  await reopen();
+  assert.ok(!/还没有分类/.test(pane().textContent) && !els().some((el) => el.tagName === 'BUTTON' && el.textContent === '整理目录'), '没有未分类页面时不提示');
+
+  // 操作日志：整理目录可撤销，撤销前确认
+  routes['GET /api/wiki/ops'] = { ops: [{ id: 90, kind: 'organize', doc_id: null, doc_title: null, status: 'done', pages: [], note: '整理 2 个页面，新建 3 个节点', error: null, llm_calls: 1, created_at: now, finished_at: now, target_op: null }] };
+  await kbTab('体检与日志').fire('click');
+  await tick();
+  assert.match($('kb-pane-lint').textContent, /整理目录/);
+  const lintBtn = (t) => walk($('kb-pane-lint')).find((el) => el.tagName === 'BUTTON' && el.textContent === t);
+  routes['POST /api/wiki/ops/90/revert'] = { revertOp: 91 };
+  const nConf = confirms.length;
+  await lintBtn('撤销').fire('click');
+  await tick();
+  assert.match(confirms[nConf], /整棵分类树恢复到整理之前/, '撤销整理的确认文案');
+  assert.ok(calls.some((c) => c.method === 'POST' && c.url === '/api/wiki/ops/90/revert'));
+
+  // 所有名称经 textContent 写入
+  const EVIL = '<img src=x onerror=alert(1)>';
+  routes['GET /api/wiki/pages'] = { pages: [PG(1, 'a', 'concept', EVIL, 7)], nodes: [{ id: 7, parent_id: null, title: EVIL, sort: 1, manual: true, own: 1, total: 1 }], topics: [] };
+  await reopen();
+  assert.ok(rowOf(EVIL), '节点名按文本显示');
+  assert.ok(!els().some((el) => el.tagName === 'IMG'), '没有被解析成元素');
+  assert.ok(itemOf(EVIL));
+  routes['GET /api/wiki/pages'] = { pages: PAGES, nodes: NODES, topics: [] };
+  await kbTab('资料').fire('click');
+  $('toast').hidden = true;
+  console.log('✓ Wiki：分类树、折叠记忆、搜索平铺、移到…、节点增删改、整理目录');
+}
+
 
 // 10. 全屏页：路径解析、工具栏、消息来源与 iframe 常驻
 {

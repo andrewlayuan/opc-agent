@@ -9,17 +9,17 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     ['source', '资料摘要'],
   ];
   const KIND = Object.fromEntries(KINDS);
-  const OP = { ingest: '摄入', lint: '体检', fix: '自动修复', generate: '生成缺页', query_save: '存为问答', edit: '编辑', restore: '恢复版本', revert: '撤销', ask: '提问' };
+  const OP = { ingest: '摄入', lint: '体检', fix: '自动修复', generate: '生成缺页', query_save: '存为问答', edit: '编辑', restore: '恢复版本', revert: '撤销', ask: '提问', organize: '整理目录' };
   const OP_STATUS = { queued: '排队中', running: '进行中', done: '完成', error: '失败', reverted: '已撤销' };
   const LINT = { orphan: '孤立页', missing: '缺页', broken_cite: '依据失效', stale: '页面过时', no_cite: '无依据', missing_link: '缺少链接', conflict: '矛盾', gap: '数据缺口' };
-  const REVERTABLE = new Set(['ingest', 'fix', 'generate', 'query_save', 'edit', 'restore']);
+  const REVERTABLE = new Set(['ingest', 'fix', 'generate', 'query_save', 'edit', 'restore', 'organize']);
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const POLL_MS = 10000;
   const GRAPH_MAX = 300;
   const GRAPH_ITERS = 300;
   const OPS_PAGE = 30;
   const ASSET_MAX = 5 * 1024 * 1024;
-  const st = { panes: null, el: null, tab: null, status: null, q: '', view: 'home', slug: null, seq: 0, ops: [], opsMore: false, askBuilt: false };
+  const st = { panes: null, el: null, tab: null, status: null, q: '', view: 'home', slug: null, seq: 0, ops: [], opsMore: false, askBuilt: false, data: null, organizing: false };
   const when = (ts) => new Date(ts).toLocaleString('zh-CN', { hour12: false });
   const enc = encodeURIComponent;
   /** replaceChildren 会把 null 渲染成文字，这里先滤掉空值 */
@@ -111,6 +111,19 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     if (!s.enabled) parts.push('未配置模型');
     st.el.status.textContent = parts.join(' · ');
     st.el.status.classList.toggle('busy', Boolean(s.running));
+    const organizing = s.running?.kind === 'organize';
+    if (st.organizing && !organizing) loadPages();
+    st.organizing = organizing;
+    const un = Number(s.unplaced) || 0;
+    st.el.organize.hidden = !organizing && un === 0;
+    put(
+      st.el.organize,
+      organizing
+        ? h('span', { class: 'muted', text: '正在整理目录…' })
+        : un > 0
+          ? [h('span', { class: 'muted', text: `有 ${un} 个页面还没有分类` }), h('button', { type: 'button', class: 'ghost', text: '整理目录', onclick: organizeNow })]
+          : null,
+    );
   }
 
   /** 拉取队列状态；失败时静默返回 null（后台轮询不打扰用户） */
@@ -130,6 +143,9 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     const status = h('div', { class: 'wiki-status muted' });
     const q = h('input', { type: 'search', class: 'wiki-q', placeholder: '搜索 Wiki', maxlength: '200', autocomplete: 'off' });
     const list = h('div', { class: 'wiki-list' });
+    const organize = h('div', { class: 'wiki-organize' });
+    organize.hidden = true;
+    const tools = h('div', { class: 'wiki-tree-tools' }, h('button', { type: 'button', class: 'link', text: '新建分类', onclick: () => addNode(null) }));
     const home = h('button', { type: 'button', class: 'wiki-home', text: '知识图谱', onclick: goHome });
     const scope = h('select', { class: 'wiki-scope', title: '导出范围', 'aria-label': '导出范围' }, h('option', { value: 'all', text: '全部页面' }), ...KINDS.map(([k, label]) => h('option', { value: `kind:${k}`, text: `仅${label}` })));
     const exp = h('a', { class: 'wiki-btn', href: '/api/wiki/export?scope=all', text: '导出' });
@@ -149,6 +165,8 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
       { class: 'wiki-side' },
       q,
       home,
+      organize,
+      tools,
       list,
       h(
         'div',
@@ -159,25 +177,120 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
       ),
     );
     put(el, h('div', { class: 'wiki-layout' }, side, main, right));
-    st.el = { status, list, main, right, home };
+    st.el = { status, list, main, right, home, organize };
+  }
+
+  const MAX_DEPTH = 3;
+  const OPEN_KEY = 'opc.wikiTree';
+  /** 折叠状态：{ 节点id: true|false }，没记录的顶层默认展开、其余默认折叠；每次渲染都重新读取 */
+  function readOpen() {
+    try {
+      const v = JSON.parse(localStorage.getItem(OPEN_KEY) || '{}');
+      return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+    } catch {
+      return {};
+    }
+  }
+  function writeOpen(map) {
+    try {
+      localStorage.setItem(OPEN_KEY, JSON.stringify(map));
+    } catch {
+      /* 存储不可用时只在本次有效 */
+    }
+  }
+  const isOpen = (map, n) => (n.id in map ? map[n.id] === true : n.parent_id == null);
+  function setOpen(id, on) {
+    const map = readOpen();
+    map[id] = on;
+    writeOpen(map);
+  }
+
+  /** 树的索引：子节点按 sort 排列；path(id) 返回从顶层到该节点的名称数组 */
+  function treeIndex(nodes) {
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    const kids = new Map();
+    for (const n of nodes) {
+      const k = byId.has(n.parent_id) ? n.parent_id : null;
+      if (!kids.has(k)) kids.set(k, []);
+      kids.get(k).push(n);
+    }
+    for (const l of kids.values()) l.sort((a, b) => a.sort - b.sort || a.id - b.id);
+    const chain = (id) => {
+      const out = [];
+      for (let cur = byId.get(id), g = 0; cur && g < 10; cur = byId.get(cur.parent_id), g++) out.unshift(cur);
+      return out;
+    };
+    const path = (id) => chain(id).map((n) => n.title);
+    return { byId, kids, chain, path };
   }
 
   async function loadPages() {
     const data = await act(() => api(`/api/wiki/pages${st.q ? `?q=${enc(st.q)}` : ''}`));
     if (!data || !st.el) return;
+    st.data = data;
+    renderList();
+  }
+
+  function renderList() {
+    const data = st.data;
+    if (!data || !st.el) return;
     if (!data.pages.length) {
       put(st.el.list, h('p', { class: 'muted wiki-empty-side', text: st.q ? '没有找到相关页面' : '还没有页面' }));
       return;
     }
-    put(st.el.list, 
-      ...pageGroups(data).map(([label, ps]) =>
+    const nodes = data.nodes ?? [];
+    if (st.q) return renderFlat(data, nodes);
+    if (!nodes.length) {
+      put(st.el.list, ...pageGroups(data).map(([label, ps]) => h('div', { class: 'wiki-group' }, h('div', { class: 'wiki-group-title' }, h('span', { class: 'wiki-group-name', text: label, title: label }), h('span', { class: 'kb-count', text: String(ps.length) })), h('ul', {}, ps.map(pageItem)))));
+      return;
+    }
+    renderTree(data, nodes);
+  }
+
+  /** 搜索：平铺结果，每条后面灰色显示所属路径 */
+  function renderFlat(data, nodes) {
+    const ix = treeIndex(nodes);
+    put(st.el.list, h('ul', { class: 'wiki-flat' }, data.pages.map((p) => pageItem(p, ix.path(p.node_id).join(' / ')))));
+  }
+
+  function renderTree(data, nodes) {
+    const ix = treeIndex(nodes);
+    const open = readOpen();
+    const byNode = new Map();
+    const loose = [];
+    for (const p of data.pages) {
+      if (p.node_id != null && ix.byId.has(p.node_id)) {
+        if (!byNode.has(p.node_id)) byNode.set(p.node_id, []);
+        byNode.get(p.node_id).push(p);
+      } else loose.push(p);
+    }
+    const rerender = () => renderList();
+    const build = (n, depth) => {
+      const kids = ix.kids.get(n.id) ?? [];
+      const on = isOpen(open, n);
+      const counts = kids.length ? `${n.own}/${n.total}` : String(n.total);
+      const row = h(
+        'div',
+        { class: 'wiki-node-row' },
+        h('button', { type: 'button', class: 'wiki-twisty', text: on ? '▾' : '▸', 'aria-expanded': on ? 'true' : 'false', 'aria-label': on ? '折叠' : '展开', onclick: () => (setOpen(n.id, !on), rerender()) }),
+        h('span', { class: 'wiki-node-name', text: n.title, title: n.title }),
+        h('span', { class: 'kb-count', text: counts, title: kids.length ? `直属 ${n.own} 页，含子节点共 ${n.total} 页` : `${n.total} 页` }),
         h(
-          'div',
-          { class: 'wiki-group' },
-          h('div', { class: 'wiki-group-title' }, h('span', { class: 'wiki-group-name', text: label, title: label }), h('span', { class: 'kb-count', text: String(ps.length) })),
-          h('ul', {}, ps.map(pageItem)),
+          'span',
+          { class: 'wiki-node-acts' },
+          depth < MAX_DEPTH ? h('button', { type: 'button', class: 'wiki-node-act', text: '＋', title: '新建子节点', 'aria-label': '新建子节点', onclick: () => addNode(n.id) }) : null,
+          h('button', { type: 'button', class: 'wiki-node-act', text: '✎', title: '改名', 'aria-label': '改名', onclick: () => renameNode(n) }),
+          h('button', { type: 'button', class: 'wiki-node-act', text: '✕', title: '删除（仅空节点）', 'aria-label': '删除', onclick: () => removeNode(n) }),
         ),
-      ),
+      );
+      const inner = on ? [kids.length ? h('ul', { class: 'wiki-node-kids' }, kids.map((k) => build(k, depth + 1))) : null, (byNode.get(n.id) ?? []).length ? h('ul', { class: 'wiki-node-pages' }, byNode.get(n.id).map((p) => pageItem(p))) : null] : [];
+      return h('li', { class: 'wiki-node' }, row, ...inner);
+    };
+    const tops = ix.kids.get(null) ?? [];
+    put(
+      st.el.list,
+      h('ul', { class: 'wiki-tree' }, tops.map((n) => build(n, 1))),
+      loose.length ? h('div', { class: 'wiki-group wiki-unplaced' }, h('div', { class: 'wiki-group-title' }, h('span', { class: 'wiki-group-name', text: '未分类' }), h('span', { class: 'kb-count', text: String(loose.length) })), h('ul', {}, loose.map((p) => pageItem(p)))) : null,
     );
   }
 
@@ -192,18 +305,98 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     return groups.filter(([, ps]) => ps.length);
   }
 
-  function pageItem(p) {
+  function pageItem(p, path) {
     const kind = KIND[p.kind] ?? p.kind;
     return h(
       'li',
       { class: p.slug === st.slug && st.view !== 'home' ? 'on' : '' },
       h(
         'a',
-        { href: '#', title: `${kind}：${p.summary || p.title}`, onclick: (e) => (e.preventDefault(), openPage(p.slug)) },
+        { href: '#', class: 'wiki-item', title: `${kind}：${p.summary || p.title}`, onclick: (e) => (e.preventDefault(), openPage(p.slug)) },
         h('span', { class: `wiki-dot k-${p.kind}`, 'aria-label': kind }),
         h('span', { class: 'wiki-item-title', text: p.title }),
+        path ? h('span', { class: 'wiki-item-path muted', text: path }) : null,
       ),
     );
+  }
+
+  async function addNode(parentId) {
+    const t = prompt('新节点名称（最多 40 字）');
+    if (t == null || !t.trim()) return;
+    await act(async () => {
+      await api('/api/wiki/nodes', { method: 'POST', body: { title: t, parentId } });
+      if (parentId != null) setOpen(parentId, true);
+      await loadPages();
+    });
+  }
+
+  async function renameNode(n) {
+    const t = prompt('新的名称（最多 40 字）', n.title);
+    if (t == null || !t.trim() || t.trim() === n.title) return;
+    await act(async () => {
+      await api(`/api/wiki/nodes/${n.id}`, { method: 'PATCH', body: { title: t } });
+      await loadPages();
+    });
+  }
+
+  async function removeNode(n) {
+    if (!confirm(`删除「${n.title}」？只有空节点可以删除。`)) return;
+    await act(async () => {
+      await api(`/api/wiki/nodes/${n.id}`, { method: 'DELETE' });
+      await loadPages();
+    });
+  }
+
+  async function organizeNow() {
+    await act(async () => {
+      await api('/api/wiki/organize', { method: 'POST' });
+      toast('已开始整理目录，完成后可在「体检与日志」里撤销');
+      refreshStatus();
+    });
+  }
+
+  /** 页面详情里的面包屑与「移到…」；没有分类树时返回 null */
+  function locationBar(page) {
+    const nodes = st.data?.nodes ?? [];
+    if (!nodes.length) return { crumb: null, move: null };
+    const ix = treeIndex(nodes);
+    const opts = [];
+    const walkTree = (parent) => {
+      for (const n of ix.kids.get(parent) ?? []) {
+        opts.push(h('option', { value: String(n.id), text: ix.path(n.id).join(' / ') }));
+        walkTree(n.id);
+      }
+    };
+    walkTree(null);
+    const sel = h('select', { class: 'wiki-move', 'aria-label': '移到…' }, h('option', { value: '', text: '未分类' }), ...opts);
+    sel.value = page.node_id != null && ix.byId.has(page.node_id) ? String(page.node_id) : '';
+    sel.addEventListener('change', async () => {
+      const nodeId = sel.value ? Number(sel.value) : null;
+      await act(async () => {
+        await api(`${pageUrl(page.slug)}/node`, { method: 'PUT', body: { nodeId } });
+        toast('已移动');
+        await openPage(page.slug);
+      });
+    });
+    const path = page.node_id != null ? ix.path(page.node_id) : [];
+    return {
+      crumb: path.length ? h('div', { class: 'wiki-crumb muted', text: path.join(' › '), title: path.join(' › ') }) : null,
+      move: h('label', { class: 'wiki-move-label' }, '移到…', sel),
+    };
+  }
+
+  /** 打开页面时把它所在节点的各级祖先展开 */
+  function reveal(page) {
+    if (page.node_id == null || !st.data?.nodes) return;
+    const map = readOpen();
+    let changed = false;
+    for (const n of treeIndex(st.data.nodes).chain(page.node_id)) {
+      if (!isOpen(map, n)) {
+        map[n.id] = true;
+        changed = true;
+      }
+    }
+    if (changed) writeOpen(map);
   }
 
   // ---------- 图谱 ----------
@@ -376,8 +569,10 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     st.el.home.classList.remove('on');
     const seq = ++st.seq;
     try {
+      if (!st.data) await loadPages();
       const { page } = await api(pageUrl(slug));
       if (seq !== st.seq) return;
+      reveal(page);
       renderPage(page);
     } catch (e) {
       if (seq !== st.seq) return;
@@ -414,11 +609,13 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
   function renderPage(page) {
     const titles = new Map((page.links ?? []).map((l) => [l.slug, l.title]));
     const cites = new Map((page.cites ?? []).map((c) => [`${c.doc}:${c.ord}`, c]));
+    const where = locationBar(page);
     put(st.el.main, 
       h('button', { type: 'button', class: 'link kb-back', text: '← 知识图谱', onclick: goHome }),
       h(
         'div',
         { class: 'wiki-page-head' },
+        where.crumb,
         h('h2', { class: 'kb-doc-title', text: page.title }),
         h(
           'div',
@@ -426,6 +623,7 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
           h('span', { class: `kb-kind wiki-kind k-${page.kind}`, text: KIND[page.kind] ?? page.kind }),
           page.topic && page.topic.slug !== page.slug ? h('button', { type: 'button', class: 'link wiki-topic', text: `主题：${page.topic.title}`, title: '打开主题总览', onclick: () => openPage(page.topic.slug) }) : null,
           h('span', { class: 'muted', text: `第 ${page.rev} 版 · ${when(page.updated_at)}${page.edited_by_user ? ' · 人工改过' : ''}` }),
+          where.move,
         ),
         page.summary ? h('p', { class: 'wiki-summary', text: page.summary }) : null,
       ),
@@ -753,6 +951,7 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
       if (!r) return;
       put(detail, 
         op.error ? h('p', { class: 'kb-note err', text: op.error }) : null,
+        op.kind === 'organize' && op.note && op.status !== 'error' ? h('p', { class: 'muted', text: op.note }) : null,
         ...(r.diffs.length
           ? r.diffs.map((d) =>
               h(
@@ -767,10 +966,12 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
       detail.hidden = false;
     };
     const revert = async (force) => {
-      if (!force && !confirm(`撤销「${OP[op.kind] ?? op.kind} #${op.id}」？会生成一条新的撤销记录，历史不会删除。`)) return;
+      const ask = op.kind === 'organize' ? '撤销整理会把整棵分类树恢复到整理之前，之后手动做的调整也会丢失。继续？' : `撤销「${OP[op.kind] ?? op.kind} #${op.id}」？会生成一条新的撤销记录，历史不会删除。`;
+      if (!force && !confirm(ask)) return;
       try {
         await api(`/api/wiki/ops/${op.id}/revert`, { method: 'POST', body: force ? { force: true } : {} });
         toast('已撤销');
+        if (op.kind === 'organize') loadPages();
         loadOps();
       } catch (e) {
         if (e.status !== 409 || !e.data?.conflicts) return toast(e.message);

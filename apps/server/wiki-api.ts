@@ -69,7 +69,8 @@ function livePage(db: DB, slug: string) {
   ).map((l) => ({ slug: l.slug, title: l.title ?? null }));
   const { topics, of } = pageTopics(db);
   const t = topics.find((x) => x.slug === of.get(slug));
-  return { ...p, links, topic: t ? { slug: t.slug, title: t.title } : null };
+  const at = db.prepare('SELECT node_id FROM wiki_page_node WHERE page_id = ?').get(p.id) as { node_id: number } | undefined;
+  return { ...p, links, topic: t ? { slug: t.slug, title: t.title } : null, node_id: at ? Number(at.node_id) : null };
 }
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
