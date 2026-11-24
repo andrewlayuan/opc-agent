@@ -403,6 +403,8 @@ button.link:disabled { opacity: .4; cursor: not-allowed; }
   .kb-side { position: static; max-height: none; padding: 0 0 10px; border-right: 0; border-bottom: 1px solid var(--line); }
   .kb-ops { display: inline-flex; }
   .kb-row:hover .kb-count { display: inline-block; }
+  .kb-bar { flex-wrap: wrap; }
+  .kb-bar input[type=search] { flex-basis: 100%; }
   .kb-bar button { padding: 0 12px; }
 }
 
@@ -1120,7 +1122,7 @@ mark.gr-hit.flash { outline: 2px solid var(--accent); outline-offset: 1px; }
 .kb-smart-btn { display: block; margin: 12px auto 4px; }
 
 /* 知识库批量导入 */
-.kb-imp { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card, transparent); }
+.kb-imp { margin: 14px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card, transparent); }
 .kb-imp-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .kb-imp-stat { font-size: 13px; }
 .kb-imp-ops { margin-left: auto; display: flex; gap: 8px; }

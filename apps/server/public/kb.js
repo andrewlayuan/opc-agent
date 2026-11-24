@@ -942,7 +942,7 @@ export function initKb({ h, api, toast, show, openReview, openItem, renderMarkdo
         sum,
         hint,
         dup,
-        h('p', { class: 'muted kb-imp-hint', text: '会按原来的文件夹结构建目录；导入时不逐个弹出归类。' }),
+        h('p', { class: 'muted kb-imp-hint', text: entries.some((e) => e.dir) ? '会按原来的文件夹结构建目录；导入时不逐个弹出归类。' : '导入时不逐个弹出归类。' }),
         h('div', { class: 'actions' }, start, h('button', { type: 'button', class: 'ghost', text: '取消', onclick: () => close(null) })),
       ];
     }, null);
