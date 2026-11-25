@@ -112,10 +112,11 @@ export interface RunStats {
   newIds: number[];
 }
 
-function insertEntries(db: DB, src: SourceRow, entries: FeedEntry[], matcher: TopicMatcher, maxAgeDays: number): number[] {
+export function insertEntries(db: DB, src: SourceRow, entries: FeedEntry[], matcher: TopicMatcher, maxAgeDays: number): number[] {
   const now = Date.now();
   const minTime = now - maxAgeDays * 24 * 3600 * 1000;
   const exists = db.prepare('SELECT 1 FROM items WHERE url = ?');
+  const deleted = db.prepare('SELECT 1 FROM radar_deleted_urls WHERE url = ?');
   const recent = db.prepare('SELECT id, norm_title FROM items WHERE published_at > ? AND dup_of IS NULL ORDER BY published_at DESC LIMIT 2000');
   const ins = db.prepare(`INSERT INTO items(source_id, url, title, norm_title, author, published_at, fetched_at, content, lang, topics, dup_of)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
@@ -134,6 +135,7 @@ function insertEntries(db: DB, src: SourceRow, entries: FeedEntry[], matcher: To
     const published = e.publishedAt && e.publishedAt <= now + 3600_000 ? e.publishedAt : now;
     if (published < minTime) continue;
     if (exists.get(url)) continue;
+    if (deleted.get(url)) continue;
     const text = `${e.title}\n${e.content.slice(0, 3000)}`;
     const topics = matcher.match(text);
     if (src.filter && !topics.some((t) => t !== 'product')) continue;

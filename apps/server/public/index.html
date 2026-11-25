@@ -61,7 +61,9 @@
         <label class="check"><input type="checkbox" id="starred"> 收藏</label>
         <label class="check" title="分析时判断为与你当前项目或关注相关的条目"><input type="checkbox" id="rel"> 与我相关</label>
         <span class="status" id="status"></span>
+        <button type="button" class="link" id="purge-open" title="删除全部或某个日期区间的情报">清理…</button>
       </div>
+      <div class="purge" id="purge-box" hidden></div>
       <ol class="list" id="list"></ol>
       <div class="more"><button id="more" class="ghost" hidden>加载更多</button></div>
       <p class="empty" id="empty" hidden>暂无内容。点右上角「刷新」开始采集。</p>

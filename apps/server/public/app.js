@@ -446,6 +446,59 @@ async function saveFocus(e) {
   }
 }
 
+// ---------------- 清理情报 ----------------
+const dayStart = (v) => new Date(`${v}T00:00:00`).getTime();
+const dayEnd = (v) => new Date(`${v}T23:59:59.999`).getTime();
+
+function buildPurge() {
+  const box = $('purge-box');
+  const today = new Date();
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const mode = (value, text, on) => h('label', { class: 'check' }, h('input', { type: 'radio', name: 'purge-mode', value, checked: on }), ` ${text}`);
+  const allRadio = mode('all', '全部情报', false);
+  const rangeRadio = mode('range', '日期区间（按发布日期）', true);
+  const from = h('input', { type: 'date', 'aria-label': '开始日期', max: iso(today) });
+  const to = h('input', { type: 'date', 'aria-label': '结束日期', max: iso(today) });
+  from.value = to.value = iso(today);
+  const radios = [allRadio, rangeRadio].map((l) => l.children[0]);
+  radios[1].checked = true;
+  const isAll = () => radios[0].checked;
+  const sync = () => {
+    from.disabled = to.disabled = isAll();
+  };
+  for (const r of radios) r.addEventListener('change', sync);
+  const go = h('button', { type: 'button', class: 'danger', text: '删除', onclick: () => run(go) });
+  async function run(btn) {
+    const body = isAll() ? { all: true } : { from: dayStart(from.value), to: dayEnd(to.value) };
+    if (!isAll() && (!from.value || !to.value || Number.isNaN(body.from) || Number.isNaN(body.to))) return toast('请选择开始和结束日期');
+    if (!isAll() && body.from > body.to) return toast('开始日期不能晚于结束日期');
+    btn.disabled = true;
+    try {
+      const pre = await api('/api/items/purge', { method: 'POST', body: { ...body, dryRun: true } });
+      if (!pre.deleted) return toast(pre.matched ? `范围内 ${pre.matched} 条都是已收藏或已在知识库里的，没有可删除的` : '这个范围内没有情报');
+      const keep = [pre.keptStarred ? `${pre.keptStarred} 条已收藏` : '', pre.keptInKb ? `${pre.keptInKb} 条已存入知识库` : ''].filter(Boolean).join('、');
+      const what = isAll() ? '全部情报' : `${from.value} 至 ${to.value} 的情报`;
+      if (!confirm(`将删除${what}共 ${pre.deleted} 条，无法恢复。${keep ? `\n${keep}的会保留。` : ''}\n删除后这些条目不会再被重新采集。继续？`)) return;
+      const r = await api('/api/items/purge', { method: 'POST', body });
+      toast(`已删除 ${r.deleted} 条${keep ? `，保留 ${keep}` : ''}`);
+      box.hidden = true;
+      state.open.clear();
+      await loadItems();
+      await refreshStatus();
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  box.replaceChildren(
+    h('div', { class: 'purge-row' }, h('strong', { text: '清理情报' }), h('span', { class: 'muted', text: '已收藏的、已存入知识库的条目会保留' })),
+    h('div', { class: 'purge-row' }, allRadio, rangeRadio, from, h('span', { text: '至' }), to),
+    h('div', { class: 'purge-row' }, go, h('button', { type: 'button', class: 'ghost', text: '取消', onclick: () => (box.hidden = true) })),
+  );
+  sync();
+}
+
 // ---------------- 状态与刷新 ----------------
 let pollTimer;
 async function refreshStatus() {
@@ -1940,6 +1993,10 @@ async function init() {
     show(b.dataset.view);
   });
   for (const id of ['grp', 'days', 'important', 'starred', 'rel']) $(id).addEventListener('change', () => loadItems());
+  $('purge-open').addEventListener('click', () => {
+    if ($('purge-box').hidden) buildPurge();
+    $('purge-box').hidden = !$('purge-box').hidden;
+  });
   $('mem-run').addEventListener('click', runMemory);
   $('mem-clear').addEventListener('click', clearAllMemory);
   let qt;

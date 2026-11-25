@@ -28,6 +28,7 @@ import { defaultSkillsDir, loadPmSkills } from '../../packs/pm/skills.ts';
 import { ProtoRunner } from '../../packs/proto/runner.ts';
 import { getVersion as getProtoVersion, recover as recoverProtos } from '../../packs/proto/store.ts';
 import { getInterests, setInterests } from '../../packs/radar/prefs.ts';
+import { PurgeInputError, parsePurgeBody, purgeItems } from '../../packs/radar/purge.ts';
 import { getItem, listItems, stats } from '../../packs/radar/query.ts';
 import { Radar } from '../../packs/radar/service.ts';
 import { HttpError, clientIp, contentDisposition, parseCookies, readBodyToFile, readJson, sameOrigin, securityHeaders, sendJson, staticFor } from './http.ts';
@@ -266,6 +267,18 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       limit: intParam(s.get('limit'), 1, 100) ?? 30,
     });
     return sendJson(res, 200, { items });
+  }
+
+  if (p === '/api/items/purge' && method === 'POST') {
+    const body = await readJson(req, 1024);
+    let parsed: ReturnType<typeof parsePurgeBody>;
+    try {
+      parsed = parsePurgeBody(body);
+    } catch (e) {
+      if (e instanceof PurgeInputError) throw new HttpError(400, e.message);
+      throw e;
+    }
+    return sendJson(res, 200, purgeItems(db, parsed.range, { dryRun: parsed.dryRun }));
   }
 
   let m = p.match(/^\/api\/items\/(\d+)$/);

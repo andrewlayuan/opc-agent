@@ -1168,3 +1168,11 @@ mark.gr-hit.flash { outline: 2px solid var(--accent); outline-offset: 1px; }
 .also-toggle { font-size: 12.5px; }
 .also-list { list-style: none; margin: 6px 0 0; padding: 0 0 0 10px; border-left: 2px solid var(--line); display: grid; gap: 4px; }
 .also-list a { overflow-wrap: anywhere; }
+
+/* 清理情报 */
+.purge { margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--soft); font-size: 13px; display: grid; gap: 8px; }
+.purge[hidden] { display: none; }
+.purge-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.purge input[type="date"] { padding: 3px 6px; }
+button.danger { background: #c0392b; border-color: #c0392b; color: #fff; }
+button.danger:disabled { opacity: .6; }

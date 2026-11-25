@@ -699,6 +699,77 @@ await alsoToggle()[0].fire('click');
 assert.equal(find($('list'), cls('also-list')).length, 0, '再点收起');
 console.log('✓ 同一事件的其他来源折叠展示');
 
+// 7.1c 清理情报：全部 / 日期区间，先预览再确认，保留收藏的
+routes['GET /api/items'] = () => ({ items: [ITEM(1, null, null)] });
+routes['GET /api/status'] = { state: { running: false }, stats: { today: 5, pending: 0 } };
+let purgeReply = (b) => (b.dryRun ? { matched: 4, deleted: 3, keptStarred: 1, keptInKb: 0 } : { matched: 4, deleted: 3, keptStarred: 1, keptInKb: 0 });
+routes['POST /api/items/purge'] = (b) => purgeReply(b);
+const purgeCalls = () => calls.filter((c) => c.url === '/api/items/purge');
+assert.ok($('purge-box').hidden, '默认不显示清理面板');
+await $('purge-open').fire('click');
+assert.ok(!$('purge-box').hidden, '点「清理…」展开面板');
+const pEls = () => walk($('purge-box'));
+const dates = () => pEls().filter((el) => el.tagName === 'INPUT' && el.attrs.type === 'date');
+const radios = () => pEls().filter((el) => el.tagName === 'INPUT' && el.attrs.type === 'radio');
+assert.equal(dates().length, 2);
+assert.match($('purge-box').textContent, /已收藏的、已存入知识库的条目会保留/);
+const pBtn = (t) => pEls().find((el) => el.tagName === 'BUTTON' && el.textContent === t);
+// 日期区间：先 dryRun，再确认，再真正删除
+dates()[0].value = '2026-11-01';
+dates()[1].value = '2026-11-03';
+const nConf0 = confirms.length;
+await pBtn('删除').fire('click');
+await tick();
+const pc = purgeCalls();
+assert.equal(pc.length, 2, '先预览再删除');
+assert.deepEqual(pc[0].body, { from: new Date('2026-11-01T00:00:00').getTime(), to: new Date('2026-11-03T23:59:59.999').getTime(), dryRun: true });
+assert.deepEqual(pc[1].body, { from: pc[0].body.from, to: pc[0].body.to });
+assert.match(confirms[nConf0], /2026-11-01 至 2026-11-03.*共 3 条.*无法恢复.*1 条已收藏的会保留.*不会再被重新采集/s, '确认文案带数量与保留说明');
+assert.match($('toast').textContent, /已删除 3 条，保留 1 条已收藏/);
+assert.ok($('purge-box').hidden, '完成后收起面板');
+// 取消确认：不发出真正的删除
+await $('purge-open').fire('click');
+const pcBefore = purgeCalls().length;
+ctx.confirm = (m) => (confirms.push(m), false);
+await pBtn('删除').fire('click');
+await tick();
+ctx.confirm = (m) => (confirms.push(m), true);
+assert.equal(purgeCalls().length, pcBefore + 1, '取消后只有预览请求');
+assert.equal(purgeCalls().at(-1).body.dryRun, true);
+// 全部：不带日期
+radios()[0].checked = true;
+radios()[1].checked = false;
+await radios()[0].fire('change');
+assert.ok(dates().every((d) => d.disabled), '选「全部」时日期框禁用');
+const n1 = purgeCalls().length;
+await pBtn('删除').fire('click');
+await tick();
+assert.deepEqual(purgeCalls()[n1].body, { all: true, dryRun: true });
+assert.deepEqual(purgeCalls()[n1 + 1].body, { all: true });
+// 范围内没有可删的
+await $('purge-open').fire('click');
+purgeReply = () => ({ matched: 2, deleted: 0, keptStarred: 2, keptInKb: 0 });
+const n2 = purgeCalls().length;
+await pBtn('删除').fire('click');
+await tick();
+assert.equal(purgeCalls().length, n2 + 1, '没有可删的只预览');
+assert.match($('toast').textContent, /都是已收藏或已在知识库里的/);
+// 日期不完整
+radios()[1].checked = true;
+radios()[0].checked = false;
+await radios()[1].fire('change');
+dates()[0].value = '';
+const n3 = purgeCalls().length;
+await pBtn('删除').fire('click');
+assert.equal(purgeCalls().length, n3, '日期没填完不发请求');
+dates()[0].value = '2026-11-05';
+dates()[1].value = '2026-11-01';
+await pBtn('删除').fire('click');
+assert.equal(purgeCalls().length, n3, '开始晚于结束不发请求');
+assert.match($('toast').textContent, /开始日期不能晚于结束日期/);
+$('purge-box').hidden = true;
+console.log('✓ 清理情报：区间 / 全部、预览、确认、保留说明');
+
 // 7.2 产品顾问：参考了 N 条记忆、M 次历史讨论
 routes['GET /api/pm/reviews/12'] = () => ({
   review: {

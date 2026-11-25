@@ -621,6 +621,13 @@ const MIGRATIONS: string[] = [
     at INTEGER NOT NULL
   );
   `,
+  // 18：用户手动清理过的情报网址，采集时跳过（否则仍在信息源里的旧条目会被重新采回来）
+  `
+  CREATE TABLE radar_deleted_urls (
+    url TEXT PRIMARY KEY,
+    at INTEGER NOT NULL
+  );
+  `,
 ];
 
 export type DB = DatabaseSync;
