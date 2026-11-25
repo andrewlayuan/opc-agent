@@ -1,6 +1,6 @@
 # opc-agent · OPC Radar
 
-个人 AI 技术情报雷达：定时抓取官方博客、技术大牛博客、国内外模型发布（Hugging Face）、开源框架 Release、论文和社区/媒体，经过去重后用 DeepSeek 生成中文摘要、要点分析和重要度，支持一键翻译全文和生成每日简报。情报库以 MCP 工具的形式接入 DeepSeek Harness，Agent 可以直接查询。
+个人 AI 技术情报雷达：定时抓取官方博客、技术大牛博客、国内外模型发布（Hugging Face）、开源框架 Release、论文和社区/媒体，经过去重、同一事件归并（多家媒体对同一件事的报道在动态里只显示一条，点「另有 N 个来源」展开）后用 DeepSeek 生成中文摘要、要点分析和重要度，支持一键翻译全文和生成每日简报。情报库以 MCP 工具的形式接入 DeepSeek Harness，Agent 可以直接查询。
 
 ## 目录
 

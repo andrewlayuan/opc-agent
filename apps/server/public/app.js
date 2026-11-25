@@ -212,9 +212,26 @@ function renderItem(it) {
     showOrig ? h('p', { class: 'orig', text: it.title }) : null,
     it.summary_zh ? h('p', { class: 'summary', text: it.summary_zh }) : !it.analyzed ? h('p', { class: 'summary muted', text: it.analysis_error ? '分析失败，展开后可重试' : '待分析' }) : null,
     it.topics.length ? h('div', { class: 'tags' }, it.topics.map((t) => h('span', { class: 'tag', text: topicLabel(t) }))) : null,
+    alsoBlock(it),
   );
   if (state.open.has(it.id)) li.append(renderDetailShell(it, li));
   return li;
+}
+
+/** 同一事件的其他报道：默认折叠成「另有 N 个来源」，展开后列出来源与链接 */
+const alsoOpen = new Set();
+function alsoBlock(it) {
+  const list = it.also ?? [];
+  if (!list.length) return null;
+  const box = h('div', { class: 'also' });
+  const draw = () => {
+    const on = alsoOpen.has(it.id);
+    const btn = h('button', { type: 'button', class: 'link also-toggle', text: `另有 ${list.length} 个来源 ${on ? '▴' : '▾'}`, 'aria-expanded': on ? 'true' : 'false', onclick: () => (on ? alsoOpen.delete(it.id) : alsoOpen.add(it.id), draw()) });
+    const rows = on ? h('ul', { class: 'also-list' }, list.map((a) => h('li', {}, h('span', { class: 'muted', text: `${a.source_name} · ${ago(a.published_at)}　` }), extLink(a.url, a.title)))) : null;
+    box.replaceChildren(...[btn, rows].filter(Boolean));
+  };
+  draw();
+  return box;
 }
 
 function renderDetailShell(it, li) {

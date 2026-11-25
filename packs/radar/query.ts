@@ -39,6 +39,8 @@ export interface ItemView {
   analysis_error: string | null;
   has_translation: boolean;
   dup_of: number | null;
+  /** 并入本条的其他来源（同一事件的其他报道，按时间从早到晚，最多 10 条） */
+  also: { id: number; url: string; title: string; source_name: string; published_at: number }[];
 }
 
 const COLS = `i.id, i.url, i.title, i.title_zh, i.summary_zh, i.analysis_zh, i.topics, i.importance, i.relevance, i.relevance_zh, i.lang, i.author,
@@ -70,6 +72,7 @@ function toView(r: Row): ItemView {
     analysis_error: (r.analysis_error as string) ?? null,
     has_translation: Boolean(r.has_tr),
     dup_of: r.dup_of == null ? null : Number(r.dup_of),
+    also: [],
   };
 }
 
@@ -130,13 +133,36 @@ export function listItems(db: DB, p: ListParams): ItemView[] {
   }
   const limit = Math.min(100, Math.max(1, p.limit ?? 30));
   const sql = `SELECT ${COLS} FROM ${from} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY i.published_at DESC LIMIT ${limit}`;
-  return (db.prepare(sql).all(...args) as Row[]).map(toView);
+  const views = (db.prepare(sql).all(...args) as Row[]).map(toView);
+  if (!p.includeDup) attachAlso(db, views);
+  return views;
+}
+
+const ALSO_MAX = 10;
+
+/** 给代表条目补上并入它的其他来源 */
+export function attachAlso(db: DB, views: ItemView[]): void {
+  if (!views.length) return;
+  const byId = new Map(views.map((v) => [v.id, v]));
+  const rows = db
+    .prepare(
+      `SELECT i.id, i.url, coalesce(i.title_zh, i.title) AS title, s.name AS source_name, i.published_at, i.dup_of
+       FROM items i JOIN sources s ON s.id = i.source_id WHERE i.dup_of IN (${views.map(() => '?').join(',')}) ORDER BY i.published_at ASC, i.id ASC`,
+    )
+    .all(...views.map((v) => v.id)) as Row[];
+  for (const r of rows) {
+    const v = byId.get(Number(r.dup_of));
+    if (!v || v.also.length >= ALSO_MAX) continue;
+    v.also.push({ id: Number(r.id), url: String(r.url), title: String(r.title), source_name: String(r.source_name), published_at: Number(r.published_at) });
+  }
 }
 
 export function getItem(db: DB, id: number): (ItemView & { content: string; translation_zh: string | null }) | null {
   const r = db.prepare(`SELECT ${COLS}, i.content, i.translation_zh FROM items i JOIN sources s ON s.id = i.source_id WHERE i.id = ?`).get(id) as Row | undefined;
   if (!r) return null;
-  return { ...toView(r), content: String(r.content ?? ''), translation_zh: (r.translation_zh as string) ?? null };
+  const v = { ...toView(r), content: String(r.content ?? ''), translation_zh: (r.translation_zh as string) ?? null };
+  attachAlso(db, [v]);
+  return v;
 }
 
 export function stats(db: DB): { total: number; today: number; analyzed: number; pending: number } {
