@@ -680,6 +680,24 @@ assert.match(calls.filter((c) => c.url.startsWith('/api/items?')).at(-1).url, /r
 $('rel').checked = false;
 console.log('✓ 与你相关标签与筛选');
 
+// 7.1b 同一事件并成一条：「另有 N 个来源」折叠 / 展开，来源与标题按文本显示
+routes['GET /api/items'] = () => ({ items: [{ ...ITEM(1, null, null), also: [{ id: 5, url: 'https://b.com/5', title: '<img src=x onerror=alert(1)>', source_name: 'TechCrunch AI', published_at: now }, { id: 6, url: 'javascript:alert(1)', title: '坏链接', source_name: 'X', published_at: now }] }, ITEM(2, null, null)] });
+await ctx.loadItems();
+await tick();
+const alsoToggle = () => find($('list'), cls('also-toggle'));
+assert.equal(alsoToggle().length, 1, '只有带其他来源的条目显示「另有」');
+assert.match(alsoToggle()[0].textContent, /另有 2 个来源/);
+assert.equal(find($('list'), cls('also-list')).length, 0, '默认折叠');
+await alsoToggle()[0].fire('click');
+const alsoLinks = find($('list'), cls('also-list'));
+assert.equal(alsoLinks.length, 1, '点击后展开');
+assert.ok(find(alsoLinks[0], (el) => el.tagName === 'A' && el.attrs.href === 'https://b.com/5' && el.textContent === '<img src=x onerror=alert(1)>'), '标题按文本，链接可点');
+assert.ok(!find(alsoLinks[0], (el) => el.attrs?.href?.startsWith('javascript')).length, '不生成 javascript: 链接');
+assert.ok(!find($('list'), (el) => el.tagName === 'IMG').length);
+await alsoToggle()[0].fire('click');
+assert.equal(find($('list'), cls('also-list')).length, 0, '再点收起');
+console.log('✓ 同一事件的其他来源折叠展示');
+
 // 7.2 产品顾问：参考了 N 条记忆、M 次历史讨论
 routes['GET /api/pm/reviews/12'] = () => ({
   review: {

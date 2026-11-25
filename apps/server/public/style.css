@@ -1134,3 +1134,9 @@ mark.gr-hit.flash { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (max-width: 640px) {
   .kb-imp-ops { margin-left: 0; width: 100%; }
 }
+
+/* 同一事件的其他来源 */
+.also { margin-top: 6px; font-size: 12.5px; }
+.also-toggle { font-size: 12.5px; }
+.also-list { list-style: none; margin: 6px 0 0; padding: 0 0 0 10px; border-left: 2px solid var(--line); display: grid; gap: 4px; }
+.also-list a { overflow-wrap: anywhere; }

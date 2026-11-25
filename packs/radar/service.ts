@@ -3,6 +3,7 @@ import type { DB } from '../../packages/core/db.ts';
 import { Llm } from '../../packages/core/llm.ts';
 import { Reach } from '../../packages/core/reach.ts';
 import { analyzePending, retagPending } from './analyze.ts';
+import { clusterRecent } from './cluster.ts';
 import { collectOnce, syncSources } from './collect.ts';
 import { enrichPending } from './enrich.ts';
 import { TopicMatcher, loadTopics } from './text.ts';
@@ -56,8 +57,18 @@ export class Radar {
         this.state.phase = '读取全文';
         await enrichPending(this.db, this.reach, this.cfg.fulltextLimit, this.cfg.llm.analyzeLimitPerRun, this.log);
       }
+      const analyzeStart = Date.now();
       this.state.phase = '分析中';
       const analyzed = await analyzePending(this.db, this.llm, this.topics, this.cfg.llm.analyzeLimitPerRun, this.log, this.analyzeContext);
+      if (this.llm.enabled && analyzed) {
+        this.state.phase = '事件归并';
+        try {
+          const n = await clusterRecent(this.db, this.llm, analyzeStart, this.log);
+          if (n) this.log(`  事件归并：${n} 条并入同一事件`);
+        } catch (e) {
+          this.log(`  事件归并出错：${e instanceof Error ? e.message : e}`);
+        }
+      }
       if (this.llm.enabled) {
         this.state.phase = '主题校准';
         const n = await retagPending(this.db, this.llm, this.topics, RETAG_PER_RUN, this.log);
