@@ -43,7 +43,7 @@ const S = { name: '周报起草与整理流程', scene: '当你需要把这一�
 test('迁移 14：三张表存在，重复打开不重复迁移', () => {
   const { db, done } = setup();
   const v = db.prepare('PRAGMA user_version').get() as { user_version: number };
-  assert.equal(v.user_version, 16);
+  assert.equal(v.user_version, 17);
   const names = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((r) => r.name);
   for (const t of ['skills', 'skill_revisions', 'profile_versions']) assert.ok(names.includes(t), t);
   done();

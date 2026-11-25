@@ -613,6 +613,14 @@ const MIGRATIONS: string[] = [
     snapshot TEXT NOT NULL
   );
   `,
+  // 17：情报自动入知识库的记录（日报 / 单条资讯）。doc_id 为空表示已处理但没有入库（条数太少、已在库里）；删除知识库条目后不会被重新入库
+  `
+  CREATE TABLE radar_wiki_feed (
+    key TEXT PRIMARY KEY,
+    doc_id INTEGER,
+    at INTEGER NOT NULL
+  );
+  `,
 ];
 
 export type DB = DatabaseSync;

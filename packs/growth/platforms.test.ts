@@ -22,7 +22,7 @@ test('迁移 13：运营表存在，user_version=13', () => {
   const db = openDb(path.join(dir, 't.db'));
   const names = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'gr_%' ORDER BY name").all() as { name: string }[]).map((r) => r.name);
   assert.deepEqual(names, ['gr_campaigns', 'gr_copies', 'gr_revisions']);
-  assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 16);
+  assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 17);
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { openDb } from '../../packages/core/db.ts';
 
 const V5_DROP = `
-  DROP TABLE IF EXISTS wiki_node_undo; DROP TABLE IF EXISTS wiki_page_node; DROP TABLE IF EXISTS wiki_nodes; DROP TABLE IF EXISTS kb_expand_calls; DROP TABLE IF EXISTS kb_expand; DROP TABLE IF EXISTS skill_runs; DROP TABLE IF EXISTS skill_revisions; DROP TABLE IF EXISTS skills; DROP TABLE IF EXISTS profile_versions;
+  DROP TABLE IF EXISTS radar_wiki_feed; DROP TABLE IF EXISTS wiki_node_undo; DROP TABLE IF EXISTS wiki_page_node; DROP TABLE IF EXISTS wiki_nodes; DROP TABLE IF EXISTS kb_expand_calls; DROP TABLE IF EXISTS kb_expand; DROP TABLE IF EXISTS skill_runs; DROP TABLE IF EXISTS skill_revisions; DROP TABLE IF EXISTS skills; DROP TABLE IF EXISTS profile_versions;
   DROP TABLE IF EXISTS gr_revisions; DROP TABLE IF EXISTS gr_copies; DROP TABLE IF EXISTS gr_campaigns; DROP TABLE IF EXISTS cp_doc_revisions; DROP TABLE IF EXISTS cp_doc_sections; DROP TABLE IF EXISTS cp_docs; DROP TABLE IF EXISTS cp_entity;
   DROP TABLE IF EXISTS cp_items; DROP TABLE IF EXISTS cp_assessments; DROP TABLE IF EXISTS cp_products;
   DROP TABLE IF EXISTS wiki_fts; DROP TABLE IF EXISTS wiki_assets; DROP TABLE IF EXISTS wiki_docs; DROP TABLE IF EXISTS wiki_cites; DROP TABLE IF EXISTS wiki_links; DROP TABLE IF EXISTS wiki_revisions; DROP TABLE IF EXISTS wiki_ops; DROP TABLE IF EXISTS wiki_pages; DROP TABLE IF EXISTS pm_prototypes; DROP TABLE IF EXISTS kb_fts; DROP TABLE IF EXISTS kb_chunks; DROP TABLE IF EXISTS kb_docs; DROP TABLE IF EXISTS kb_folders;
@@ -39,7 +39,7 @@ test('迁移 5：新表、profile 单行、history_fts 触发器与回填', () =
   const count = (where: string) => Number(get(`SELECT count(*) AS n FROM ${where}`).n);
   const run = (sql: string) => db.prepare(sql).run();
 
-  assert.equal(get('PRAGMA user_version').user_version, 16);
+  assert.equal(get('PRAGMA user_version').user_version, 17);
   assert.deepEqual({ ...get('SELECT id, content, manual FROM profile') }, { id: 1, content: '', manual: 0 });
   for (const t of ['events', 'memories', 'memory_changes']) assert.equal(count(t), 0);
   assert.equal(count('history_fts WHERE review_id = 1'), 3);

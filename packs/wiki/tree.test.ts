@@ -33,9 +33,9 @@ const code = (fn: () => unknown): { status: number; message: string } => {
   assert.fail('应当抛出 WikiError');
 };
 
-test('迁移 16：三张表存在，user_version 为 16', () => {
+test('迁移 16：三张表存在，user_version 为 17（后续迁移已追加）', () => {
   const { db, done } = tmpWikiDb();
-  assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 16);
+  assert.equal((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version, 17);
   for (const t of ['wiki_nodes', 'wiki_page_node', 'wiki_node_undo']) {
     assert.equal(count(db, 'SELECT count(*) AS n FROM sqlite_master WHERE name = ?', t), 1, t);
   }

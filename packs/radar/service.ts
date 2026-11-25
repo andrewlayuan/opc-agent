@@ -6,6 +6,7 @@ import { analyzePending, retagPending } from './analyze.ts';
 import { clusterRecent } from './cluster.ts';
 import { collectOnce, syncSources } from './collect.ts';
 import { enrichPending } from './enrich.ts';
+import { feedWiki } from './feed.ts';
 import { TopicMatcher, loadTopics } from './text.ts';
 import type { Topic } from './text.ts';
 
@@ -67,6 +68,14 @@ export class Radar {
           if (n) this.log(`  事件归并：${n} 条并入同一事件`);
         } catch (e) {
           this.log(`  事件归并出错：${e instanceof Error ? e.message : e}`);
+        }
+      }
+      if (this.llm.enabled) {
+        try {
+          const n = feedWiki(this.db);
+          if (n) this.log(`  情报入知识库：${n} 份（日报或与你相关的资讯），稍后由 Wiki 编入`);
+        } catch (e) {
+          this.log(`  情报入知识库出错：${e instanceof Error ? e.message : e}`);
         }
       }
       if (this.llm.enabled) {
