@@ -207,13 +207,14 @@ function renderItem(it) {
   const showOrig = it.title_zh && it.title_zh !== it.title;
   const li = h('li', { class: 'item' });
   li.append(
+  ...[
     h('div', { class: 'meta' }, h('span', { text: it.source_name }), h('span', { text: '·' }), h('span', { text: ago(it.published_at) }), dots(it.importance), it.starred ? h('span', { text: '★' }) : null),
     h('div', { class: 'title-row' }, h('a', { class: 'title', href: '#', onclick: (e) => { e.preventDefault(); toggleOpen(it.id, li); }, text: zhTitle }), relTag(it)),
     showOrig ? h('p', { class: 'orig', text: it.title }) : null,
     it.summary_zh ? h('p', { class: 'summary', text: it.summary_zh }) : !it.analyzed ? h('p', { class: 'summary muted', text: it.analysis_error ? '分析失败，展开后可重试' : '待分析' }) : null,
     it.topics.length ? h('div', { class: 'tags' }, it.topics.map((t) => h('span', { class: 'tag', text: topicLabel(t) }))) : null,
     alsoBlock(it),
-  );
+  ].filter((x) => x != null && x !== false));
   if (state.open.has(it.id)) li.append(renderDetailShell(it, li));
   return li;
 }

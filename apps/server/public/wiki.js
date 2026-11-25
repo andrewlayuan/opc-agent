@@ -271,12 +271,13 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
       const kids = ix.kids.get(n.id) ?? [];
       const on = isOpen(open, n);
       const counts = kids.length ? `${n.own}/${n.total}` : String(n.total);
+      const toggle = () => (setOpen(n.id, !on), rerender());
       const row = h(
         'div',
         { class: 'wiki-node-row' },
-        h('button', { type: 'button', class: 'wiki-twisty', text: on ? '▾' : '▸', 'aria-expanded': on ? 'true' : 'false', 'aria-label': on ? '折叠' : '展开', onclick: () => (setOpen(n.id, !on), rerender()) }),
-        h('span', { class: 'wiki-node-name', text: n.title, title: n.title }),
-        h('span', { class: 'kb-count', text: counts, title: kids.length ? `直属 ${n.own} 页，含子节点共 ${n.total} 页` : `${n.total} 页` }),
+        h('button', { type: 'button', class: 'wiki-twisty', text: on ? '▾' : '▸', 'aria-expanded': on ? 'true' : 'false', 'aria-label': on ? '折叠' : '展开', onclick: toggle }),
+        h('span', { class: 'wiki-node-name', text: n.title, title: n.title, onclick: toggle }),
+        h('span', { class: 'kb-count', text: counts, title: kids.length ? `直属 ${n.own} 页，含子节点共 ${n.total} 页` : `${n.total} 页`, onclick: toggle }),
         h(
           'span',
           { class: 'wiki-node-acts' },
