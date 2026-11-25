@@ -141,3 +141,16 @@ test('归并：提示词带防注入说明，材料里的 </items> 不会提前�
   assert.equal(seen[0][1].content.split('</items>').length, 2, '只有模板自己的一个闭合标签');
   done();
 });
+
+test('按来源筛选时也显示被并入别的事件的条目；不筛来源时仍折叠', () => {
+  const { db, done } = tmpDb();
+  const a = add(db, 1, 10);
+  const b = add(db, 2, 9, { src: 'deepmind' });
+  const c = add(db, 3, 8, { src: 'deepmind' });
+  db.prepare('UPDATE items SET dup_of = ? WHERE id = ?').run(a, b);
+  assert.deepEqual(listItems(db, {}).map((x) => x.id).sort(), [a, c].sort(), '不筛来源：b 折叠进 a');
+  assert.deepEqual(listItems(db, { source: 'deepmind' }).map((x) => x.id).sort(), [b, c].sort(), '筛 deepmind：b 也显示');
+  assert.deepEqual(listItems(db, { source: 'openai' }).map((x) => x.id), [a]);
+  assert.deepEqual(listItems(db, { source: 'openai' })[0].also.map((x) => x.id), [b], '代表条目仍带「另有来源」');
+  done();
+});
