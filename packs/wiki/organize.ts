@@ -49,7 +49,7 @@ export async function organize(db: DB, llm: Llm, opId: number, o: { now?: number
   const now = o.now ?? Date.now();
   const calls = new Calls(llm);
   const pages = db
-    .prepare("SELECT id, slug, kind, title, summary FROM wiki_pages WHERE deleted = 0 AND kind NOT IN ('source', 'answer') ORDER BY slug")
+    .prepare("SELECT id, slug, kind, title, summary FROM wiki_pages WHERE deleted = 0 AND kind NOT IN ('source', 'answer', 'trend') ORDER BY slug")
     .all() as unknown as { id: number; slug: string; kind: string; title: string; summary: string }[];
   const have = pageNodes(db);
   const todo = pages.filter((p) => !have.get(p.id)?.manual);
@@ -90,7 +90,7 @@ export async function organize(db: DB, llm: Llm, opId: number, o: { now?: number
     // 模型调用期间用户可能手动调整过：提交时以当前的 manual 与页面状态为准
     const nowHave = pageNodes(db);
     const byslug = new Map(
-      (db.prepare("SELECT id, slug FROM wiki_pages WHERE deleted = 0 AND kind NOT IN ('source', 'answer')").all() as unknown as { id: number; slug: string }[]).map((r) => [r.slug, r.id]),
+      (db.prepare("SELECT id, slug FROM wiki_pages WHERE deleted = 0 AND kind NOT IN ('source', 'answer', 'trend')").all() as unknown as { id: number; slug: string }[]).map((r) => [r.slug, r.id]),
     );
     let placed = 0;
     for (const d of decided) {

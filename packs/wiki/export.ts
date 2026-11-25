@@ -24,7 +24,7 @@ export interface ExportOpts {
 }
 
 const TOO_BIG = '导出内容超过 200MB，请按目录导出';
-const KIND_ORDER: PageKind[] = ['overview', 'entity', 'concept', 'compare', 'answer', 'source'];
+const KIND_ORDER: PageKind[] = ['overview', 'trend', 'entity', 'concept', 'compare', 'answer', 'source'];
 const COLS = 'id, slug, kind, title, summary, body, source_doc, edited_by_user, deleted, rev, created_at, updated_at';
 const LOG_OPS = 200;
 
@@ -198,6 +198,7 @@ const OP_LABEL: Record<OpKind, string> = {
   revert: '撤销',
   ask: '提问',
   organize: '整理目录',
+  trend: '趋势预测',
 };
 const STATUS_LABEL: Record<OpStatus, string> = { queued: '排队中', running: '进行中', done: '完成', error: '失败', reverted: '已撤销' };
 const pad = (n: number) => String(n).padStart(2, '0');

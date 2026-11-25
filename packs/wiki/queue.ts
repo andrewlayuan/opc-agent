@@ -8,6 +8,7 @@ import { docHash, generatePage, ingestDoc } from './ingest.ts';
 import type { IngestResult } from './ingest.ts';
 import { runLint } from './lint.ts';
 import { organize } from './organize.ts';
+import { generateTrends } from './trend.ts';
 import { createOp, finishOp, getOp, startOp } from './store.ts';
 import { WIKI_LIMITS, WikiError } from './types.ts';
 
@@ -16,6 +17,7 @@ type Runner = {
   lint: (llm: Llm, opId: number) => Promise<{ llmCalls: number }>;
   generate: (llm: Llm, opId: number, slug: string) => Promise<IngestResult>;
   organize: (llm: Llm, opId: number) => Promise<{ llmCalls: number; note: string }>;
+  trend: (llm: Llm, opId: number) => Promise<{ llmCalls: number; note: string }>;
 };
 
 export type DocState = 'none' | 'queued' | 'running' | 'done' | 'error' | 'reverted';
@@ -79,6 +81,7 @@ export class WikiQueue {
       lint: (l, op) => runLint(db, l, op),
       generate: (l, op, slug) => generatePage(db, l, op, slug),
       organize: (l, op) => organize(db, l, op),
+      trend: (l, op) => generateTrends(db, l, op),
     };
   }
 
@@ -111,6 +114,7 @@ export class WikiQueue {
     try {
       this.scan();
       this.maybeWeeklyLint();
+      this.maybeWeeklyTrend();
       await this.drain();
     } catch (e) {
       this.log(`[wiki] 后台任务异常：${(e as Error).message}`);
@@ -196,6 +200,12 @@ export class WikiQueue {
     return r ? Number(r.id) : createOp(this.db, 'organize', { now: this.clock.now() });
   }
 
+  /** 趋势预测：已有排队或进行中的就返回它，不重复入队 */
+  enqueueTrend(): number {
+    const r = this.db.prepare("SELECT id FROM wiki_ops WHERE kind = 'trend' AND status IN ('queued', 'running') LIMIT 1").get() as { id: number } | undefined;
+    return r ? Number(r.id) : createOp(this.db, 'trend', { now: this.clock.now() });
+  }
+
   /** 缺页生成：页面名暂存在 note 里，执行时读取 */
   enqueueGenerate(slug: string): number {
     const r = this.db.prepare("SELECT id FROM wiki_ops WHERE kind = 'generate' AND note = ? AND status IN ('queued', 'running') LIMIT 1").get(slug) as { id: number } | undefined;
@@ -212,6 +222,7 @@ export class WikiQueue {
     if (op.kind === 'ingest' && op.doc_id != null) return this.enqueueIngest(op.doc_id, { manual: true });
     if (op.kind === 'lint') return this.enqueueLint();
     if (op.kind === 'organize') return this.enqueueOrganize();
+    if (op.kind === 'trend') return this.enqueueTrend();
     if (op.kind === 'generate' && op.note) return this.enqueueGenerate(op.note);
     throw new WikiError(400, '该操作不能重试');
   }
@@ -231,6 +242,7 @@ export class WikiQueue {
         else if (op.kind === 'lint') await this.run.lint(llm, op.id);
         else if (op.kind === 'generate') await this.run.generate(llm, op.id, op.note);
         else if (op.kind === 'organize') await this.run.organize(llm, op.id);
+        else if (op.kind === 'trend') await this.run.trend(llm, op.id);
         else throw new WikiError(400, '未知的任务类型');
       } catch (e) {
         const msg = (e as Error).message || String(e);
@@ -261,6 +273,15 @@ export class WikiQueue {
     if (last != null && Number(last) >= mark) return null;
     if (!this.db.prepare('SELECT 1 FROM wiki_pages WHERE deleted = 0 LIMIT 1').get()) return null;
     return this.enqueueLint();
+  }
+
+  /** 距上次生成趋势预测满 7 天（从没生成过也算）且 Wiki 非空、模型可用时入队一次；手动生成同样会重新计时 */
+  maybeWeeklyTrend(): number | null {
+    if (!this.llm.enabled) return null;
+    const last = (this.db.prepare("SELECT max(created_at) AS t FROM wiki_ops WHERE kind = 'trend'").get() as { t: number | null }).t;
+    if (last != null && Number(last) > this.clock.now() - 7 * DAY) return null;
+    if (!this.db.prepare('SELECT 1 FROM wiki_pages WHERE deleted = 0 LIMIT 1').get()) return null;
+    return this.enqueueTrend();
   }
 
   status(): {

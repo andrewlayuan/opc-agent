@@ -671,6 +671,7 @@ input:focus, select:focus, textarea:focus {
 .k-concept { --k: var(--k-item); }
 .k-compare { --k: var(--k-review); }
 .k-answer { --k: var(--k-note); }
+.k-trend { --k: var(--k-review); }
 .k-source { --k: var(--muted); }
 .wiki-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0; font-size: 12px; }
 .wiki-dot::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 50%; background: var(--k); }

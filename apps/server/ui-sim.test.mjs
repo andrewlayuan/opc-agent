@@ -1966,6 +1966,35 @@ console.log('✓ 知识库网页条目：预览/文字标签与沙箱 iframe');
   assert.match(confirms[nConf], /整棵分类树恢复到整理之前/, '撤销整理的确认文案');
   assert.ok(calls.some((c) => c.method === 'POST' && c.url === '/api/wiki/ops/90/revert'));
 
+  // 趋势预测：确认后才入队；趋势页「依据」里的网址变成外链，其余协议不链接
+  const nTr = () => calls.filter((c) => c.url === '/api/wiki/trends').length;
+  const trendBtn = () => els().find((el) => el.tagName === 'BUTTON' && el.textContent === '更新趋势预测');
+  routes['POST /api/wiki/trends'] = { __status: 202, data: { opId: 95 } };
+  await reopen();
+  const t0 = nTr();
+  ctx.confirm = (m) => (confirms.push(m), false);
+  await trendBtn().fire('click');
+  await tick();
+  ctx.confirm = (m) => (confirms.push(m), true);
+  assert.equal(nTr(), t0, '取消确认不发请求');
+  await trendBtn().fire('click');
+  await tick();
+  assert.match(confirms.at(-1), /近 30 天.*最多 12 次.*撤销/s, '确认文案说明范围、调用上限、可撤销');
+  assert.equal(nTr(), t0 + 1);
+  assert.match($('toast').textContent, /已开始生成趋势预测/);
+  routes['GET /api/wiki/pages'] = { pages: [...PAGES, PG(5, 'trend-a', 'trend', '趋势：A', 1)], nodes: NODES, topics: [] };
+  routes['GET /api/wiki/pages/trend-a'] = { page: { ...PAGE('trend-a', '趋势：A', 1).page, id: 5, kind: 'trend', body: '## 依据\n1. 标题 · 源 · 2026-11-20 · https://news.test/1\n2. javascript:alert(1) 与 http://ok.test/x（括号）\n3. ftp://bad.test/z' } };
+  store.delete('opc.wikiTree');
+  await reopen();
+  await itemOf('趋势：A').fire('click');
+  await tick();
+  const ext = els().filter((el) => el.tagName === 'A' && /^https?:/i.test(el.attrs?.href ?? ''));
+  assert.deepEqual(ext.map((a) => a.attrs.href), ['https://news.test/1', 'http://ok.test/x'], '只有 http(s) 网址成为链接，括号不算在网址里');
+  assert.ok(ext.every((a) => a.attrs.rel === 'noopener noreferrer' && a.attrs.target === '_blank'));
+  assert.ok(!els().some((el) => el.tagName === 'A' && /^(javascript|ftp):/i.test(el.attrs?.href ?? '')), '不生成脚本或 ftp 链接');
+  assert.match(pane().textContent, /javascript:alert\(1\)/, '其余内容仍按文字显示');
+  routes['GET /api/wiki/pages'] = { pages: PAGES, nodes: NODES, topics: [] };
+
   // 只有节点没有页面时仍显示树
   routes['GET /api/wiki/pages'] = { pages: [], nodes: NODES, topics: [] };
   await reopen();

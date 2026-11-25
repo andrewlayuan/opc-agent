@@ -24,8 +24,8 @@ export interface LintIssue {
 const PER_TYPE = 100;
 const GROUP_MAX = 5;
 const BODY_FOR_MODEL = 3000;
-const NO_ORPHAN: ReadonlySet<string> = new Set(['overview', 'source', 'answer']);
-const NO_CITE_OK: ReadonlySet<string> = new Set(['overview', 'answer']);
+const NO_ORPHAN: ReadonlySet<string> = new Set(['overview', 'source', 'answer', 'trend']);
+const NO_CITE_OK: ReadonlySet<string> = new Set(['overview', 'answer', 'trend']);
 
 interface Pg {
   id: number;

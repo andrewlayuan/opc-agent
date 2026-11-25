@@ -582,7 +582,19 @@ function renderMarkdown(content, refList = [], opts = {}) {
       last = m.index + m[0].length;
     }
     parts.push(line.slice(last));
-    return parts;
+    return wikiMode ? parts.flatMap(linkify) : parts;
+  };
+  /** Wiki 页面里的裸 http(s) 网址（趋势页的「依据」）变成外链；只认 http/https，其余保持文字 */
+  const linkify = (part) => {
+    if (typeof part !== 'string') return [part];
+    const out = [];
+    let last = 0;
+    for (const m of part.matchAll(/https?:\/\/[^\s<>"'（）()]+/g)) {
+      out.push(part.slice(last, m.index), extLink(m[0], m[0]));
+      last = m.index + m[0].length;
+    }
+    out.push(part.slice(last));
+    return out.filter((x) => x !== '');
   };
   const cells = (line) => line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
   const nodes = [];

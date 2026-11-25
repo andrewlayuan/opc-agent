@@ -8,8 +8,8 @@ export class WikiError extends Error {
   }
 }
 
-export type PageKind = 'source' | 'entity' | 'concept' | 'compare' | 'overview' | 'answer';
-export const PAGE_KINDS: readonly PageKind[] = ['source', 'entity', 'concept', 'compare', 'overview', 'answer'];
+export type PageKind = 'source' | 'entity' | 'concept' | 'compare' | 'overview' | 'answer' | 'trend';
+export const PAGE_KINDS: readonly PageKind[] = ['source', 'entity', 'concept', 'compare', 'overview', 'answer', 'trend'];
 export const KIND_LABEL: Record<PageKind, string> = {
   source: '资料摘要',
   entity: '实体',
@@ -17,10 +17,11 @@ export const KIND_LABEL: Record<PageKind, string> = {
   compare: '对比',
   overview: '总览',
   answer: '问答',
+  trend: '趋势',
 };
 
 /** ask 只用来计入每日额度，不能撤销 */
-export type OpKind = 'ingest' | 'lint' | 'fix' | 'generate' | 'query_save' | 'edit' | 'restore' | 'revert' | 'ask' | 'organize';
+export type OpKind = 'ingest' | 'lint' | 'fix' | 'generate' | 'query_save' | 'edit' | 'restore' | 'revert' | 'ask' | 'organize' | 'trend';
 export type OpStatus = 'queued' | 'running' | 'done' | 'error' | 'reverted';
 
 const MB = 1024 * 1024;
@@ -53,6 +54,12 @@ export const WIKI_LIMITS = {
   ingestNewNodes: 5,
   organizeBatch: 100,
   organizeCalls: 10,
+  trendCalls: 12,
+  trendMinPages: 3,
+  trendMinItems: 5,
+  trendDays: 30,
+  trendItems: 40,
+  trendPages: 25,
 };
 
 export const isPageKind = (v: unknown): v is PageKind => typeof v === 'string' && (PAGE_KINDS as readonly string[]).includes(v);

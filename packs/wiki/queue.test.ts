@@ -47,6 +47,11 @@ function setup(o: { now?: number; busy?: () => boolean; dailyCalls?: number; ing
         finishOp(env.db, opId, { status: 'done', llmCalls: 1, now });
         return { llmCalls: 1, note: '' };
       },
+      trend: async (_llm, opId) => {
+        ran.push('trend');
+        finishOp(env.db, opId, { status: 'done', llmCalls: 1, now });
+        return { llmCalls: 1, note: '' };
+      },
     },
   });
   return { ...env, q, ran, setNow: (t: number) => (now = t) };
@@ -151,10 +156,12 @@ test('每周体检：周一 03:05 入队一次，当天再 tick 不重复；Wiki
   assert.deepEqual(ran, [], 'Wiki 为空');
   seedPage(db);
   await q.tick();
-  assert.deepEqual(ran, ['lint']);
+  assert.deepEqual(ran, ['lint', 'trend'], '从没生成过趋势预测时一并入队');
   setNow(local(2026, 11, 16, 9));
   await q.tick();
-  assert.deepEqual(ran, ['lint']);
+  assert.deepEqual(ran, ['lint', 'trend']);
+  await q.tick();
+  assert.deepEqual(ran, ['lint', 'trend'], '同一周不重复');
   assert.equal(q.status().lastLint?.issues, 1);
   done();
 });
@@ -164,7 +171,28 @@ test('每周体检：停机 9 天后启动立即补跑', async () => {
   seedPage(db);
   db.prepare("INSERT INTO wiki_ops(kind, status, created_at) VALUES ('lint', 'done', ?)").run(local(2026, 11, 10, 3, 1));
   await q.tick();
-  assert.deepEqual(ran, ['lint']);
+  assert.deepEqual(ran, ['lint', 'trend']);
+  done();
+});
+
+test('每周趋势预测：满 7 天才入队；Wiki 为空不入队；排队中不重复；失败可重试', async () => {
+  const { db, q, setNow, done } = setup({ now: local(2026, 11, 16, 10) });
+  assert.equal(q.maybeWeeklyTrend(), null, 'Wiki 为空');
+  seedPage(db);
+  db.prepare("INSERT INTO wiki_ops(kind, status, created_at) VALUES ('trend', 'done', ?)").run(local(2026, 11, 9, 11));
+  assert.equal(q.maybeWeeklyTrend(), null, '上次在 6 天 23 小时前');
+  setNow(local(2026, 11, 16, 11, 1));
+  const id = q.maybeWeeklyTrend();
+  assert.ok(id != null && id > 0, '满 7 天入队');
+  assert.equal(getOp(db, id!)!.kind, 'trend');
+  assert.equal(q.enqueueTrend(), id, '已有排队的不重复入队');
+  assert.equal(q.maybeWeeklyTrend(), null, '排队中再检查不新增');
+  db.prepare("UPDATE wiki_ops SET status = 'done' WHERE id = ?").run(id);
+  assert.equal(q.maybeWeeklyTrend(), null, '刚生成过');
+  db.prepare("UPDATE wiki_ops SET status = 'error' WHERE id = ?").run(id);
+  const r = q.retry(id!);
+  assert.notEqual(r, id);
+  assert.deepEqual([getOp(db, r)!.kind, getOp(db, r)!.status], ['trend', 'queued']);
   done();
 });
 
@@ -219,6 +247,7 @@ function setupOrganize(o: { organize?: (opId: number) => Promise<{ llmCalls: num
       ingest: async () => ({ changes: [], llmCalls: 0, note: '' }),
       lint: async () => ({ llmCalls: 0 }),
       generate: async () => ({ changes: [], llmCalls: 0, note: '' }),
+      trend: async () => ({ llmCalls: 0, note: '' }),
       organize: async (llm, opId) => {
         ran.push(`organize:${opId}`);
         await llm.chat([{ role: 'user', content: 'x' }]);

@@ -289,6 +289,13 @@ async function route(deps: WikiApiDeps, req: http.IncomingMessage, res: http.Ser
     }
     return false;
   }
+  if (p === '/api/wiki/trends' && method === 'POST') {
+    if (!deps.llm.enabled) throw new HttpError(503, '未配置模型，无法生成趋势预测');
+    const opId = queue.enqueueTrend();
+    queue.kick();
+    sendJson(res, 202, { opId });
+    return true;
+  }
   if (p === '/api/wiki/organize' && method === 'POST') {
     const opId = queue.enqueueOrganize();
     queue.kick();
@@ -345,7 +352,7 @@ async function route(deps: WikiApiDeps, req: http.IncomingMessage, res: http.Ser
     const unplaced = Number(
       (
         db
-          .prepare("SELECT count(*) AS n FROM wiki_pages p WHERE p.deleted = 0 AND p.kind NOT IN ('source', 'answer') AND NOT EXISTS (SELECT 1 FROM wiki_page_node pn WHERE pn.page_id = p.id)")
+          .prepare("SELECT count(*) AS n FROM wiki_pages p WHERE p.deleted = 0 AND p.kind NOT IN ('source', 'answer', 'trend') AND NOT EXISTS (SELECT 1 FROM wiki_page_node pn WHERE pn.page_id = p.id)")
           .get() as { n: number }
       ).n,
     );

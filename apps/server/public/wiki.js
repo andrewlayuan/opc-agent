@@ -2,6 +2,7 @@
 export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
   const KINDS = [
     ['overview', '总览'],
+    ['trend', '趋势'],
     ['entity', '实体'],
     ['concept', '概念'],
     ['compare', '对比'],
@@ -9,10 +10,10 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     ['source', '资料摘要'],
   ];
   const KIND = Object.fromEntries(KINDS);
-  const OP = { ingest: '摄入', lint: '体检', fix: '自动修复', generate: '生成缺页', query_save: '存为问答', edit: '编辑', restore: '恢复版本', revert: '撤销', ask: '提问', organize: '整理目录' };
+  const OP = { ingest: '摄入', lint: '体检', fix: '自动修复', generate: '生成缺页', query_save: '存为问答', edit: '编辑', restore: '恢复版本', revert: '撤销', ask: '提问', organize: '整理目录', trend: '趋势预测' };
   const OP_STATUS = { queued: '排队中', running: '进行中', done: '完成', error: '失败', reverted: '已撤销' };
   const LINT = { orphan: '孤立页', missing: '缺页', broken_cite: '依据失效', stale: '页面过时', no_cite: '无依据', missing_link: '缺少链接', conflict: '矛盾', gap: '数据缺口' };
-  const REVERTABLE = new Set(['ingest', 'fix', 'generate', 'query_save', 'edit', 'restore', 'organize']);
+  const REVERTABLE = new Set(['ingest', 'fix', 'generate', 'query_save', 'edit', 'restore', 'organize', 'trend']);
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const POLL_MS = 10000;
   const GRAPH_MAX = 300;
@@ -145,7 +146,7 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     const list = h('div', { class: 'wiki-list' });
     const organize = h('div', { class: 'wiki-organize' });
     organize.hidden = true;
-    const tools = h('div', { class: 'wiki-tree-tools' }, h('button', { type: 'button', class: 'link', text: '新建分类', onclick: () => addNode(null) }));
+    const tools = h('div', { class: 'wiki-tree-tools' }, h('button', { type: 'button', class: 'link', text: '新建分类', onclick: () => addNode(null) }), ' ', h('button', { type: 'button', class: 'link', text: '更新趋势预测', title: '按领域结合已有页面与近 30 天情报生成「趋势：领域」页面；每周一自动更新一次', onclick: trendNow }));
     const home = h('button', { type: 'button', class: 'wiki-home', text: '知识图谱', onclick: goHome });
     const scope = h('select', { class: 'wiki-scope', title: '导出范围', 'aria-label': '导出范围' }, h('option', { value: 'all', text: '全部页面' }), ...KINDS.map(([k, label]) => h('option', { value: `kind:${k}`, text: `仅${label}` })));
     const exp = h('a', { class: 'wiki-btn', href: '/api/wiki/export?scope=all', text: '导出' });
@@ -348,6 +349,15 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
       await api(`/api/wiki/nodes/${n.id}`, { method: 'DELETE' });
     });
     await loadPages();
+  }
+
+  async function trendNow() {
+    if (!confirm('按每个领域（二级分类），结合已有页面与近 30 天的情报生成「趋势：领域」页面（已有的会更新为新一期）。每个领域调用 1 次模型，一次最多 12 次，计入今日额度，可在「体检与日志」里撤销。继续？')) return;
+    await act(async () => {
+      await api('/api/wiki/trends', { method: 'POST' });
+      toast('已开始生成趋势预测，完成后会出现在各领域下');
+      refreshStatus();
+    });
   }
 
   async function organizeNow() {
@@ -956,7 +966,7 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
       if (!r) return;
       put(detail, 
         op.error ? h('p', { class: 'kb-note err', text: op.error }) : null,
-        op.kind === 'organize' && op.note && op.status !== 'error' ? h('p', { class: 'muted', text: op.note }) : null,
+        (op.kind === 'organize' || op.kind === 'trend') && op.note && op.status !== 'error' ? h('p', { class: 'muted', text: op.note }) : null,
         ...(r.diffs.length
           ? r.diffs.map((d) =>
               h(
@@ -1012,7 +1022,7 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
           'span',
           { class: 'wiki-op-acts' },
           h('button', { type: 'button', class: 'link', text: '详情', onclick: expand }),
-          REVERTABLE.has(op.kind) && op.status === 'done' && !(op.kind === 'organize' && !op.pages.length && /^没有需要整理/.test(op.note || '')) ? h('button', { type: 'button', class: 'link', text: '撤销', onclick: () => revert(false) }) : null,
+          REVERTABLE.has(op.kind) && op.status === 'done' && !(op.kind === 'organize' && !op.pages.length && /^没有需要整理/.test(op.note || '')) && !(op.kind === 'trend' && !op.pages.length) ? h('button', { type: 'button', class: 'link', text: '撤销', onclick: () => revert(false) }) : null,
           op.status === 'error' ? h('button', { type: 'button', class: 'link', text: '重试', onclick: retry }) : null,
         ),
       ),

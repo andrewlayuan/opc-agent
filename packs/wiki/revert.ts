@@ -5,7 +5,7 @@ import type { PageChange, PageRow } from './store.ts';
 import { WikiError } from './types.ts';
 import type { OpKind } from './types.ts';
 
-const REVERTABLE: ReadonlySet<OpKind> = new Set<OpKind>(['ingest', 'fix', 'generate', 'query_save', 'edit', 'restore']);
+const REVERTABLE: ReadonlySet<OpKind> = new Set<OpKind>(['ingest', 'fix', 'generate', 'query_save', 'edit', 'restore', 'trend']);
 
 export interface RevertConflict {
   slug: string;

@@ -15,9 +15,10 @@ import { handleWikiApi } from './wiki-api.ts';
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
 
-async function setup(o: { dailyCalls?: number } = {}) {
+async function setup(o: { dailyCalls?: number; llmOff?: boolean } = {}) {
   const t = tmpWikiDb();
   const llm = stubLlm([]);
+  if (o.llmOff) Object.defineProperty(llm, 'enabled', { value: false });
   const queue = new WikiQueue(t.db, llm, { dailyCalls: o.dailyCalls, busy: () => false, log: () => {} });
   const assets = new WikiAssets(t.db, path.join(t.dir, 'wiki-assets'));
   const tmpDir = path.join(t.dir, 'wiki-export');
@@ -318,6 +319,30 @@ test('分类树：POST /organize 返回 202 并去重；status.unplaced 随分�
     assert.equal(s.db.prepare("SELECT kind FROM wiki_ops WHERE id = ?").get(o1.data.opId)!.kind, 'organize');
   } finally {
     await s.close();
+  }
+});
+
+test('趋势预测：POST /trends 返回 202 并去重；未配置模型 503；趋势页不计入未分类', async () => {
+  const s = await setup();
+  try {
+    const t1 = await s.call('POST', '/api/wiki/trends');
+    assert.equal(t1.status, 202);
+    const t2 = await s.call('POST', '/api/wiki/trends');
+    assert.equal(t2.data.opId, t1.data.opId);
+    assert.equal(s.db.prepare('SELECT kind FROM wiki_ops WHERE id = ?').get(t1.data.opId)!.kind, 'trend');
+    await put(s, 'trend-x', 'trend');
+    assert.equal((await s.call('GET', '/api/wiki/status')).data.unplaced, 0, '趋势页不算待分类');
+    assert.equal((await s.call('GET', '/api/wiki/pages?kind=trend')).data.pages.length, 1);
+  } finally {
+    await s.close();
+  }
+  const off = await setup({ llmOff: true });
+  try {
+    const r = await off.call('POST', '/api/wiki/trends');
+    assert.equal(r.status, 503);
+    assert.equal(off.db.prepare("SELECT count(*) AS n FROM wiki_ops WHERE kind = 'trend'").get()!.n, 0);
+  } finally {
+    await off.close();
   }
 });
 
