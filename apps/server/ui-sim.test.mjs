@@ -770,6 +770,45 @@ assert.match($('toast').textContent, /开始日期不能晚于结束日期/);
 $('purge-box').hidden = true;
 console.log('✓ 清理情报：区间 / 全部、预览、确认、保留说明');
 
+// 7.1d 重新生成今日：先预览，确认后才真正开始
+let regenReply = (b) => (b.dryRun ? { matched: 5, deleted: 4, keptStarred: 1, keptInKb: 0, sources: 30 } : { message: '已开始重新生成，请稍候' });
+routes['POST /api/regenerate'] = (b) => regenReply(b);
+const regenCalls = () => calls.filter((c) => c.url === '/api/regenerate');
+const nr0 = regenCalls().length;
+const nConfR = confirms.length;
+await $('regen-open').fire('click');
+await tick();
+const rc = regenCalls().slice(nr0);
+assert.equal(rc.length, 2, '先预览再开始');
+const todayD = new Date();
+assert.equal(rc[0].body.dryRun, true);
+assert.equal(rc[0].body.from, new Date(todayD.getFullYear(), todayD.getMonth(), todayD.getDate()).getTime(), '范围是本地今天 0 点');
+assert.equal(rc[0].body.to, new Date(todayD.getFullYear(), todayD.getMonth(), todayD.getDate(), 23, 59, 59, 999).getTime());
+assert.deepEqual(rc[1].body, { from: rc[0].body.from, to: rc[0].body.to });
+assert.match(confirms[nConfR], /删除今天发布的 4 条.*1 条已收藏的保留.*全部 30 个信息源.*忽略缓存.*更新今日简报.*无法恢复/s);
+// 取消：只有预览
+ctx.confirm = (m) => (confirms.push(m), false);
+const nr1 = regenCalls().length;
+await $('regen-open').fire('click');
+await tick();
+ctx.confirm = (m) => (confirms.push(m), true);
+assert.equal(regenCalls().length, nr1 + 1, '取消后不开始');
+// 今天没有可删的：仍可重新获取
+regenReply = (b) => (b.dryRun ? { matched: 0, deleted: 0, keptStarred: 0, keptInKb: 0, sources: 30 } : { message: 'ok' });
+const nConfR2 = confirms.length;
+await $('regen-open').fire('click');
+await tick();
+assert.match(confirms[nConfR2], /今天暂无可删除的条目/);
+// 服务端拒绝（已有任务）：给出提示、不抛错
+regenReply = (b) => {
+  if (b.dryRun) return { matched: 0, deleted: 0, keptStarred: 0, keptInKb: 0, sources: 30 };
+  throw new Error('已有任务在运行，请稍后再试');
+};
+await $('regen-open').fire('click');
+await tick();
+assert.match($('toast').textContent, /已有任务在运行/);
+console.log('✓ 重新生成今日：预览、确认、取消、无可删、被拒绝');
+
 // 7.2 产品顾问：参考了 N 条记忆、M 次历史讨论
 routes['GET /api/pm/reviews/12'] = () => ({
   review: {

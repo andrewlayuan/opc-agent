@@ -22,7 +22,8 @@ export interface PurgeResult {
 
 const TOMBSTONE_KEEP_MS = 180 * 24 * 3600 * 1000;
 
-export function purgeItems(db: DB, range: PurgeRange, o: { dryRun?: boolean; now?: number } = {}): PurgeResult {
+/** tombstone=false：不记录已删网址（重新生成时要让这些条目能被再采集回来） */
+export function purgeItems(db: DB, range: PurgeRange, o: { dryRun?: boolean; now?: number; tombstone?: boolean } = {}): PurgeResult {
   const now = o.now ?? Date.now();
   const where: string[] = [];
   const args: number[] = [];
@@ -61,7 +62,7 @@ export function purgeItems(db: DB, range: PurgeRange, o: { dryRun?: boolean; now
     const tomb = db.prepare('INSERT OR REPLACE INTO radar_deleted_urls(url, at) VALUES (?, ?)');
     const rm = db.prepare('DELETE FROM items WHERE id = ?');
     for (const r of del) {
-      tomb.run(r.url, now);
+      if (o.tombstone !== false) tomb.run(r.url, now);
       rm.run(r.id);
     }
     db.prepare('DELETE FROM radar_deleted_urls WHERE at < ?').run(now - TOMBSTONE_KEEP_MS);
@@ -94,4 +95,11 @@ export function parsePurgeBody(body: Record<string, unknown>): { range: PurgeRan
   if (from === undefined || to === undefined) throw new PurgeInputError('请选择「全部」或指定起止日期');
   if (from > to) throw new PurgeInputError('开始日期不能晚于结束日期');
   return { range: { from, to }, dryRun };
+}
+
+/** 重新生成某段时间：必须给起止时间（不允许「全部」），可带 dryRun */
+export function parseRegenBody(body: Record<string, unknown>): { range: Required<PurgeRange>; dryRun: boolean } {
+  if (body.all !== undefined) throw new PurgeInputError('重新生成只能指定日期范围');
+  const p = parsePurgeBody(body);
+  return { range: p.range as Required<PurgeRange>, dryRun: p.dryRun };
 }

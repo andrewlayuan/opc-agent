@@ -104,6 +104,11 @@ export function syncSources(db: DB): void {
   }
 }
 
+/** 清掉所有启用源的 ETag / Last-Modified，让下一次采集不会因「未修改」而跳过 */
+export function resetSourceCache(db: DB): number {
+  return Number(db.prepare('UPDATE sources SET etag = NULL, last_modified = NULL WHERE enabled = 1').run().changes);
+}
+
 export interface RunStats {
   runId: number;
   okSources: number;

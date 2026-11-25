@@ -28,7 +28,7 @@ import { defaultSkillsDir, loadPmSkills } from '../../packs/pm/skills.ts';
 import { ProtoRunner } from '../../packs/proto/runner.ts';
 import { getVersion as getProtoVersion, recover as recoverProtos } from '../../packs/proto/store.ts';
 import { getInterests, setInterests } from '../../packs/radar/prefs.ts';
-import { PurgeInputError, parsePurgeBody, purgeItems } from '../../packs/radar/purge.ts';
+import { PurgeInputError, parsePurgeBody, parseRegenBody, purgeItems } from '../../packs/radar/purge.ts';
 import { getItem, listItems, stats } from '../../packs/radar/query.ts';
 import { Radar } from '../../packs/radar/service.ts';
 import { HttpError, clientIp, contentDisposition, parseCookies, readBodyToFile, readJson, sameOrigin, securityHeaders, sendJson, staticFor } from './http.ts';
@@ -161,6 +161,16 @@ function versionNo(s: string): number {
 }
 
 let briefRunning = false;
+
+async function createBrief(focusOn: boolean) {
+  const focus = focusOn ? getInterests(db, radar.topics).topics : [];
+  if (focusOn && !focus.length) throw new HttpError(400, '还没有设置「我的关注」');
+  const ctx = safeContext('brief');
+  const b = await generateBrief(db, radar.llm, radar.topics, 24, focus, ctx.text);
+  safeTouch(ctx.memoryIds);
+  record({ kind: 'brief_generate', refType: 'brief', refId: b.id, summary: `生成简报${focus.length ? `（聚焦：${topicLabels(focus).join('、')}）` : ''}`, payload: { focus } });
+  return b;
+}
 
 /** 操作成功后记录交互事件；传函数时在 try 内构造。失败只记日志，不影响原操作的响应 */
 function record(input: EventInput | (() => EventInput | null)): void {
@@ -342,16 +352,41 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     briefRunning = true;
     try {
       const body = await readJson(req, 1024);
-      const focus = body.focus ? getInterests(db, radar.topics).topics : [];
-      if (body.focus && !focus.length) throw new HttpError(400, '还没有设置「我的关注」');
-      const ctx = safeContext('brief');
-      const b = await generateBrief(db, radar.llm, radar.topics, 24, focus, ctx.text);
-      safeTouch(ctx.memoryIds);
-      record({ kind: 'brief_generate', refType: 'brief', refId: b.id, summary: `生成简报${focus.length ? `（聚焦：${topicLabels(focus).join('、')}）` : ''}`, payload: { focus } });
-      return sendJson(res, 200, { brief: b });
+      return sendJson(res, 200, { brief: await createBrief(!!body.focus) });
     } finally {
       briefRunning = false;
     }
+  }
+
+  if (p === '/api/regenerate' && method === 'POST') {
+    const body = await readJson(req, 1024);
+    let parsed: ReturnType<typeof parseRegenBody>;
+    try {
+      parsed = parseRegenBody(body);
+    } catch (e) {
+      if (e instanceof PurgeInputError) throw new HttpError(400, e.message);
+      throw e;
+    }
+    if (parsed.dryRun) {
+      const r = purgeItems(db, parsed.range, { dryRun: true });
+      const sources = (db.prepare('SELECT count(*) AS n FROM sources WHERE enabled = 1').get() as { n: number }).n;
+      return sendJson(res, 200, { ...r, sources: Number(sources) });
+    }
+    if (radar.state.running) throw new HttpError(409, '已有任务在运行，请稍后再试');
+    // 后台执行：清理该时段 → 重新采集（忽略缓存）→ 分析 → 事件归并 → 更新简报
+    void (async () => {
+      await radar.runCycle({ regenerate: parsed.range });
+      if (!radar.llm.enabled || briefRunning) return;
+      briefRunning = true;
+      try {
+        await createBrief(getInterests(db, radar.topics).topics.length > 0);
+      } catch (e) {
+        console.log(`[radar] 重新生成简报失败：${e instanceof Error ? e.message : e}`);
+      } finally {
+        briefRunning = false;
+      }
+    })();
+    return sendJson(res, 202, { message: '已开始重新生成，请稍候' });
   }
 
   if (p === '/api/prefs/interests' && method === 'GET') return sendJson(res, 200, { interests: getInterests(db, radar.topics) });

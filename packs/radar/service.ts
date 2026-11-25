@@ -4,9 +4,11 @@ import { Llm } from '../../packages/core/llm.ts';
 import { Reach } from '../../packages/core/reach.ts';
 import { analyzePending, retagPending } from './analyze.ts';
 import { clusterRecent } from './cluster.ts';
-import { collectOnce, syncSources } from './collect.ts';
+import { collectOnce, resetSourceCache, syncSources } from './collect.ts';
 import { enrichPending } from './enrich.ts';
 import { feedWiki } from './feed.ts';
+import { purgeItems } from './purge.ts';
+import type { PurgeRange } from './purge.ts';
 import { TopicMatcher, loadTopics } from './text.ts';
 import type { Topic } from './text.ts';
 
@@ -46,11 +48,20 @@ export class Radar {
   }
 
   /** 单飞：同一时间只跑一轮采集+分析 */
-  async runCycle(): Promise<string> {
+  async runCycle(opts: { regenerate?: Required<PurgeRange> } = {}): Promise<string> {
     if (this.state.running) return '已有任务在运行';
     this.state.running = true;
     this.state.startedAt = Date.now();
     try {
+      let regenNote = '';
+      if (opts.regenerate) {
+        // 重新生成：先清掉该时段的条目（不记已删网址），并让所有源忽略「未修改」缓存，再走完整的采集→分析流程
+        this.state.phase = '清理旧内容';
+        const r = purgeItems(this.db, opts.regenerate, { tombstone: false });
+        const n = resetSourceCache(this.db);
+        regenNote = `重新生成：清除 ${r.deleted} 条，`;
+        this.log(`[radar] 重新生成：清除 ${r.deleted} 条旧内容，${n} 个信息源将完整重新获取`);
+      }
       this.state.phase = '采集中';
       this.log(`[radar] 开始采集 ${new Date().toISOString()}`);
       const s = await collectOnce(this.db, this.matcher, { maxAgeDays: this.cfg.maxAgeDays, reach: this.reach, log: this.log });
@@ -84,7 +95,7 @@ export class Radar {
         if (n) this.log(`  主题校准：${n} 条`);
       }
       this.db.prepare('UPDATE runs SET analyzed=?, finished_at=? WHERE id=?').run(analyzed, Date.now(), s.runId);
-      const msg = `源成功 ${s.okSources}，失败 ${s.failedSources}，新增 ${s.newItems}，分析 ${analyzed}${this.llm.enabled ? '' : '（未配置 DEEPSEEK_API_KEY，跳过分析）'}`;
+      const msg = `${regenNote}源成功 ${s.okSources}，失败 ${s.failedSources}，新增 ${s.newItems}，分析 ${analyzed}${this.llm.enabled ? '' : '（未配置 DEEPSEEK_API_KEY，跳过分析）'}`;
       this.log(`[radar] 完成：${msg}`);
       this.state.lastResult = msg;
       return msg;

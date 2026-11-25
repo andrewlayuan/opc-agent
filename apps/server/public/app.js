@@ -450,6 +450,33 @@ async function saveFocus(e) {
 const dayStart = (v) => new Date(`${v}T00:00:00`).getTime();
 const dayEnd = (v) => new Date(`${v}T23:59:59.999`).getTime();
 
+async function regenerateToday(btn) {
+  const t = new Date();
+  const day = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+  const body = { from: dayStart(day), to: dayEnd(day) };
+  btn.disabled = true;
+  try {
+    const pre = await api('/api/regenerate', { method: 'POST', body: { ...body, dryRun: true } });
+    const keep = [pre.keptStarred ? `${pre.keptStarred} 条已收藏` : '', pre.keptInKb ? `${pre.keptInKb} 条已存入知识库` : ''].filter(Boolean).join('、');
+    const msg = [
+      `将重新生成今天（${day}）的情报：`,
+      pre.deleted ? `1. 删除今天发布的 ${pre.deleted} 条${keep ? `（${keep}的保留）` : ''}` : '1. 今天暂无可删除的条目',
+      `2. 重新获取全部 ${pre.sources} 个信息源（忽略缓存）并重新分析`,
+      '3. 更新今日简报',
+      '已删除的条目无法恢复；信息源里已经下架的内容不会回来。继续？',
+    ].join('\n');
+    if (!confirm(msg)) return;
+    const r = await api('/api/regenerate', { method: 'POST', body });
+    toast(r.message);
+    state.wasRunning = true;
+    await refreshStatus();
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function buildPurge() {
   const box = $('purge-box');
   const today = new Date();
@@ -1993,6 +2020,7 @@ async function init() {
     show(b.dataset.view);
   });
   for (const id of ['grp', 'days', 'important', 'starred', 'rel']) $(id).addEventListener('change', () => loadItems());
+  $('regen-open').addEventListener('click', (e) => regenerateToday(e.currentTarget));
   $('purge-open').addEventListener('click', () => {
     if ($('purge-box').hidden) buildPurge();
     $('purge-box').hidden = !$('purge-box').hidden;
