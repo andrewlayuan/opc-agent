@@ -426,6 +426,19 @@ test('organize：给未分类页面分类，写 done，note 写明页数与新�
   done();
 });
 
+test('organize：已固定页面作上下文时最多给 200 条', async () => {
+  const { db, done } = tmpWikiDb();
+  const mine = createNode(db, '我的位置', null);
+  for (let i = 0; i < 205; i++) placePage(db, addPage(db, `fx-${String(i).padStart(3, '0')}`), mine, { manual: true });
+  addPage(db, 'free');
+  const llm = stubLlm([orgPlan([{ path: ['别处'], pages: ['free'] }])]);
+  await organize(db, llm, newOrganizeOp(db));
+  const prompt = llm.calls[0].map((m) => String(m.content)).join('\n');
+  assert.equal((prompt.match(/fx-\d{3} → /g) ?? []).length, 200);
+  assert.ok(prompt.includes('fx-199 → ') && !prompt.includes('fx-200 → '));
+  done();
+});
+
 test('organize：手动放置的页面不动（只作上下文），source / answer 页面不参与', async () => {
   const { db, done } = tmpWikiDb();
   const hand = addPage(db, 'hand');

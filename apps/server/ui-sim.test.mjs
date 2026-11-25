@@ -1824,7 +1824,15 @@ console.log('✓ 知识库网页条目：预览/文字标签与沙箱 iframe');
   assert.equal(els().find((el) => el.tagName === 'BUTTON' && el.textContent === '整理目录').attrs.disabled, '', '未配置模型时整理按钮不可点');
   routes['GET /api/wiki/status'] = { queued: 0, running: null, usedToday: 1, limit: 200, enabled: true, lastLint: null, unplaced: 0, docs: {} };
   await reopen();
-  assert.ok(!/还没有分类/.test(pane().textContent) && !els().some((el) => el.tagName === 'BUTTON' && el.textContent === '整理目录'), '没有未分类页面时不提示');
+  assert.ok(!/还没有分类/.test(pane().textContent) && !els().some((el) => el.tagName === 'BUTTON' && el.textContent === '整理目录'), '没有未分类页面时不提示未分类');
+  const reorg = els().find((el) => el.tagName === 'BUTTON' && el.textContent === '重新整理目录');
+  assert.ok(reorg, '没有未分类页面时仍可重新整理');
+  const nOrg = calls.filter((c) => c.url === '/api/wiki/organize').length;
+  const nConfirm = confirms.length;
+  await reorg.fire('click');
+  await tick();
+  assert.match(confirms[nConfirm], /重新整理/, '重新整理前确认');
+  assert.equal(calls.filter((c) => c.url === '/api/wiki/organize').length, nOrg + 1);
 
   // 操作日志：整理目录可撤销，撤销前确认
   routes['GET /api/wiki/ops'] = { ops: [{ id: 90, kind: 'organize', doc_id: null, doc_title: null, status: 'done', pages: [], note: '整理 2 个页面，新建 3 个节点', error: null, llm_calls: 1, created_at: now, finished_at: now, target_op: null }] };

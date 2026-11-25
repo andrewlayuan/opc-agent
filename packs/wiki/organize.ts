@@ -34,6 +34,9 @@ function pruneEmpty(db: DB): void {
   }
 }
 
+/** 已固定页面只作上下文，最多给模型看这么多条，避免页面很多时提示词过大 */
+const FIXED_CONTEXT_MAX = 200;
+
 /**
  * 给没有手动放置的页面分类（source / answer 页不参与）。
  * 模型调用期间不碰数据库：每批的结果合并进内存里的虚拟树，下一批据此看到已形成的树；
@@ -64,7 +67,7 @@ export async function organize(db: DB, llm: Llm, opId: number, o: { now?: number
   for (let i = 0; i < batches; i++) {
     const slice = todo.slice(i * WIKI_LIMITS.organizeBatch, (i + 1) * WIKI_LIMITS.organizeBatch);
     const inSlice = new Set(slice.map((p) => p.slug));
-    const fixedText = fixed.map((p) => `${p.slug} → ${tree.pathOf(have.get(p.id)!.node_id)}`).join('\n');
+    const fixedText = fixed.slice(0, FIXED_CONTEXT_MAX).map((p) => `${p.slug} → ${tree.pathOf(have.get(p.id)!.node_id)}`).join('\n');
     const out = await calls.json<{ nodes?: unknown }>(organizePrompt(slice, tree.render(), fixedText), 8000);
     if (!Array.isArray(out.nodes)) throw new WikiError(502, '模型没有给出分类');
     for (const item of out.nodes as unknown[]) {

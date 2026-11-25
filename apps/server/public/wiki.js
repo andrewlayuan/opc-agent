@@ -115,14 +115,14 @@ export function initWiki({ h, api, toast, renderMarkdown, openDoc, onStatus }) {
     if (st.organizing && !organizing) loadPages();
     st.organizing = organizing;
     const un = Number(s.unplaced) || 0;
-    st.el.organize.hidden = !organizing && un === 0;
+    st.el.organize.hidden = false;
     put(
       st.el.organize,
       organizing
         ? h('span', { class: 'muted', text: '正在整理目录…' })
         : un > 0
           ? [h('span', { class: 'muted', text: `有 ${un} 个页面还没有分类` }), h('button', { type: 'button', class: 'ghost', text: '整理目录', disabled: s.enabled ? false : true, title: s.enabled ? undefined : '未配置模型', onclick: organizeNow })]
-          : null,
+          : [h('span', { class: 'muted', text: '页面分类由模型自动维护' }), h('button', { type: 'button', class: 'ghost', text: '重新整理目录', disabled: s.enabled ? false : true, title: s.enabled ? '让模型重新规划没有手动调整过的页面' : '未配置模型', onclick: () => confirm('重新整理会重新规划所有没有手动调整过的页面，可以在「体检与日志」里撤销。继续？') && organizeNow() })],
     );
   }
 
