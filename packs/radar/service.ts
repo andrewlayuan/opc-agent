@@ -9,7 +9,9 @@ import { enrichPending } from './enrich.ts';
 import { feedWiki } from './feed.ts';
 import { purgeItems } from './purge.ts';
 import type { PurgeRange } from './purge.ts';
+import { lensFor, migrateLegacyProfile } from './profiles.ts';
 import { TopicMatcher, loadTopics } from './text.ts';
+import type { Lens } from './text.ts';
 import type { Topic } from './text.ts';
 
 /** 每轮最多重新归类的历史条目数（40 条/次模型调用） */
@@ -45,6 +47,12 @@ export class Radar {
     this.topics = loadTopics();
     this.matcher = new TopicMatcher(this.topics);
     syncSources(db);
+    migrateLegacyProfile(db);
+  }
+
+  /** 当前职业身份的分析口径 */
+  profileLens(): Lens {
+    return lensFor(this.db, this.topics);
   }
 
   /** 单飞：同一时间只跑一轮采集+分析 */
@@ -71,7 +79,7 @@ export class Radar {
       }
       const analyzeStart = Date.now();
       this.state.phase = '分析中';
-      const analyzed = await analyzePending(this.db, this.llm, this.topics, this.cfg.llm.analyzeLimitPerRun, this.log, this.analyzeContext);
+      const analyzed = await analyzePending(this.db, this.llm, this.topics, this.cfg.llm.analyzeLimitPerRun, this.log, this.analyzeContext, this.profileLens());
       if (this.llm.enabled && analyzed) {
         this.state.phase = '事件归并';
         try {

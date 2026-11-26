@@ -1,64 +1,44 @@
 {
-  "$comment": "关注主题。hint 供模型判断归类边界（可选）；autoTag=false 表示关键词过于宽泛，分析后只采用模型判定（关键词仍用于采集过滤）。keywords 用于采集过滤与自动打标签（不区分大小写；纯字母且 ≤4 个字符的词按整词匹配）。可自行增删。",
+  "$comment": "关注主题。hint 供模型判断归类边界（可选）；autoTag=false 表示关键词过于宽泛，分析后只采用模型判定（关键词仍用于采集过滤）。keywords 用于采集过滤与自动打标签（不区分大小写；纯字母且 ≤4 个字符的词按整词匹配）。可自行增删。profiles 为该主题所属的职业档案（见 profiles.json，省略表示只属于 tech）：切换身份后，主题栏、「我的关注」和分析提示词只用当前身份的主题。",
   "topics": [
-    {
-      "id": "llm",
-      "label": "大模型",
-      "hint": "基座/开源/推理模型的发布、能力与评测",
-      "keywords": ["GPT-", "GPT5", "Claude", "Gemini", "Llama", "Qwen", "DeepSeek", "Mistral", "Kimi", "GLM", "MiniMax", "Doubao", "豆包", "通义", "千问", "文心", "混元", "Grok", "Gemma", "Phi-", "open-weight", "open weights", "frontier model", "foundation model", "LLM", "大模型", "基座模型", "开源模型", "模型发布", "reasoning model", "推理模型"]
-    },
-    {
-      "id": "multimodal",
-      "label": "多模态",
-      "keywords": ["multimodal", "multi-modal", "vision-language", "VLM", "omni", "text-to-video", "video generation", "image generation", "text-to-image", "image-text-to-text", "text-to-speech", "Sora", "Veo", "Imagen", "Midjourney", "Flux", "Stable Diffusion", "diffusion", "world model", "3D generation", "多模态", "文生视频", "文生图", "视频生成", "图像生成", "世界模型", "可灵", "即梦", "Seedance", "Hunyuan"]
-    },
-    {
-      "id": "agent",
-      "label": "Agent 框架",
-      "keywords": ["agent", "agents", "agentic", "multi-agent", "LangGraph", "LangChain", "AutoGen", "CrewAI", "Agents SDK", "agent framework", "orchestration", "computer use", "browser use", "harness", "智能体", "多智能体"]
-    },
-    {
-      "id": "skills",
-      "label": "Skills / MCP",
-      "keywords": ["skill", "skills", "MCP", "Model Context Protocol", "A2A", "tool use", "tool calling", "function calling", "plugin", "工具调用", "技能"]
-    },
-    {
-      "id": "memory",
-      "label": "记忆",
-      "keywords": ["memory", "long-term memory", "mem0", "Letta", "MemGPT", "context engineering", "context window", "long context", "记忆", "长期记忆", "上下文工程", "长上下文"]
-    },
-    {
-      "id": "voice",
-      "label": "Voice Agent",
-      "keywords": ["voice", "speech", "TTS", "ASR", "STT", "realtime", "real-time", "audio", "Whisper", "pipecat", "LiveKit", "speech-to-speech", "voice agent", "语音", "实时语音", "语音合成", "语音识别"]
-    },
-    {
-      "id": "rag",
-      "label": "RAG",
-      "keywords": ["RAG", "retrieval", "retrieval-augmented", "embedding", "embeddings", "vector", "rerank", "reranker", "GraphRAG", "knowledge graph", "search", "检索", "向量", "知识库", "知识图谱"]
-    },
-    {
-      "id": "coding",
-      "label": "AI 编程",
-      "keywords": ["coding agent", "code generation", "Claude Code", "Codex", "Cursor", "Copilot", "Windsurf", "CodeBuddy", "SWE-bench", "vibe coding", "AI 编程", "代码生成", "编程助手"]
-    },
-    {
-      "id": "infra",
-      "label": "训练与推理",
-      "keywords": ["inference", "serving", "vLLM", "SGLang", "Ollama", "quantization", "fine-tuning", "fine-tune", "RLHF", "reinforcement learning", "GPU", "benchmark", "eval", "evals", "推理加速", "微调", "强化学习", "评测"]
-    },
-    {
-      "id": "hardware",
-      "label": "AI 硬件",
-      "hint": "AI 芯片、GPU/加速卡、算力与数据中心、AI 终端设备（AI PC/手机/眼镜）；只是提到芯片公司名不算",
-      "keywords": ["MI300", "MI325", "MI350", "MI355", "MI400", "Blackwell", "Rubin", "Hopper", "H100", "H200", "H20", "B200", "B300", "GB200", "GB300", "NVL72", "DGX", "Jetson", "TPU", "Trillium", "Ironwood", "Trainium", "Inferentia", "MTIA", "Groq", "Cerebras", "SambaNova", "Tenstorrent", "昇腾", "寒武纪", "摩尔线程", "沐曦", "壁仞", "海光", "AI chip", "AI chips", "semiconductor", "chipmaker", "TSMC", "HBM", "NPU", "AI PC", "Copilot+ PC", "Snapdragon", "AI glasses", "smart glasses", "AI 硬件", "芯片", "算力", "智算", "半导体", "台积电", "加速卡", "显卡", "AI 眼镜", "智能眼镜", "可穿戴", "AI 手机", "RTX PRO", "GPU cluster", "GPU 集群", "AI factory", "AI factories", "AI 工厂", "data center", "数据中心", "AI wearable", "AI 终端"]
-    },
-    {
-      "id": "product",
-      "label": "AI 产品",
-      "autoTag": false,
-      "hint": "AI 应用与产品发布、商业化、融资收购",
-      "keywords": ["launch", "launches", "launched", "introducing", "now available", "beta", "app", "assistant", "ChatGPT", "Perplexity", "funding", "raises", "acquires", "发布", "上线", "推出", "融资", "收购"]
-    }
+    {"id": "llm", "label": "大模型", "hint": "基座/开源/推理模型的发布、能力与评测", "keywords": ["GPT-", "GPT5", "Claude", "Gemini", "Llama", "Qwen", "DeepSeek", "Mistral", "Kimi", "GLM", "MiniMax", "Doubao", "豆包", "通义", "千问", "文心", "混元", "Grok", "Gemma", "Phi-", "open-weight", "open weights", "frontier model", "foundation model", "LLM", "大模型", "基座模型", "开源模型", "模型发布", "reasoning model", "推理模型"], "profiles": ["tech"]},
+    {"id": "multimodal", "label": "多模态", "keywords": ["multimodal", "multi-modal", "vision-language", "VLM", "omni", "text-to-video", "video generation", "image generation", "text-to-image", "image-text-to-text", "text-to-speech", "Sora", "Veo", "Imagen", "Midjourney", "Flux", "Stable Diffusion", "diffusion", "world model", "3D generation", "多模态", "文生视频", "文生图", "视频生成", "图像生成", "世界模型", "可灵", "即梦", "Seedance", "Hunyuan"], "profiles": ["tech"]},
+    {"id": "agent", "label": "Agent 框架", "keywords": ["agent", "agents", "agentic", "multi-agent", "LangGraph", "LangChain", "AutoGen", "CrewAI", "Agents SDK", "agent framework", "orchestration", "computer use", "browser use", "harness", "智能体", "多智能体"], "profiles": ["tech"]},
+    {"id": "skills", "label": "Skills / MCP", "keywords": ["skill", "skills", "MCP", "Model Context Protocol", "A2A", "tool use", "tool calling", "function calling", "plugin", "工具调用", "技能"], "profiles": ["tech"]},
+    {"id": "memory", "label": "记忆", "keywords": ["memory", "long-term memory", "mem0", "Letta", "MemGPT", "context engineering", "context window", "long context", "记忆", "长期记忆", "上下文工程", "长上下文"], "profiles": ["tech"]},
+    {"id": "voice", "label": "Voice Agent", "keywords": ["voice", "speech", "TTS", "ASR", "STT", "realtime", "real-time", "audio", "Whisper", "pipecat", "LiveKit", "speech-to-speech", "voice agent", "语音", "实时语音", "语音合成", "语音识别"], "profiles": ["tech"]},
+    {"id": "rag", "label": "RAG", "keywords": ["RAG", "retrieval", "retrieval-augmented", "embedding", "embeddings", "vector", "rerank", "reranker", "GraphRAG", "knowledge graph", "search", "检索", "向量", "知识库", "知识图谱"], "profiles": ["tech"]},
+    {"id": "coding", "label": "AI 编程", "keywords": ["coding agent", "code generation", "Claude Code", "Codex", "Cursor", "Copilot", "Windsurf", "CodeBuddy", "SWE-bench", "vibe coding", "AI 编程", "代码生成", "编程助手"], "profiles": ["tech"]},
+    {"id": "infra", "label": "训练与推理", "keywords": ["inference", "serving", "vLLM", "SGLang", "Ollama", "quantization", "fine-tuning", "fine-tune", "RLHF", "reinforcement learning", "GPU", "benchmark", "eval", "evals", "推理加速", "微调", "强化学习", "评测"], "profiles": ["tech"]},
+    {"id": "hardware", "label": "AI 硬件", "hint": "AI 芯片、GPU/加速卡、算力与数据中心、AI 终端设备（AI PC/手机/眼镜）；只是提到芯片公司名不算", "keywords": ["MI300", "MI325", "MI350", "MI355", "MI400", "Blackwell", "Rubin", "Hopper", "H100", "H200", "H20", "B200", "B300", "GB200", "GB300", "NVL72", "DGX", "Jetson", "TPU", "Trillium", "Ironwood", "Trainium", "Inferentia", "MTIA", "Groq", "Cerebras", "SambaNova", "Tenstorrent", "昇腾", "寒武纪", "摩尔线程", "沐曦", "壁仞", "海光", "AI chip", "AI chips", "semiconductor", "chipmaker", "TSMC", "HBM", "NPU", "AI PC", "Copilot+ PC", "Snapdragon", "AI glasses", "smart glasses", "AI 硬件", "芯片", "算力", "智算", "半导体", "台积电", "加速卡", "显卡", "AI 眼镜", "智能眼镜", "可穿戴", "AI 手机", "RTX PRO", "GPU cluster", "GPU 集群", "AI factory", "AI factories", "AI 工厂", "data center", "数据中心", "AI wearable", "AI 终端"], "profiles": ["tech"]},
+    {"id": "product", "label": "AI 产品", "autoTag": false, "hint": "AI 应用与产品发布、商业化、融资收购", "keywords": ["launch", "launches", "launched", "introducing", "now available", "beta", "app", "assistant", "ChatGPT", "Perplexity", "funding", "raises", "acquires", "发布", "上线", "推出", "融资", "收购"], "profiles": ["tech", "product", "founder"]},
+    {"id": "pm-method", "label": "产品方法", "hint": "产品管理方法论：路线图、优先级、需求与指标、产品策略", "profiles": ["product"], "keywords": ["product management", "product manager", "roadmap", "product strategy", "product discovery", "product-market fit", "north star", "jobs to be done", "prioritization", "user story", "OKR", "PRD", "MVP", "PMF", "JTBD", "产品管理", "产品经理", "产品策略", "路线图", "需求分析", "北极星指标", "优先级"]},
+    {"id": "pm-research", "label": "用户研究", "hint": "用户研究与洞察：访谈、可用性、画像、反馈", "profiles": ["product"], "keywords": ["user research", "usability", "user interview", "persona", "journey map", "customer feedback", "ux research", "survey", "用户研究", "可用性", "用户访谈", "用户画像", "用户旅程", "用户反馈", "问卷", "NPS"]},
+    {"id": "pm-design", "label": "设计与交互", "hint": "界面、交互与视觉设计，设计系统与前端体验", "profiles": ["product"], "keywords": ["interaction design", "design system", "visual design", "ui design", "ux design", "typography", "accessibility", "prototype", "figma", "css", "UX", "UI", "交互设计", "设计系统", "视觉设计", "原型", "无障碍", "设计趋势", "动效"]},
+    {"id": "pm-compete", "label": "竞品与新品", "hint": "竞品动作、新品与新功能发布、定价变化", "autoTag": false, "profiles": ["product", "founder"], "keywords": ["competitor", "product launch", "feature launch", "new feature", "pricing", "redesign", "product hunt", "竞品", "新品发布", "新功能", "定价", "改版"]},
+    {"id": "gr-seo", "label": "搜索与 SEO", "hint": "搜索引擎与 AI 搜索的排名、流量与收录规则", "profiles": ["growth"], "keywords": ["SEO", "search engine", "google search", "ai overviews", "serp", "backlink", "keyword research", "core update", "core web vitals", "answer engine", "GEO", "搜索引擎", "搜索排名", "外链", "关键词", "搜索算法"]},
+    {"id": "gr-social", "label": "社交与内容", "hint": "社交媒体、短视频、创作者与内容营销", "profiles": ["growth"], "keywords": ["social media", "tiktok", "instagram", "youtube", "linkedin", "creator", "influencer", "content marketing", "short video", "KOL", "社交媒体", "抖音", "小红书", "创作者", "达人", "短视频", "直播", "内容营销", "公众号", "视频号"]},
+    {"id": "gr-ads", "label": "广告与营销", "hint": "广告投放、品牌营销与营销技术", "profiles": ["growth"], "keywords": ["advertising", "ad spend", "campaign", "brand marketing", "martech", "programmatic", "agency", "ROAS", "CPM", "CPC", "广告", "投放", "品牌营销", "营销", "广告主", "媒介"]},
+    {"id": "gr-growth", "label": "增长与转化", "hint": "获客、留存、转化漏斗与用户运营方法", "profiles": ["growth", "founder"], "keywords": ["growth hacking", "retention", "conversion", "funnel", "churn", "onboarding", "activation", "acquisition", "viral", "CAC", "LTV", "增长", "留存", "转化", "漏斗", "获客", "流失", "裂变", "私域", "用户运营"]},
+    {"id": "gr-platform", "label": "平台规则", "hint": "平台算法与政策调整、接口与审核规则变化", "autoTag": false, "profiles": ["growth"], "keywords": ["algorithm update", "policy change", "platform policy", "terms of service", "app store", "play store", "deprecat", "rate limit", "算法更新", "政策调整", "平台规则", "审核规则", "限流", "封号", "账号封禁"]},
+    {"id": "fd-funding", "label": "融资与并购", "hint": "融资、并购、上市与估值", "profiles": ["founder"], "keywords": ["series a", "series b", "series c", "seed round", "funding round", "raises", "raised", "acquires", "acquisition", "valuation", "venture capital", "unicorn", "IPO", "term sheet", "融资", "天使轮", "种子轮", "A轮", "B轮", "C轮", "上市", "收购", "并购", "估值", "独角兽"]},
+    {"id": "fd-market", "label": "赛道与市场", "hint": "行业赛道、市场规模、竞争格局与出海", "profiles": ["founder"], "keywords": ["market size", "market share", "industry report", "competitive landscape", "go global", "international expansion", "saas", "TAM", "赛道", "市场规模", "市场份额", "行业报告", "出海", "竞争格局"]},
+    {"id": "fd-startup", "label": "创业方法", "hint": "创业与早期团队的方法：GTM、PLG、融资与招聘", "profiles": ["founder"], "keywords": ["startup", "founder", "go-to-market", "product-led", "bootstrapped", "unit economics", "runway", "burn rate", "fundraising", "y combinator", "startup accelerator", "accelerator program", "pivot", "GTM", "PLG", "创业", "创始人", "单位经济", "孵化器", "创业加速器"]},
+    {"id": "fd-bigtech", "label": "科技巨头", "hint": "大型科技公司的战略、财报与人事", "autoTag": false, "profiles": ["founder"], "keywords": ["apple", "google", "microsoft", "amazon", "meta", "nvidia", "tesla", "openai", "anthropic", "earnings", "layoffs", "antitrust", "财报", "裁员", "反垄断"]},
+    {"id": "fd-policy", "label": "产业政策", "hint": "影响创业与投资的政策：关税、出口管制、补贴", "profiles": ["founder"], "keywords": ["export control", "tariff", "sanction", "subsidy", "industrial policy", "trade war", "出口管制", "关税", "制裁", "补贴", "产业政策", "贸易战"]},
+    {"id": "fi-policy", "label": "货币政策", "hint": "央行利率、通胀与货币政策动向", "profiles": ["finance"], "keywords": ["interest rate", "federal reserve", "fomc", "rate cut", "rate hike", "central bank", "monetary policy", "inflation", "quantitative", "bank of england", "bank of japan", "ECB", "PBOC", "利率", "美联储", "降息", "加息", "央行", "货币政策", "通胀", "降准", "日本央行", "LPR", "MLF"]},
+    {"id": "fi-reg", "label": "金融监管", "hint": "金融监管规则、执法、反洗钱与稳定币监管", "profiles": ["finance"], "keywords": ["SEC", "CFTC", "FINRA", "enforcement", "basel", "capital requirement", "stablecoin", "anti-money laundering", "stress test", "financial stability", "AML", "KYC", "BIS", "FSB", "证监会", "金融监管", "反洗钱", "稳定币", "巴塞尔", "压力测试", "合规"]},
+    {"id": "fi-market", "label": "市场行情", "hint": "股债汇商品等市场行情与波动", "profiles": ["finance"], "keywords": ["stocks", "equities", "bond yield", "treasury", "s&p 500", "nasdaq", "dow jones", "commodity", "crude oil", "gold price", "forex", "selloff", "rally", "volatility", "VIX", "股市", "债券", "收益率", "国债", "纳指", "标普", "A股", "沪指", "原油", "黄金", "汇率", "美元"]},
+    {"id": "fi-macro", "label": "宏观数据", "hint": "宏观经济数据与景气度", "profiles": ["finance"], "keywords": ["GDP", "CPI", "PPI", "PMI", "unemployment", "nonfarm", "jobs report", "retail sales", "trade balance", "recession", "economic growth", "consumer confidence", "失业率", "非农", "零售销售", "进出口", "衰退", "经济增长", "景气"]},
+    {"id": "fi-corp", "label": "公司与行业", "hint": "上市公司、银行与行业动态", "autoTag": false, "profiles": ["finance", "founder"], "keywords": ["earnings", "quarterly results", "guidance", "merger", "buyback", "dividend", "bankruptcy", "fintech", "private equity", "insurance", "bank", "财报", "业绩", "回购", "分红", "破产", "银行", "保险", "金融科技", "私募"]},
+    {"id": "lg-privacy", "label": "数据与隐私", "hint": "个人信息保护、数据出境与数据泄露", "profiles": ["legal"], "keywords": ["GDPR", "privacy", "data protection", "personal data", "PIPL", "CCPA", "data breach", "cross-border data", "cookie", "surveillance", "biometric", "EDPB", "CNIL", "隐私", "数据保护", "个人信息", "数据出境", "数据泄露", "生物识别", "监控"]},
+    {"id": "lg-aireg", "label": "AI 监管", "hint": "人工智能立法、算法与生成式 AI 的监管", "profiles": ["legal"], "keywords": ["AI act", "AI regulation", "AI governance", "AI safety", "generative AI", "deepfake", "foundation model", "high-risk", "人工智能法", "算法备案", "生成式人工智能", "深度合成", "深度伪造", "大模型备案", "算法推荐", "备案"]},
+    {"id": "lg-case", "label": "判例与执法", "hint": "法院判决、诉讼、监管处罚与执法行动", "profiles": ["legal"], "keywords": ["lawsuit", "ruling", "verdict", "settlement", "injunction", "class action", "supreme court", "indictment", "sued", "sues", "fined", "penalty", "法院", "判决", "诉讼", "和解", "罚款", "处罚", "禁令", "上诉", "最高法", "检察", "集体诉讼"]},
+    {"id": "lg-ip", "label": "知识产权", "hint": "版权、专利、商标、商业秘密与开源许可", "profiles": ["legal"], "keywords": ["copyright", "patent", "trademark", "trade secret", "fair use", "infringement", "licensing", "open source license", "training data", "WIPO", "DMCA", "GPL", "版权", "专利", "商标", "商业秘密", "侵权", "著作权", "合理使用", "开源许可", "训练数据"]},
+    {"id": "lg-corp", "label": "合规实务", "hint": "企业合规：合同、劳动、公司治理与消费者保护", "autoTag": false, "profiles": ["legal"], "keywords": ["compliance", "contract", "employment law", "labor law", "corporate governance", "due diligence", "ESG", "anti-bribery", "consumer protection", "terms of service", "合规", "合同", "劳动法", "劳动合同", "公司治理", "尽职调查", "反贿赂", "消费者权益", "服务条款"]},
+    {"id": "rs-ml", "label": "机器学习前沿", "hint": "机器学习、深度学习及相关方向的论文与进展", "profiles": ["research"], "keywords": ["neural network", "deep learning", "machine learning", "transformer", "diffusion", "reinforcement learning", "pretraining", "fine-tuning", "computer vision", "representation learning", "scaling law", "benchmark", "LLM", "NLP", "深度学习", "机器学习", "强化学习", "预训练", "微调", "计算机视觉", "自然语言"]},
+    {"id": "rs-science", "label": "科学发现", "hint": "物理、生命科学、化学、天文、材料与医学等领域的重要发现", "autoTag": false, "profiles": ["research"], "keywords": ["physics", "biology", "chemistry", "astronomy", "quantum", "climate", "genome", "neuroscience", "materials science", "nuclear fusion", "clinical trial", "vaccine", "物理", "生物", "化学", "天文", "量子", "气候", "基因", "神经科学", "核聚变", "临床试验", "疫苗"]},
+    {"id": "rs-policy", "label": "科研政策与诚信", "hint": "科研经费、同行评审、可复现性与学术不端", "profiles": ["research"], "keywords": ["retraction", "research funding", "grant", "peer review", "reproducibility", "misconduct", "preprint", "open access", "plagiarism", "academic integrity", "NSF", "NIH", "撤稿", "科研经费", "基金", "同行评审", "可复现", "学术不端", "预印本", "开放获取", "抄袭", "学术诚信"]},
+    {"id": "rs-method", "label": "研究方法与数据", "hint": "研究方法、数据集与实验设计", "autoTag": false, "profiles": ["research"], "keywords": ["dataset", "methodology", "statistics", "experimental design", "simulation", "open dataset", "research tool", "数据集", "方法论", "统计", "实验设计", "仿真", "开源数据"]}
   ]
 }

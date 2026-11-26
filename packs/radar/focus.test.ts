@@ -8,6 +8,7 @@ import type { Llm } from '../../packages/core/llm.ts';
 import { generateBrief, mergeTopics, retagPending } from './analyze.ts';
 import { syncSources } from './collect.ts';
 import { getInterests, setInterests } from './prefs.ts';
+import { topicsOfProfile } from './profiles.ts';
 import { listItems } from './query.ts';
 import { TopicMatcher, loadTopics, topicsRev } from './text.ts';
 
@@ -37,6 +38,16 @@ test('AI 硬件主题：芯片/算力命中，只提公司名不命中', () => {
   assert.ok(!m.match('Paragraph about hardware stores').includes('hardware'));
 });
 
+test('各身份的主题不串味：硬件加速器不算创业加速器，零售新闻不算宏观数据，案例盘点不算判例', () => {
+  const m = new TopicMatcher(topics);
+  assert.ok(!m.match('New accelerator for data centers').includes('fd-startup'));
+  assert.ok(!m.match('Retail with open models').includes('fi-macro'));
+  assert.ok(!m.match('产品设计案例盘点').includes('lg-case'));
+  assert.ok(m.match('YC startup accelerator applications open').includes('fd-startup'));
+  assert.ok(m.match('美国 5 月零售销售环比上升').includes('fi-macro'));
+  assert.ok(m.match('法院判决平台承担侵权责任').includes('lg-case'));
+});
+
 test('分析后主题 = 模型判定 ∪ 标题/摘要关键词，过滤非法主题', () => {
   assert.deepEqual(mergeTopics(topics, ['llm', 'evil', 42], 'Qwen 4 on Blackwell').sort(), ['hardware', 'llm']);
   assert.deepEqual(mergeTopics(topics, 'not-array', 'nothing relevant'), []);
@@ -53,6 +64,21 @@ test('我的关注：校验、保存、读取', () => {
   setInterests(db, topics, { topics: ['hardware'], minImportance: 4 });
   assert.deepEqual(getInterests(db, topics), { topics: ['hardware'], minImportance: 4 });
   assert.deepEqual(setInterests(db, topics, 'garbage'), { topics: [], minImportance: 3 });
+  done();
+});
+
+test('我的关注按身份保存：在另一个身份下设置不会丢掉原身份的关注，同一身份再存只替换本身份的主题', () => {
+  const { db, done } = tmpDb();
+  const tech = topicsOfProfile(topics, 'tech');
+  const fin = topicsOfProfile(topics, 'finance');
+  setInterests(db, tech, { topics: ['llm', 'hardware'], minImportance: 4 }, topics);
+  assert.deepEqual(getInterests(db, fin), { topics: [], minImportance: 4 }, '金融身份下看不到 tech 的主题；重点阈值是全局偏好，不分身份');
+  setInterests(db, fin, { topics: ['fi-policy'], minImportance: 3 }, topics);
+  assert.deepEqual(getInterests(db, tech).topics, ['llm', 'hardware'], '切回 tech 关注还在');
+  assert.deepEqual(getInterests(db, fin).topics, ['fi-policy']);
+  setInterests(db, tech, { topics: ['rag'], minImportance: 0 }, topics);
+  assert.deepEqual(getInterests(db, tech), { topics: ['rag'], minImportance: 0 });
+  assert.deepEqual(getInterests(db, fin).topics, ['fi-policy'], '金融的关注也没被覆盖');
   done();
 });
 

@@ -21,7 +21,8 @@ import { analyzeItem, generateBrief, latestBrief, translateItem } from '../../pa
 import { GROUPS, collectOnce } from '../../packs/radar/collect.ts';
 import { SourceInputError, parseSourceInput, updateCustomSource } from '../../packs/radar/custom.ts';
 import type { SourceInput } from '../../packs/radar/custom.ts';
-import { ProfileError, applyProfile, listProfiles, withProfileFlag } from '../../packs/radar/profiles.ts';
+import { ProfileError, activeProfile, applyProfile, getActiveProfile, lensFor, listProfiles, topicsOfProfile, withProfileFlag } from '../../packs/radar/profiles.ts';
+import type { Lens, Topic } from '../../packs/radar/text.ts';
 import { enrichItem } from '../../packs/radar/enrich.ts';
 import { MAX_ADD, MAX_REVIEW_SKILLS, MAX_SELECTED, PmAdvisor, PmError } from '../../packs/pm/advisor.ts';
 import type { AdvisorEvent } from '../../packs/pm/advisor.ts';
@@ -176,10 +177,10 @@ function sourceInput(body: Record<string, unknown>): SourceInput {
 }
 
 async function createBrief(focusOn: boolean) {
-  const focus = focusOn ? getInterests(db, radar.topics).topics : [];
+  const focus = focusOn ? getInterests(db, activeTopics()).topics : [];
   if (focusOn && !focus.length) throw new HttpError(400, '还没有设置「我的关注」');
   const ctx = safeContext('brief');
-  const b = await generateBrief(db, radar.llm, radar.topics, 24, focus, ctx.text);
+  const b = await generateBrief(db, radar.llm, radar.topics, 24, focus, ctx.text, activeLens());
   safeTouch(ctx.memoryIds);
   record({ kind: 'brief_generate', refType: 'brief', refId: b.id, summary: `生成简报${focus.length ? `（聚焦：${topicLabels(focus).join('、')}）` : ''}`, payload: { focus } });
   return b;
@@ -217,6 +218,15 @@ function safeTouch(ids: number[]): void {
 function topicLabels(ids: string[]): string[] {
   const label = Object.fromEntries(radar.topics.map((t) => [t.id, t.label]));
   return ids.map((t) => label[t] ?? t);
+}
+
+/** 当前身份可选的主题与主题口径；主题栏、「我的关注」、简报和分析都按它来 */
+function activeTopics(): Topic[] {
+  return topicsOfProfile(radar.topics, getActiveProfile(db));
+}
+
+function activeLens(): Lens {
+  return lensFor(db, radar.topics);
 }
 
 function itemTitle(it: { title: string; title_zh: string | null }): string {
@@ -259,7 +269,8 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
 
   if (p === '/api/meta' && method === 'GET') {
     return sendJson(res, 200, {
-      topics: radar.topics.map((t) => ({ id: t.id, label: t.label })),
+      topics: activeTopics().map((t) => ({ id: t.id, label: t.label })),
+      profile: (({ id, name, who, focus, why }) => ({ id, name, who, focus, why }))(activeProfile(db)),
       groups: GROUPS,
       llm: { enabled: radar.llm.enabled, model: cfg.llm.model },
       reach: { enabled: radar.reach.enabled },
@@ -315,7 +326,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const id = idFrom(m);
     if (!getItem(db, id)) throw new HttpError(404, '条目不存在');
     await enrichItem(db, radar.reach, id);
-    await analyzeItem(db, radar.llm, radar.topics, id, safeContext('analyze').text);
+    await analyzeItem(db, radar.llm, radar.topics, id, safeContext('analyze').text, activeLens());
     const item = getItem(db, id);
     if (item) record({ kind: 'item_analyze', refType: 'item', refId: id, summary: `手动分析：${itemTitle(item)}`, payload: { topics: item.topics } });
     return sendJson(res, 200, { item });
@@ -392,7 +403,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       if (!radar.llm.enabled || briefRunning) return;
       briefRunning = true;
       try {
-        await createBrief(getInterests(db, radar.topics).topics.length > 0);
+        await createBrief(getInterests(db, activeTopics()).topics.length > 0);
       } catch (e) {
         console.log(`[radar] 重新生成简报失败：${e instanceof Error ? e.message : e}`);
       } finally {
@@ -402,11 +413,11 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     return sendJson(res, 202, { message: '已开始重新生成，请稍候' });
   }
 
-  if (p === '/api/prefs/interests' && method === 'GET') return sendJson(res, 200, { interests: getInterests(db, radar.topics) });
+  if (p === '/api/prefs/interests' && method === 'GET') return sendJson(res, 200, { interests: getInterests(db, activeTopics()) });
   if (p === '/api/prefs/interests' && method === 'PUT') {
     const body = await readJson(req, 4096);
-    const before = getInterests(db, radar.topics);
-    const after = setInterests(db, radar.topics, body);
+    const before = getInterests(db, activeTopics());
+    const after = setInterests(db, activeTopics(), body, radar.topics);
     if (JSON.stringify(before) !== JSON.stringify(after)) {
       const scope = after.topics.length ? topicLabels(after.topics).join('、') : '（无）';
       const level = after.minImportance ? `重要度 ≥${after.minImportance}` : '重要度不限';
@@ -542,7 +553,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       .all();
     return sendJson(res, 200, { sources: withProfileFlag(db, rows as { id: string; custom: number }[]) });
   }
-  if (p === '/api/profiles' && method === 'GET') return sendJson(res, 200, listProfiles(db));
+  if (p === '/api/profiles' && method === 'GET') return sendJson(res, 200, listProfiles(db, radar.topics));
   if (p === '/api/profiles/activate' && method === 'POST') {
     const body = await readJson(req, 1024);
     try {

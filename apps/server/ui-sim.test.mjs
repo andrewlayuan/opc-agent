@@ -2171,11 +2171,11 @@ console.log('✓ 情报菜单：动态 / 简报 / 信息源子标签切换');
 {
   const walk = (root, out = []) => { out.push(root); for (const c of root.children ?? []) if (c instanceof El) walk(c, out); return out; };
   const P = [
-    { id: 'ai', name: 'AI 从业者', desc: 'AI 描述', count: 60 },
-    { id: 'dev', name: '程序员', desc: '开发描述', count: 21 },
-    { id: 'finance', name: '金融从业者', desc: '金融描述', count: 15 },
+    { id: 'tech', name: '技术从业者', who: 'AI 工程师、程序员', focus: ['大模型与 Agent', '工程效率'], why: '官方博客和版本发布是第一手信息', count: 96, topicCount: 12 },
+    { id: 'product', name: '产品 / 设计', who: '产品经理、设计师', focus: ['产品方法', '竞品与新品'], why: '方法论源给可迁移的做法', count: 19, topicCount: 5 },
+    { id: 'finance', name: '金融从业者', who: '银行、证券、基金', focus: ['货币政策', '市场行情'], why: '央行与监管公告是政策一手来源', count: 15, topicCount: 5 },
   ];
-  let active = 'ai';
+  let active = 'tech';
   routes['GET /api/profiles'] = () => ({ profiles: P, active });
   routes['POST /api/profiles/activate'] = (b) => {
     const p = P.find((x) => x.id === b.id);
@@ -2192,15 +2192,17 @@ console.log('✓ 情报菜单：动态 / 简报 / 信息源子标签切换');
 
   await goIntel('信息源');
   const chips = () => btns($('profile-bar'));
-  assert.deepEqual(chips().map((b) => b.textContent), ['AI 从业者（60）', '程序员（21）', '金融从业者（15）']);
+  assert.deepEqual(chips().map((b) => b.textContent), ['技术从业者（96）', '产品 / 设计（19）', '金融从业者（15）']);
   assert.ok(chips()[0].className.includes('on') && chips()[0].attrs['aria-pressed'] === 'true');
   assert.ok(!chips()[1].className.includes('on'));
-  assert.match($('profile-bar').textContent, /AI 描述/);
+  assert.match($('profile-bar').textContent, /适用：AI 工程师、程序员/);
+  assert.match($('profile-bar').textContent, /关注点：大模型与 Agent、工程效率/);
+  assert.match($('profile-bar').textContent, /为什么是这些源：官方博客和版本发布是第一手信息/);
   // 默认只显示当前身份的源（含自定义源与手动启用的其它源）；其它身份的折叠，可展开 / 收起
   assert.equal(names().length, 4);
   assert.ok(!names().includes('Delta Other'), '其它身份且未启用的源默认不显示');
   assert.ok(names().includes('Echo Manual') && names().includes('我的源'), '手动启用的与自定义源保留');
-  assert.match($('sources').textContent, /「AI 从业者」的 4 个信息源，已启用 4 个/);
+  assert.match($('sources').textContent, /「技术从业者」的 4 个信息源，已启用 4 个/);
   const toggleOthers = () => btns($('sources')).find((b) => /其它身份的信息源/.test(b.textContent));
   assert.equal(toggleOthers().textContent, '显示其它身份的信息源（1）');
   await toggleOthers().fire('click');
@@ -2224,9 +2226,9 @@ console.log('✓ 情报菜单：动态 / 简报 / 信息源子标签切换');
   const c0 = confirms.length;
   await chips()[1].fire('click');
   await tick();
-  assert.match(confirms[c0], /切换为「程序员」.*21 个内置信息源.*重置.*自己添加的源不受影响/s);
-  assert.deepEqual(calls.filter((c) => c.url === '/api/profiles/activate').at(-1).body, { id: 'dev' });
-  assert.match($('toast').textContent, /已切换为「程序员」，启用 21 个信息源/);
+  assert.match(confirms[c0], /切换为「产品 \/ 设计」.*19 个内置信息源.*重置.*自己添加的源不受影响/s);
+  assert.deepEqual(calls.filter((c) => c.url === '/api/profiles/activate').at(-1).body, { id: 'product' });
+  assert.match($('toast').textContent, /已切换为「产品 \/ 设计」，启用 19 个信息源/);
   assert.ok(chips()[1].className.includes('on') && !chips()[0].className.includes('on'));
   assert.ok(n('/api/sources') > s0, '切换后重新加载信息源');
 

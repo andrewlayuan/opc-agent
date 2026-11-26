@@ -9,7 +9,19 @@ export interface Topic {
   hint?: string;
   /** false：关键词太宽泛，分析后只采用模型判定 */
   autoTag?: boolean;
+  /** 适用的职业档案（见 profiles.json）；省略表示只属于 tech */
+  profiles?: string[];
   keywords: string[];
+}
+
+/** 当前职业身份对分析与简报的口径：角色、重要度标尺、影响角度，以及提示词里可选的主题 */
+export interface Lens {
+  role: string;
+  brief: string;
+  importance: string;
+  angle: string;
+  sections: string;
+  topics: Topic[];
 }
 
 /** 给模型看的主题清单：id=名称（边界说明） */

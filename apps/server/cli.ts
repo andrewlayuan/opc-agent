@@ -11,7 +11,7 @@ const radar = new Radar(db, cfg);
 if (cmd === 'run') {
   console.log(await radar.runCycle());
 } else if (cmd === 'brief') {
-  const b = await generateBrief(db, radar.llm, radar.topics, 24);
+  const b = await generateBrief(db, radar.llm, radar.topics, 24, [], '', radar.profileLens());
   console.log(b.content);
   console.log('\n来源：');
   for (const it of b.items) console.log(`[${it.n}] ${it.title} — ${it.url}`);

@@ -6,6 +6,7 @@ import { parseFeed, parseGithubReleases, parseHfModels, parsePageList } from '..
 import type { FeedEntry } from '../../packages/core/feed.ts';
 import { allowHost, politeFetch } from '../../packages/core/net.ts';
 import type { Reach } from '../../packages/core/reach.ts';
+import { DEFAULT_PROFILE, normalizeProfileId } from './profile-id.ts';
 import { detectLang, normTitle, normalizeUrl, titleSimilarity } from './text.ts';
 import type { TopicMatcher } from './text.ts';
 
@@ -22,7 +23,7 @@ export interface SourceDef {
   lang?: string;
   filter?: boolean;
   maxItems?: number;
-  /** 所属的职业档案 id（见 profiles.json）；省略表示只属于 ai */
+  /** 所属的职业档案 id（见 profiles.json）；省略表示只属于 tech */
   profiles?: string[];
 }
 
@@ -90,7 +91,7 @@ export function syncSources(db: DB): void {
     WHERE custom = 0`);
   // 新出现的内置源：只有属于当前档案才默认启用（已有源保留各自的启用状态）
   const active = db.prepare("SELECT value FROM prefs WHERE key = 'source_profile'").get() as { value: string } | undefined;
-  const activeId = active?.value ?? 'ai';
+  const activeId = normalizeProfileId(active?.value);
   const ids = new Set(defs.map((d) => d.id));
   const stale = (db.prepare('SELECT id FROM sources WHERE custom = 0').all() as { id: string }[]).filter((r) => !ids.has(r.id));
   for (const r of stale) {
@@ -98,7 +99,7 @@ export function syncSources(db: DB): void {
     db.prepare('DELETE FROM sources WHERE id = ?').run(r.id);
   }
   for (const d of defs) {
-    upsert.run(d.id, d.name, d.url, d.kind ?? 'feed', d.grp ?? 'media', d.lang ?? 'en', d.filter ? 1 : 0, d.maxItems ?? 30, d.reach ? JSON.stringify(d.reach) : null, (d.profiles?.length ? d.profiles : ['ai']).includes(activeId) ? 1 : 0);
+    upsert.run(d.id, d.name, d.url, d.kind ?? 'feed', d.grp ?? 'media', d.lang ?? 'en', d.filter ? 1 : 0, d.maxItems ?? 30, d.reach ? JSON.stringify(d.reach) : null, (d.profiles?.length ? d.profiles : [DEFAULT_PROFILE]).includes(activeId) ? 1 : 0);
   }
   for (const r of db.prepare('SELECT url FROM sources').all() as { url: string }[]) {
     try {

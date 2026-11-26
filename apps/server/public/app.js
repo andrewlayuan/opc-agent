@@ -392,6 +392,12 @@ function renderTopics() {
   $('topics').replaceChildren(
     ...all.map((t) => h('button', { class: `chip${t.id === FOCUS ? ' focus' : ''}${state.topic === t.id ? ' on' : ''}`, text: t.label, onclick: () => selectTopic(t.id) })),
   );
+  const p = state.meta.profile;
+  $('scope-hint').replaceChildren(
+    ...(p
+      ? [h('span', { text: `身份「${p.name}」· 关注 ${p.focus.join('、')}` }), h('button', { class: 'link', text: '换身份', onclick: () => show('sources') })]
+      : []),
+  );
   const bar = $('focus-bar');
   bar.hidden = state.topic !== FOCUS;
   if (!bar.hidden) {
@@ -662,17 +668,44 @@ const srcState = { list: [], query: '', editing: null, profiles: [], active: '',
 
 function renderProfiles() {
   const cur = srcState.profiles.find((p) => p.id === srcState.active);
-  $('profile-bar').replaceChildren(
+  const nodes = [
     h('span', { class: 'muted', text: '我的身份' }),
     h(
       'div',
       { class: 'chips' },
       srcState.profiles.map((p) =>
-        h('button', { type: 'button', class: `chip${p.id === srcState.active ? ' on' : ''}`, title: p.desc, 'aria-pressed': p.id === srcState.active ? 'true' : 'false', text: `${p.name}（${p.count}）`, onclick: () => switchProfile(p) }),
+        h('button', { type: 'button', class: `chip${p.id === srcState.active ? ' on' : ''}`, title: `${p.who}\n关注点：${p.focus.join('、')}`, 'aria-pressed': p.id === srcState.active ? 'true' : 'false', text: `${p.name}（${p.count}）`, onclick: () => switchProfile(p) }),
       ),
     ),
-    cur ? h('span', { class: 'muted profile-desc', text: cur.desc }) : null,
-  );
+  ];
+  if (cur) {
+    nodes.push(
+      h(
+        'div',
+        { class: 'profile-info' },
+        h('div', { text: `适用：${cur.who}` }),
+        h('div', { text: `关注点：${cur.focus.join('、')}` }),
+        h('div', { class: 'muted', text: `为什么是这些源：${cur.why}` }),
+        h('div', { class: 'muted', text: `共 ${cur.count} 个内置信息源、${cur.topicCount} 个主题（按钮上的数字是信息源数量）` }),
+      ),
+    );
+  }
+  $('profile-bar').replaceChildren(...nodes);
+}
+
+/** 切换身份后重新取主题与关注：主题栏、「我的关注」都只保留当前身份的范围 */
+async function reloadScope() {
+  const [meta, prefs] = await Promise.all([api('/api/meta'), api('/api/prefs/interests')]);
+  state.meta = meta;
+  state.interests = prefs.interests;
+  const ids = new Set(state.meta.topics.map((t) => t.id));
+  if (state.topic === FOCUS) {
+    if (!state.interests.topics.length) state.topic = '';
+  } else if (state.topic && !ids.has(state.topic)) {
+    state.topic = '';
+  }
+  renderTopics();
+  await loadItems();
 }
 
 async function loadProfiles() {
@@ -695,6 +728,7 @@ async function switchProfile(p) {
     toast(`已切换为「${r.name}」，启用 ${r.enabled} 个信息源；下一轮采集（每小时）或点「刷新」后出现新内容`);
     srcState.showOthers = false;
     await Promise.all([loadProfiles(), loadSources()]);
+    await reloadScope();
   } catch (e) {
     toast(e.message);
   }

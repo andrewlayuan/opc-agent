@@ -122,6 +122,45 @@ test('generateBrief：ctx 为空时 prompt 与改动前逐字相同；有 ctx �
   done();
 });
 
+test('职业口径：传 lens 时分析用该身份的角色、影响角度、重要度刻度与主题；不传时仍是 AI 技术', async () => {
+  const { db, done } = tmpDb();
+  const id = item(db, 1);
+  const fin = topics.filter((t) => (t.profiles ?? ['tech']).includes('finance'));
+  const lens = { role: '金融', brief: '金融简报', importance: '5=央行利率或重大监管决定', angle: '对市场、利率、监管和风险敞口的影响', sections: '如 货币政策、金融监管', topics: fin };
+  const seen: Msg[][] = [];
+  await analyzeItem(db, fakeLlm(ANALYSIS, seen), topics, id, '', lens);
+  const p = dump(seen[0]);
+  assert.match(p, /请以金融情报分析师的身份分析这条资讯/);
+  assert.match(p, /对市场、利率、监管和风险敞口的影响/);
+  assert.match(p, /5=央行利率或重大监管决定/);
+  assert.match(p, /fi-policy=货币政策/);
+  assert.doesNotMatch(p, /llm=大模型/, '只用当前身份的主题');
+  assert.match(p, /中文 金融情报分析师/);
+  // 不传 lens：默认仍是「AI 技术」口径（与 fixture 一致）
+  const seen2: Msg[][] = [];
+  await analyzeItem(db, fakeLlm(ANALYSIS, seen2), topics, id);
+  assert.match(dump(seen2[0]), /请以 AI 技术情报分析师的身份/);
+  done();
+});
+
+test('generateBrief：传 lens 时用该身份的主编口吻和简报名；简报只统计当前启用的信息源', async () => {
+  const { db, done } = tmpDb();
+  item(db, 1, { analyzed: true });
+  item(db, 2, { analyzed: true });
+  db.prepare("UPDATE sources SET enabled = 0 WHERE id = 'openai'").run();
+  const seen: Msg[][] = [];
+  const lens = { role: '金融', brief: '金融简报', importance: '', angle: '', sections: '如 货币政策', topics };
+  await assert.rejects(() => generateBrief(db, fakeLlm(null, seen), topics, 24, [], '', lens), /没有已分析且重要度 ≥3 的条目/, '停用的源不进简报');
+  assert.equal(seen.length, 0, '没有可写的条目就不调模型');
+  db.prepare("UPDATE sources SET enabled = 1 WHERE id = 'openai'").run();
+  const seen2: Msg[][] = [];
+  const b2 = await generateBrief(db, fakeLlm(null, seen2), topics, 24, [], '', lens);
+  assert.equal(b2.items.length, 2);
+  assert.match(seen2[0][0].content, /你是 金融情报主编/);
+  assert.match(seen2[0][1].content, /写一份今日金融简报/);
+  done();
+});
+
 test('listItems：relevant 只返回 relevance ≥2，视图带 relevance 字段', () => {
   const { db, done } = tmpDb();
   item(db, 1, { analyzed: true, relevance: 3 });
