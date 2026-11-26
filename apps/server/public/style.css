@@ -196,6 +196,7 @@ textarea:focus { border-color: var(--fg); }
 .profile-bar .chips { padding: 0; overflow: visible; flex-wrap: wrap; }
 .src-search { width: 100%; max-width: 360px; margin-top: 12px; }
 .src-summary { font-size: 12px; margin-top: 10px; }
+.src-summary .link { margin-left: 10px; }
 .src-edit { flex-wrap: wrap; }
 .src-edit input[name=name] { width: 140px; }
 .src-edit input[name=url] { flex: 1; min-width: 220px; }

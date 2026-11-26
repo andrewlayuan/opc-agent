@@ -2184,7 +2184,7 @@ console.log('✓ 情报菜单：动态 / 简报 / 信息源子标签切换');
     return { id: p.id, name: p.name, enabled: p.count, disabled: 40 };
   };
   const S = (id, name, o = {}) => ({ id, name, url: `https://${id}.example/feed`, kind: 'feed', grp: 'blog', lang: 'en', filter: 0, enabled: 1, custom: 0, last_fetch_at: null, last_ok_at: null, last_error: null, item_count: 0, ...o });
-  const list = [S('a', 'Alpha Blog'), S('b', 'Beta News', { grp: 'media' }), S('c', '我的源', { grp: 'custom', custom: 1, lang: 'zh' })];
+  const list = [S('a', 'Alpha Blog'), S('b', 'Beta News', { grp: 'media' }), S('c', '我的源', { grp: 'custom', custom: 1, lang: 'zh' }), S('d', 'Delta Other', { enabled: 0, in_profile: false }), S('e', 'Echo Manual', { enabled: 1, in_profile: false })];
   routes['GET /api/sources'] = () => ({ sources: list });
   const n = (u) => calls.filter((c) => c.url === u).length;
   const btns = (root) => walk(root).filter((e) => e.tagName === 'BUTTON');
@@ -2196,7 +2196,19 @@ console.log('✓ 情报菜单：动态 / 简报 / 信息源子标签切换');
   assert.ok(chips()[0].className.includes('on') && chips()[0].attrs['aria-pressed'] === 'true');
   assert.ok(!chips()[1].className.includes('on'));
   assert.match($('profile-bar').textContent, /AI 描述/);
-  assert.match($('sources').textContent, /共 3 个信息源，已启用 3 个/);
+  // 默认只显示当前身份的源（含自定义源与手动启用的其它源）；其它身份的折叠，可展开 / 收起
+  assert.equal(names().length, 4);
+  assert.ok(!names().includes('Delta Other'), '其它身份且未启用的源默认不显示');
+  assert.ok(names().includes('Echo Manual') && names().includes('我的源'), '手动启用的与自定义源保留');
+  assert.match($('sources').textContent, /「AI 从业者」的 4 个信息源，已启用 4 个/);
+  const toggleOthers = () => btns($('sources')).find((b) => /其它身份的信息源/.test(b.textContent));
+  assert.equal(toggleOthers().textContent, '显示其它身份的信息源（1）');
+  await toggleOthers().fire('click');
+  assert.ok(names().includes('Delta Other'));
+  assert.match($('sources').textContent, /另含其它身份的 1 个/);
+  assert.equal(toggleOthers().textContent, '收起其它身份的信息源');
+  await toggleOthers().fire('click');
+  assert.ok(!names().includes('Delta Other'));
 
   // 取消确认：不切换；点当前身份：不请求
   const a0 = n('/api/profiles/activate');
@@ -2223,7 +2235,7 @@ console.log('✓ 情报菜单：动态 / 简报 / 信息源子标签切换');
   q.value = 'beta';
   await q.fire('input');
   assert.deepEqual(names(), ['Beta News']);
-  assert.match($('sources').textContent, /匹配 1 \/ 3 个信息源/);
+  assert.match($('sources').textContent, /在全部 5 个信息源中匹配 1 个/, '搜索在全部信息源里找');
   q.value = 'a.example';
   await q.fire('input');
   assert.deepEqual(names(), ['Alpha Blog']);
@@ -2233,7 +2245,12 @@ console.log('✓ 情报菜单：动态 / 简报 / 信息源子标签切换');
   assert.match($('sources').textContent, /没有匹配的信息源/);
   q.value = '';
   await q.fire('input');
-  assert.deepEqual(names(), ['Alpha Blog', 'Beta News', '我的源']);
+  assert.deepEqual(names(), ['Alpha Blog', 'Echo Manual', 'Beta News', '我的源']);
+  q.value = 'delta';
+  await q.fire('input');
+  assert.deepEqual(names(), ['Delta Other'], '搜索能找到其它身份的源');
+  q.value = '';
+  await q.fire('input');
 
   // 编辑：只有自定义源有「编辑」；保存提交全部字段；失败时留在编辑状态；取消不请求
   assert.equal(btns($('sources')).filter((b) => b.textContent === '编辑').length, 1);

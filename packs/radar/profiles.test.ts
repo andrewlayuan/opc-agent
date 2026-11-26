@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { openDb } from '../../packages/core/db.ts';
 import type { DB } from '../../packages/core/db.ts';
 import { loadSourceDefs, syncSources } from './collect.ts';
-import { ProfileError, applyProfile, getActiveProfile, listProfiles, loadProfiles, profilesOf } from './profiles.ts';
+import { ProfileError, applyProfile, getActiveProfile, listProfiles, loadProfiles, profilesOf, withProfileFlag } from './profiles.ts';
 
 function tmpDb(): { db: DB; done: () => void } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opc-prof-'));
@@ -100,5 +100,24 @@ test('prefs 里的档案 id 无效时回落到 ai', () => {
   db.prepare("INSERT INTO prefs(key, value, updated_at) VALUES ('source_profile', 'ghost', 1)").run();
   assert.equal(getActiveProfile(db), 'ai');
   assert.deepEqual(listProfiles(db).profiles.map((p) => p.count > 0), [true, true, true, true]);
+  done();
+});
+
+test('withProfileFlag：内置源按当前档案标记，自定义源总是属于当前档案；切换后跟着变', () => {
+  const { db, done } = tmpDb();
+  syncSources(db);
+  db.prepare("INSERT INTO sources(id, name, url, kind, grp, lang, filter, max_items, custom, enabled) VALUES ('custom-x', 'x', 'https://x.example/f', 'feed', 'custom', 'en', 0, 20, 1, 0)").run();
+  const flags = () => new Map(withProfileFlag(db, db.prepare('SELECT id, custom FROM sources').all() as { id: string; custom: number }[]).map((r) => [r.id, r.in_profile]));
+  let f = flags();
+  assert.equal(f.get('openai'), true);
+  assert.equal(f.get('ruanyifeng'), false);
+  assert.equal(f.get('custom-x'), true);
+  applyProfile(db, 'dev');
+  f = flags();
+  assert.equal(f.get('openai'), false);
+  assert.equal(f.get('ruanyifeng'), true);
+  assert.equal(f.get('techmeme'), true);
+  assert.equal(f.get('custom-x'), true);
+  assert.equal([...f.values()].filter(Boolean).length, idsOf('dev').size + 1);
   done();
 });

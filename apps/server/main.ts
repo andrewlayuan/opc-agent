@@ -21,7 +21,7 @@ import { analyzeItem, generateBrief, latestBrief, translateItem } from '../../pa
 import { GROUPS, collectOnce } from '../../packs/radar/collect.ts';
 import { SourceInputError, parseSourceInput, updateCustomSource } from '../../packs/radar/custom.ts';
 import type { SourceInput } from '../../packs/radar/custom.ts';
-import { ProfileError, applyProfile, listProfiles } from '../../packs/radar/profiles.ts';
+import { ProfileError, applyProfile, listProfiles, withProfileFlag } from '../../packs/radar/profiles.ts';
 import { enrichItem } from '../../packs/radar/enrich.ts';
 import { MAX_ADD, MAX_REVIEW_SKILLS, MAX_SELECTED, PmAdvisor, PmError } from '../../packs/pm/advisor.ts';
 import type { AdvisorEvent } from '../../packs/pm/advisor.ts';
@@ -540,7 +540,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const rows = db
       .prepare('SELECT id, name, url, kind, grp, lang, filter, enabled, custom, last_fetch_at, last_ok_at, last_error, item_count FROM sources ORDER BY grp, name')
       .all();
-    return sendJson(res, 200, { sources: rows });
+    return sendJson(res, 200, { sources: withProfileFlag(db, rows as { id: string; custom: number }[]) });
   }
   if (p === '/api/profiles' && method === 'GET') return sendJson(res, 200, listProfiles(db));
   if (p === '/api/profiles/activate' && method === 'POST') {

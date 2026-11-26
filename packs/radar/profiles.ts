@@ -29,6 +29,13 @@ export function getActiveProfile(db: DB): string {
   return row && loadProfiles().some((p) => p.id === row.value) ? row.value : DEFAULT_PROFILE;
 }
 
+/** 信息源列表附带「是否属于当前档案」：自定义源总是属于；内置源看 sources.json 里的归属 */
+export function withProfileFlag<T extends { id: string; custom: number }>(db: DB, rows: T[]): (T & { in_profile: boolean })[] {
+  const active = getActiveProfile(db);
+  const mine = new Set(loadSourceDefs().filter((d) => profilesOf(d).includes(active)).map((d) => d.id));
+  return rows.map((r) => ({ ...r, in_profile: !!r.custom || mine.has(r.id) }));
+}
+
 /** 档案列表，附带各自包含的内置源数量 */
 export function listProfiles(db: DB): { profiles: (Profile & { count: number })[]; active: string } {
   const defs = loadSourceDefs();

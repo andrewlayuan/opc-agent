@@ -658,7 +658,7 @@ async function loadBrief() {
 }
 
 // ---------------- 信息源 ----------------
-const srcState = { list: [], query: '', editing: null, profiles: [], active: '' };
+const srcState = { list: [], query: '', editing: null, profiles: [], active: '', showOthers: false };
 
 function renderProfiles() {
   const cur = srcState.profiles.find((p) => p.id === srcState.active);
@@ -693,6 +693,7 @@ async function switchProfile(p) {
   try {
     const r = await api('/api/profiles/activate', { method: 'POST', body: { id: p.id } });
     toast(`已切换为「${r.name}」，启用 ${r.enabled} 个信息源；下一轮采集（每小时）或点「刷新」后出现新内容`);
+    srcState.showOthers = false;
     await Promise.all([loadProfiles(), loadSources()]);
   } catch (e) {
     toast(e.message);
@@ -741,15 +742,31 @@ function sourceEditRow(s) {
 
 function renderSources() {
   const q = srcState.query.trim();
-  const shown = srcState.list.filter((s) => srcMatches(s, q));
+  // 默认只显示当前身份的源（含自定义源，以及手动启用了的其它源）；搜索时在全部源里找
+  const mine = srcState.list.filter((s) => s.in_profile !== false || s.enabled);
+  const others = srcState.list.filter((s) => !mine.includes(s));
+  const pool = q || srcState.showOthers ? srcState.list : mine;
+  const shown = pool.filter((s) => srcMatches(s, q));
+  const cur = srcState.profiles.find((p) => p.id === srcState.active);
   const byGrp = new Map();
   for (const s of shown) {
     if (!byGrp.has(s.grp)) byGrp.set(s.grp, []);
     byGrp.get(s.grp).push(s);
   }
-  const on = srcState.list.filter((s) => s.enabled).length;
-  const nodes = [h('div', { class: 'muted src-summary', text: q ? `匹配 ${shown.length} / ${srcState.list.length} 个信息源` : `共 ${srcState.list.length} 个信息源，已启用 ${on} 个` })];
-  if (!shown.length) nodes.push(h('p', { class: 'empty', text: q ? '没有匹配的信息源。' : '还没有信息源。' }));
+  const summary = q
+    ? `在全部 ${srcState.list.length} 个信息源中匹配 ${shown.length} 个`
+    : `${cur ? `「${cur.name}」` : '当前'}的 ${mine.length} 个信息源，已启用 ${mine.filter((s) => s.enabled).length} 个${srcState.showOthers ? `；另含其它身份的 ${others.length} 个` : ''}`;
+  const nodes = [
+    h(
+      'div',
+      { class: 'muted src-summary' },
+      summary,
+      !q && others.length
+        ? h('button', { type: 'button', class: 'link', text: srcState.showOthers ? '收起其它身份的信息源' : `显示其它身份的信息源（${others.length}）`, onclick: () => ((srcState.showOthers = !srcState.showOthers), renderSources()) })
+        : null,
+    ),
+  ];
+  if (!shown.length) nodes.push(h('p', { class: 'empty', text: q ? '没有匹配的信息源。' : '这个身份下还没有信息源。' }));
   for (const [grp, list] of byGrp) {
     nodes.push(h('div', { class: 'grp-title', text: state.meta.groups[grp] ?? grp }));
     for (const s of list) {
