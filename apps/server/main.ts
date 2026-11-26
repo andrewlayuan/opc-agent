@@ -19,6 +19,9 @@ import type { EventInput } from '../../packs/memory/events.ts';
 import { hasSensitive } from '../../packs/memory/sensitive.ts';
 import { analyzeItem, generateBrief, latestBrief, translateItem } from '../../packs/radar/analyze.ts';
 import { GROUPS, collectOnce } from '../../packs/radar/collect.ts';
+import { SourceInputError, parseSourceInput, updateCustomSource } from '../../packs/radar/custom.ts';
+import type { SourceInput } from '../../packs/radar/custom.ts';
+import { ProfileError, applyProfile, listProfiles } from '../../packs/radar/profiles.ts';
 import { enrichItem } from '../../packs/radar/enrich.ts';
 import { MAX_ADD, MAX_REVIEW_SKILLS, MAX_SELECTED, PmAdvisor, PmError } from '../../packs/pm/advisor.ts';
 import type { AdvisorEvent } from '../../packs/pm/advisor.ts';
@@ -161,6 +164,16 @@ function versionNo(s: string): number {
 }
 
 let briefRunning = false;
+
+/** 把信息源校验错误转成 HTTP 错误 */
+function sourceInput(body: Record<string, unknown>): SourceInput {
+  try {
+    return parseSourceInput(body);
+  } catch (e) {
+    if (e instanceof SourceInputError) throw new HttpError(e.status, e.message);
+    throw e;
+  }
+}
 
 async function createBrief(focusOn: boolean) {
   const focus = focusOn ? getInterests(db, radar.topics).topics : [];
@@ -529,6 +542,35 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       .all();
     return sendJson(res, 200, { sources: rows });
   }
+  if (p === '/api/profiles' && method === 'GET') return sendJson(res, 200, listProfiles(db));
+  if (p === '/api/profiles/activate' && method === 'POST') {
+    const body = await readJson(req, 1024);
+    try {
+      return sendJson(res, 200, applyProfile(db, body.id));
+    } catch (e) {
+      if (e instanceof ProfileError) throw new HttpError(400, e.message);
+      throw e;
+    }
+  }
+  m = p.match(/^\/api\/sources\/([\w.-]{1,80})\/update$/);
+  if (m && method === 'POST') {
+    const input = sourceInput(await readJson(req, 4096));
+    let moved: boolean;
+    try {
+      ({ moved } = updateCustomSource(db, m[1], input));
+    } catch (e) {
+      if (e instanceof SourceInputError) throw new HttpError(e.status, e.message);
+      throw e;
+    }
+    allowHost(input.url.hostname);
+    let error: string | null = null;
+    let newItems = 0;
+    if (moved) {
+      newItems = (await collectOnce(db, radar.matcher, { maxAgeDays: cfg.maxAgeDays, onlySource: m[1], reach: radar.reach })).newItems;
+      error = (db.prepare('SELECT last_error FROM sources WHERE id=?').get(m[1]) as { last_error: string | null }).last_error;
+    }
+    return sendJson(res, 200, { ok: true, newItems, error });
+  }
   m = p.match(/^\/api\/sources\/([\w.-]{1,80})\/toggle$/);
   if (m && method === 'POST') {
     const body = await readJson(req, 1024);
@@ -553,28 +595,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     return sendJson(res, 200, { ok: true });
   }
   if (p === '/api/sources' && method === 'POST') {
-    const body = await readJson(req, 4096);
-    const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) : '';
-    const raw = typeof body.url === 'string' ? body.url.trim() : '';
-    let u: URL;
-    try {
-      u = new URL(raw);
-    } catch {
-      throw new HttpError(400, 'URL 不合法');
-    }
-    if (u.protocol !== 'https:') throw new HttpError(400, '只支持 https 订阅地址');
-    if (u.username || u.password || (u.port && u.port !== '443')) throw new HttpError(400, 'URL 不能带凭据或非标准端口');
-    if (!name) throw new HttpError(400, '请填写名称');
-    const lang = body.lang === 'zh' ? 'zh' : 'en';
+    const input = sourceInput(await readJson(req, 4096));
     const id = `custom-${Date.now().toString(36)}`;
-    db.prepare("INSERT INTO sources(id, name, url, kind, grp, lang, filter, max_items, custom) VALUES (?, ?, ?, 'feed', 'custom', ?, ?, 20, 1)").run(
-      id,
-      name,
-      u.href,
-      lang,
-      body.filter ? 1 : 0,
-    );
-    allowHost(u.hostname);
+    db.prepare("INSERT INTO sources(id, name, url, kind, grp, lang, filter, max_items, custom) VALUES (?, ?, ?, 'feed', 'custom', ?, ?, 20, 1)").run(id, input.name, input.url.href, input.lang, input.filter);
+    allowHost(input.url.hostname);
     const r = await collectOnce(db, radar.matcher, { maxAgeDays: cfg.maxAgeDays, onlySource: id, reach: radar.reach });
     const row = db.prepare('SELECT last_error FROM sources WHERE id=?').get(id) as { last_error: string | null };
     return sendJson(res, 200, { id, newItems: r.newItems, error: row.last_error });

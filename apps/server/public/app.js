@@ -658,60 +658,156 @@ async function loadBrief() {
 }
 
 // ---------------- 信息源 ----------------
+const srcState = { list: [], query: '', editing: null, profiles: [], active: '' };
+
+function renderProfiles() {
+  const cur = srcState.profiles.find((p) => p.id === srcState.active);
+  $('profile-bar').replaceChildren(
+    h('span', { class: 'muted', text: '我的身份' }),
+    h(
+      'div',
+      { class: 'chips' },
+      srcState.profiles.map((p) =>
+        h('button', { type: 'button', class: `chip${p.id === srcState.active ? ' on' : ''}`, title: p.desc, 'aria-pressed': p.id === srcState.active ? 'true' : 'false', text: `${p.name}（${p.count}）`, onclick: () => switchProfile(p) }),
+      ),
+    ),
+    cur ? h('span', { class: 'muted profile-desc', text: cur.desc }) : null,
+  );
+}
+
+async function loadProfiles() {
+  try {
+    const r = await api('/api/profiles');
+    srcState.profiles = r.profiles;
+    srcState.active = r.active;
+    renderProfiles();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function switchProfile(p) {
+  if (p.id === srcState.active) return;
+  const msg = `切换为「${p.name}」：启用该身份的 ${p.count} 个内置信息源，停用其它内置信息源。\n你对内置源做过的启用 / 停用调整会被重置；自己添加的源不受影响，已抓取的条目会保留。继续？`;
+  if (!confirm(msg)) return;
+  try {
+    const r = await api('/api/profiles/activate', { method: 'POST', body: { id: p.id } });
+    toast(`已切换为「${r.name}」，启用 ${r.enabled} 个信息源；下一轮采集（每小时）或点「刷新」后出现新内容`);
+    await Promise.all([loadProfiles(), loadSources()]);
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+const srcMatches = (s, q) => {
+  if (!q) return true;
+  const hay = `${s.name} ${s.url} ${(state.meta?.groups ?? {})[s.grp] ?? s.grp}`.toLowerCase();
+  return q
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((t) => hay.includes(t));
+};
+
+function sourceEditRow(s) {
+  const name = h('input', { name: 'name', value: s.name, maxlength: '80', 'aria-label': '名称' });
+  const url = h('input', { name: 'url', value: s.url, type: 'url', 'aria-label': '订阅地址' });
+  const zh = h('input', { type: 'checkbox', checked: s.lang === 'zh' ? true : null });
+  const filter = h('input', { type: 'checkbox', checked: s.filter ? true : null });
+  const save = h('button', { type: 'button', text: '保存' });
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    try {
+      const r = await api(`/api/sources/${encodeURIComponent(s.id)}/update`, { method: 'POST', body: { name: name.value, url: url.value, lang: zh.checked ? 'zh' : 'en', filter: filter.checked } });
+      toast(r.error ? `已保存，但抓取失败：${r.error}` : r.newItems ? `已保存，新增 ${r.newItems} 条` : '已保存');
+      srcState.editing = null;
+      loadSources();
+    } catch (err) {
+      toast(err.message);
+      save.disabled = false;
+    }
+  });
+  return h(
+    'div',
+    { class: 'src src-edit' },
+    name,
+    url,
+    h('label', { class: 'check' }, zh, ' 中文'),
+    h('label', { class: 'check' }, filter, ' 只保留关注主题'),
+    save,
+    h('button', { type: 'button', class: 'link', text: '取消', onclick: () => ((srcState.editing = null), renderSources()) }),
+  );
+}
+
+function renderSources() {
+  const q = srcState.query.trim();
+  const shown = srcState.list.filter((s) => srcMatches(s, q));
+  const byGrp = new Map();
+  for (const s of shown) {
+    if (!byGrp.has(s.grp)) byGrp.set(s.grp, []);
+    byGrp.get(s.grp).push(s);
+  }
+  const on = srcState.list.filter((s) => s.enabled).length;
+  const nodes = [h('div', { class: 'muted src-summary', text: q ? `匹配 ${shown.length} / ${srcState.list.length} 个信息源` : `共 ${srcState.list.length} 个信息源，已启用 ${on} 个` })];
+  if (!shown.length) nodes.push(h('p', { class: 'empty', text: q ? '没有匹配的信息源。' : '还没有信息源。' }));
+  for (const [grp, list] of byGrp) {
+    nodes.push(h('div', { class: 'grp-title', text: state.meta.groups[grp] ?? grp }));
+    for (const s of list) {
+      if (srcState.editing === s.id) {
+        nodes.push(sourceEditRow(s));
+        continue;
+      }
+      const ok = s.last_ok_at && (!s.last_error || s.last_ok_at >= s.last_fetch_at);
+      const info = s.last_error ? s.last_error : s.last_fetch_at ? `${ago(s.last_fetch_at)} · 共 ${s.item_count} 条` : '未抓取';
+      nodes.push(
+        h(
+          'div',
+          { class: 'src' },
+          h('span', { class: `dot ${s.last_error ? 'bad' : ok ? 'ok' : ''}`, title: s.last_error || '' }),
+          h('span', { class: 'name' }, extLink(s.url, s.name)),
+          h('span', { class: 'info', text: info }),
+          h('input', {
+            type: 'checkbox',
+            checked: s.enabled ? true : null,
+            title: '启用',
+            onchange: async (e) => {
+              try {
+                await api(`/api/sources/${encodeURIComponent(s.id)}/toggle`, { method: 'POST', body: { enabled: e.target.checked } });
+                s.enabled = e.target.checked ? 1 : 0;
+              } catch (err) {
+                toast(err.message);
+                e.target.checked = !e.target.checked;
+              }
+            },
+          }),
+          s.custom ? h('button', { class: 'link', text: '编辑', onclick: () => ((srcState.editing = s.id), renderSources()) }) : null,
+          s.custom
+            ? h('button', {
+                class: 'link',
+                text: '删除',
+                onclick: async () => {
+                  if (!confirm(`删除「${s.name}」及其全部条目？`)) return;
+                  try {
+                    await api(`/api/sources/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
+                    loadSources();
+                  } catch (err) {
+                    toast(err.message);
+                  }
+                },
+              })
+            : null,
+        ),
+      );
+    }
+  }
+  $('sources').replaceChildren(...nodes);
+}
+
 async function loadSources() {
   try {
     const { sources } = await api('/api/sources');
-    const byGrp = new Map();
-    for (const s of sources) {
-      if (!byGrp.has(s.grp)) byGrp.set(s.grp, []);
-      byGrp.get(s.grp).push(s);
-    }
-    const nodes = [];
-    for (const [grp, list] of byGrp) {
-      nodes.push(h('div', { class: 'grp-title', text: state.meta.groups[grp] ?? grp }));
-      for (const s of list) {
-        const ok = s.last_ok_at && (!s.last_error || s.last_ok_at >= s.last_fetch_at);
-        const info = s.last_error ? s.last_error : s.last_fetch_at ? `${ago(s.last_fetch_at)} · 共 ${s.item_count} 条` : '未抓取';
-        nodes.push(
-          h(
-            'div',
-            { class: 'src' },
-            h('span', { class: `dot ${s.last_error ? 'bad' : ok ? 'ok' : ''}`, title: s.last_error || '' }),
-            h('span', { class: 'name' }, extLink(s.url, s.name)),
-            h('span', { class: 'info', text: info }),
-            h('input', {
-              type: 'checkbox',
-              checked: s.enabled ? true : null,
-              title: '启用',
-              onchange: async (e) => {
-                try {
-                  await api(`/api/sources/${encodeURIComponent(s.id)}/toggle`, { method: 'POST', body: { enabled: e.target.checked } });
-                } catch (err) {
-                  toast(err.message);
-                  e.target.checked = !e.target.checked;
-                }
-              },
-            }),
-            s.custom
-              ? h('button', {
-                  class: 'link',
-                  text: '删除',
-                  onclick: async () => {
-                    if (!confirm(`删除「${s.name}」及其全部条目？`)) return;
-                    try {
-                      await api(`/api/sources/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
-                      loadSources();
-                    } catch (err) {
-                      toast(err.message);
-                    }
-                  },
-                })
-              : null,
-          ),
-        );
-      }
-    }
-    $('sources').replaceChildren(...nodes);
+    srcState.list = sources;
+    renderSources();
   } catch (e) {
     toast(e.message);
   }
@@ -1989,7 +2085,10 @@ function show(view, opts = {}) {
   $('q').hidden = view !== 'feed';
   if (view === 'kb' && !opts.skipLoad) kb.load();
   if (view === 'brief') loadBrief();
-  if (view === 'sources') loadSources();
+  if (view === 'sources') {
+    loadProfiles();
+    loadSources();
+  }
   if (view === 'memory') {
     loadMemory();
     if (mem.tab === 'skills') sk.load();
@@ -2072,6 +2171,10 @@ async function init() {
       b.disabled = false;
       b.textContent = '生成今日简报';
     }
+  });
+  $('src-search').addEventListener('input', (e) => {
+    srcState.query = e.target.value;
+    renderSources();
   });
   $('add-source').addEventListener('submit', async (e) => {
     e.preventDefault();

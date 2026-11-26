@@ -192,6 +192,13 @@ textarea:focus { border-color: var(--fg); }
 .add { display: flex; gap: 8px; padding: 20px 0 8px; flex-wrap: wrap; align-items: center; font-size: 13px; }
 .add input[name=name] { width: 120px; }
 .add input[name=url] { flex: 1; min-width: 220px; }
+.profile-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 16px 0 0; font-size: 13px; }
+.profile-bar .chips { padding: 0; overflow: visible; flex-wrap: wrap; }
+.src-search { width: 100%; max-width: 360px; margin-top: 12px; }
+.src-summary { font-size: 12px; margin-top: 10px; }
+.src-edit { flex-wrap: wrap; }
+.src-edit input[name=name] { width: 140px; }
+.src-edit input[name=url] { flex: 1; min-width: 220px; }
 .grp-title { font-size: 12px; color: var(--muted); margin: 22px 0 4px; letter-spacing: .05em; }
 .src { display: flex; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .src .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); flex: none; }

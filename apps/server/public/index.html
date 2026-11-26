@@ -195,6 +195,7 @@
     </section>
 
     <section id="view-sources" hidden>
+      <div class="profile-bar" id="profile-bar"></div>
       <form class="add" id="add-source" autocomplete="off">
         <input name="name" placeholder="名称" maxlength="80" required>
         <input name="url" type="url" placeholder="RSS / Atom 地址（https）" required>
@@ -202,6 +203,7 @@
         <label class="check"><input type="checkbox" name="filter"> 只保留关注主题</label>
         <button type="submit">添加</button>
       </form>
+      <input type="search" id="src-search" class="src-search" placeholder="搜索信息源（名称、网址或分组）" aria-label="搜索信息源" autocomplete="off">
       <div id="sources"></div>
     </section>
   </main>

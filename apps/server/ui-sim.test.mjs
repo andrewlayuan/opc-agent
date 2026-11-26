@@ -2167,6 +2167,106 @@ assert.equal($('view-feed').hidden, false);
 assert.equal($('q').hidden, false);
 console.log('✓ 情报菜单：动态 / 简报 / 信息源子标签切换');
 
+// 信息源：职业身份切换、搜索、编辑自定义源
+{
+  const walk = (root, out = []) => { out.push(root); for (const c of root.children ?? []) if (c instanceof El) walk(c, out); return out; };
+  const P = [
+    { id: 'ai', name: 'AI 从业者', desc: 'AI 描述', count: 60 },
+    { id: 'dev', name: '程序员', desc: '开发描述', count: 21 },
+    { id: 'finance', name: '金融从业者', desc: '金融描述', count: 15 },
+  ];
+  let active = 'ai';
+  routes['GET /api/profiles'] = () => ({ profiles: P, active });
+  routes['POST /api/profiles/activate'] = (b) => {
+    const p = P.find((x) => x.id === b.id);
+    if (!p) throw new Error('职业档案不存在');
+    active = p.id;
+    return { id: p.id, name: p.name, enabled: p.count, disabled: 40 };
+  };
+  const S = (id, name, o = {}) => ({ id, name, url: `https://${id}.example/feed`, kind: 'feed', grp: 'blog', lang: 'en', filter: 0, enabled: 1, custom: 0, last_fetch_at: null, last_ok_at: null, last_error: null, item_count: 0, ...o });
+  const list = [S('a', 'Alpha Blog'), S('b', 'Beta News', { grp: 'media' }), S('c', '我的源', { grp: 'custom', custom: 1, lang: 'zh' })];
+  routes['GET /api/sources'] = () => ({ sources: list });
+  const n = (u) => calls.filter((c) => c.url === u).length;
+  const btns = (root) => walk(root).filter((e) => e.tagName === 'BUTTON');
+  const names = () => walk($('sources')).filter((e) => e.className === 'name').map((e) => e.textContent);
+
+  await goIntel('信息源');
+  const chips = () => btns($('profile-bar'));
+  assert.deepEqual(chips().map((b) => b.textContent), ['AI 从业者（60）', '程序员（21）', '金融从业者（15）']);
+  assert.ok(chips()[0].className.includes('on') && chips()[0].attrs['aria-pressed'] === 'true');
+  assert.ok(!chips()[1].className.includes('on'));
+  assert.match($('profile-bar').textContent, /AI 描述/);
+  assert.match($('sources').textContent, /共 3 个信息源，已启用 3 个/);
+
+  // 取消确认：不切换；点当前身份：不请求
+  const a0 = n('/api/profiles/activate');
+  ctx.confirm = (m) => (confirms.push(m), false);
+  await chips()[1].fire('click');
+  await tick();
+  ctx.confirm = (m) => (confirms.push(m), true);
+  await chips()[0].fire('click');
+  await tick();
+  assert.equal(n('/api/profiles/activate'), a0);
+  // 确认后切换：请求、提示、高亮与列表刷新
+  const s0 = n('/api/sources');
+  const c0 = confirms.length;
+  await chips()[1].fire('click');
+  await tick();
+  assert.match(confirms[c0], /切换为「程序员」.*21 个内置信息源.*重置.*自己添加的源不受影响/s);
+  assert.deepEqual(calls.filter((c) => c.url === '/api/profiles/activate').at(-1).body, { id: 'dev' });
+  assert.match($('toast').textContent, /已切换为「程序员」，启用 21 个信息源/);
+  assert.ok(chips()[1].className.includes('on') && !chips()[0].className.includes('on'));
+  assert.ok(n('/api/sources') > s0, '切换后重新加载信息源');
+
+  // 搜索：名称 / 网址 / 分组，多个词需同时命中
+  const q = $('src-search');
+  q.value = 'beta';
+  await q.fire('input');
+  assert.deepEqual(names(), ['Beta News']);
+  assert.match($('sources').textContent, /匹配 1 \/ 3 个信息源/);
+  q.value = 'a.example';
+  await q.fire('input');
+  assert.deepEqual(names(), ['Alpha Blog']);
+  q.value = 'alpha media';
+  await q.fire('input');
+  assert.deepEqual(names(), [], '多个词要同时命中');
+  assert.match($('sources').textContent, /没有匹配的信息源/);
+  q.value = '';
+  await q.fire('input');
+  assert.deepEqual(names(), ['Alpha Blog', 'Beta News', '我的源']);
+
+  // 编辑：只有自定义源有「编辑」；保存提交全部字段；失败时留在编辑状态；取消不请求
+  assert.equal(btns($('sources')).filter((b) => b.textContent === '编辑').length, 1);
+  const editRow = () => walk($('sources')).find((e) => e.className === 'src src-edit');
+  await btns($('sources')).find((b) => b.textContent === '编辑').fire('click');
+  assert.ok(editRow(), '进入编辑状态');
+  const inputs = () => walk(editRow()).filter((e) => e.tagName === 'INPUT');
+  const [nameIn, urlIn, zhIn, filterIn] = inputs();
+  nameIn.value = '改名';
+  urlIn.value = 'https://new.example/feed';
+  zhIn.checked = true;
+  filterIn.checked = true;
+  let upd = () => ({ ok: true, newItems: 3, error: null });
+  routes['POST /api/sources/c/update'] = (b) => upd(b);
+  upd = () => { throw new Error('只支持 https 订阅地址'); };
+  await btns(editRow()).find((b) => b.textContent === '保存').fire('click');
+  await tick();
+  assert.match($('toast').textContent, /只支持 https/);
+  assert.ok(editRow(), '失败后仍在编辑');
+  upd = () => ({ ok: true, newItems: 3, error: null });
+  await btns(editRow()).find((b) => b.textContent === '保存').fire('click');
+  await tick();
+  assert.deepEqual(calls.filter((c) => c.url === '/api/sources/c/update').at(-1).body, { name: '改名', url: 'https://new.example/feed', lang: 'zh', filter: true });
+  assert.match($('toast').textContent, /已保存，新增 3 条/);
+  assert.ok(!editRow(), '保存后退出编辑');
+  await btns($('sources')).find((b) => b.textContent === '编辑').fire('click');
+  const u0 = n('/api/sources/c/update');
+  await btns(editRow()).find((b) => b.textContent === '取消').fire('click');
+  assert.ok(!editRow());
+  assert.equal(n('/api/sources/c/update'), u0);
+  console.log('✓ 信息源：职业身份切换、搜索、编辑自定义源');
+}
+
 // 合规：新建、问卷、判定、台账、角标
 {
   const L = (url) => [{ label: '官方', url }];

@@ -22,6 +22,8 @@ export interface SourceDef {
   lang?: string;
   filter?: boolean;
   maxItems?: number;
+  /** 所属的职业档案 id（见 profiles.json）；省略表示只属于 ai */
+  profiles?: string[];
 }
 
 export interface SourceRow {
@@ -78,14 +80,17 @@ export function loadSourceDefs(): SourceDef[] {
 export function syncSources(db: DB): void {
   const defs = loadSourceDefs();
   const upsert = db.prepare(`
-    INSERT INTO sources(id, name, url, kind, grp, lang, filter, max_items, reach_args, custom)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+    INSERT INTO sources(id, name, url, kind, grp, lang, filter, max_items, reach_args, custom, enabled)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
     ON CONFLICT(id) DO UPDATE SET
       etag=CASE WHEN url = excluded.url THEN etag ELSE NULL END,
       last_modified=CASE WHEN url = excluded.url THEN last_modified ELSE NULL END,
       name=excluded.name, url=excluded.url, kind=excluded.kind, grp=excluded.grp,
       lang=excluded.lang, filter=excluded.filter, max_items=excluded.max_items, reach_args=excluded.reach_args
     WHERE custom = 0`);
+  // 新出现的内置源：只有属于当前档案才默认启用（已有源保留各自的启用状态）
+  const active = db.prepare("SELECT value FROM prefs WHERE key = 'source_profile'").get() as { value: string } | undefined;
+  const activeId = active?.value ?? 'ai';
   const ids = new Set(defs.map((d) => d.id));
   const stale = (db.prepare('SELECT id FROM sources WHERE custom = 0').all() as { id: string }[]).filter((r) => !ids.has(r.id));
   for (const r of stale) {
@@ -93,7 +98,7 @@ export function syncSources(db: DB): void {
     db.prepare('DELETE FROM sources WHERE id = ?').run(r.id);
   }
   for (const d of defs) {
-    upsert.run(d.id, d.name, d.url, d.kind ?? 'feed', d.grp ?? 'media', d.lang ?? 'en', d.filter ? 1 : 0, d.maxItems ?? 30, d.reach ? JSON.stringify(d.reach) : null);
+    upsert.run(d.id, d.name, d.url, d.kind ?? 'feed', d.grp ?? 'media', d.lang ?? 'en', d.filter ? 1 : 0, d.maxItems ?? 30, d.reach ? JSON.stringify(d.reach) : null, (d.profiles?.length ? d.profiles : ['ai']).includes(activeId) ? 1 : 0);
   }
   for (const r of db.prepare('SELECT url FROM sources').all() as { url: string }[]) {
     try {
