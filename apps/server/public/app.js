@@ -395,7 +395,7 @@ function renderTopics() {
   const p = state.meta.profile;
   $('scope-hint').replaceChildren(
     ...(p
-      ? [h('span', { text: `身份「${p.name}」· 关注 ${p.focus.join('、')}` }), h('button', { class: 'link', text: '换身份', onclick: () => show('sources') })]
+      ? [h('span', { text: `身份「${p.name}」· 关注 ${p.focus.slice(0, 3).join('、')}${p.focus.length > 3 ? ' 等' : ''}` }), h('button', { class: 'link', text: '换身份', onclick: () => show('sources') })]
       : []),
   );
   const bar = $('focus-bar');
