@@ -5,10 +5,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DB } from '../../packages/core/db.ts';
 import { loadSourceDefs } from './collect.ts';
-import { DEFAULT_PROFILE, isLegacyProfileId, normalizeProfileId } from './profile-id.ts';
+import { DEFAULT_PROFILE, isLegacyProfileId, normalizeProfileId, profilesOf } from './profile-id.ts';
 import type { Lens, Topic } from './text.ts';
 
-export { DEFAULT_PROFILE };
+export { DEFAULT_PROFILE, profilesOf };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PREF_KEY = 'source_profile';
@@ -35,10 +35,6 @@ export function loadProfiles(): Profile[] {
 }
 
 /** 内置源 / 主题所属的档案；省略 profiles 的只属于默认档案 */
-export function profilesOf(def: { profiles?: string[] }): string[] {
-  return def.profiles?.length ? def.profiles : [DEFAULT_PROFILE];
-}
-
 export function getActiveProfile(db: DB): string {
   const row = db.prepare('SELECT value FROM prefs WHERE key = ?').get(PREF_KEY) as { value: string } | undefined;
   const id = normalizeProfileId(row?.value);

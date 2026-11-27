@@ -13,6 +13,8 @@ export interface ListParams {
   /** 只看与用户相关（relevance ≥2） */
   relevant?: boolean;
   includeDup?: boolean;
+  /** 只返回启用中的信息源（当前身份的内置源 + 自己的源）：切换身份后动态也只展示该身份的范围 */
+  enabledOnly?: boolean;
   before?: number; // published_at 游标
   limit?: number;
 }
@@ -92,6 +94,7 @@ export function listItems(db: DB, p: ListParams): ItemView[] {
   const args: (string | number)[] = [];
   // 按来源筛选时也显示被并入别的事件的条目：否则这个来源看起来少了内容（它们在「全部」里仍折叠为「另有 N 个来源」）
   if (!p.includeDup && !p.source) where.push('i.dup_of IS NULL');
+  if (p.enabledOnly) where.push('s.enabled = 1');
   const anyTopics = [...new Set([...(p.topic ? [p.topic] : []), ...(p.topics ?? [])])].slice(0, 20);
   if (anyTopics.length) {
     where.push(`EXISTS (SELECT 1 FROM json_each(i.topics) WHERE value IN (${anyTopics.map(() => '?').join(',')}))`);

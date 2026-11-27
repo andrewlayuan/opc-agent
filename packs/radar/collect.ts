@@ -6,9 +6,9 @@ import { parseFeed, parseGithubReleases, parseHfModels, parsePageList } from '..
 import type { FeedEntry } from '../../packages/core/feed.ts';
 import { allowHost, politeFetch } from '../../packages/core/net.ts';
 import type { Reach } from '../../packages/core/reach.ts';
-import { DEFAULT_PROFILE, normalizeProfileId } from './profile-id.ts';
+import { DEFAULT_PROFILE, normalizeProfileId, profilesOf } from './profile-id.ts';
 import { detectLang, normTitle, normalizeUrl, titleSimilarity } from './text.ts';
-import type { TopicMatcher } from './text.ts';
+import type { Topic, TopicMatcher } from './text.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -132,6 +132,7 @@ export function insertEntries(db: DB, src: SourceRow, entries: FeedEntry[], matc
   const ins = db.prepare(`INSERT INTO items(source_id, url, title, norm_title, author, published_at, fetched_at, content, lang, topics, dup_of)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const recentTitles = recent.all(now - 4 * 24 * 3600 * 1000) as { id: number; norm_title: string }[];
+  const filterIds = filterTopicIds(src, matcher.topics);
   const ids: number[] = [];
   let taken = 0;
   const sorted = [...entries].sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0));
@@ -149,7 +150,7 @@ export function insertEntries(db: DB, src: SourceRow, entries: FeedEntry[], matc
     if (deleted.get(url)) continue;
     const text = `${e.title}\n${e.content.slice(0, 3000)}`;
     const topics = matcher.match(text);
-    if (src.filter && !topics.some((t) => t !== 'product')) continue;
+    if (src.filter && !topics.some((t) => filterIds.has(t))) continue;
     const nt = normTitle(e.title);
     let dupOf: number | null = null;
     if (nt.length >= 12) {
@@ -168,6 +169,22 @@ export function insertEntries(db: DB, src: SourceRow, entries: FeedEntry[], matc
     taken++;
   }
   return ids;
+}
+
+/**
+ * filter=true 的源是综合站点（HN、极客公园、Product Hunt、arXiv 分类），信息量大，
+ * 只保留命中「本档案」主题的条目：别的档案的主题不算数，泛化的「AI 产品」也不算
+ * （keywords 是 launch / app / 发布 这类常用词，几乎条条命中，起不到过滤作用）。
+ * 自定义源没有档案归属，按全部主题过滤。
+ */
+export function filterTopicIds(src: { id: string; custom?: number | null }, topics: Topic[]): Set<string> {
+  const def = src.custom ? undefined : loadSourceDefs().find((d) => d.id === src.id);
+  const mineProfiles = def ? profilesOf(def) : null;
+  return new Set(
+    topics
+      .filter((t) => t.id !== 'product' && (!mineProfiles || profilesOf(t).some((p) => mineProfiles.includes(p))))
+      .map((t) => t.id),
+  );
 }
 
 function fromReach(items: Awaited<ReturnType<Reach['run']>>): FeedEntry[] {

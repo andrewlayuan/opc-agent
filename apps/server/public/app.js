@@ -369,7 +369,13 @@ async function loadItems(reset = true) {
     state.cursor = items.length ? items[items.length - 1].published_at : state.cursor;
     $('more').hidden = items.length < 30;
     $('empty').hidden = state.items.length > 0;
-    $('empty').textContent = state.topic === FOCUS ? '关注方向下暂时没有符合条件的内容，可以放宽重点程度或时间范围。' : '暂无内容。点右上角「刷新」开始采集。';
+    const who = state.meta.profile?.name;
+    $('empty').textContent =
+      state.topic === FOCUS
+        ? '关注方向下暂时没有符合条件的内容，可以放宽重点程度或时间范围。'
+        : who
+          ? `「${who}」的信息源还没有抓到内容，点右上角「刷新」立即采集（每小时的自动采集也会补上）。`
+          : '暂无内容。点右上角「刷新」开始采集。';
   } catch (e) {
     toast(e.message);
   } finally {

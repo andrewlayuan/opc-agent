@@ -89,7 +89,7 @@ analysis 每条不超过 60 字，用中文。
   try {
     const out = await llm.json<{ title_zh?: unknown; summary_zh?: unknown; analysis?: unknown; topics?: unknown; importance?: unknown; relevance?: unknown; relevance_zh?: unknown }>(
       [
-        { role: 'system', content: `你是严谨的中文 ${role}情报分析师，只输出 JSON。` },
+        { role: 'system', content: `你是严谨的中文${sp(role)}${role}情报分析师，只输出 JSON。` },
         { role: 'user', content: prompt },
       ],
       900,

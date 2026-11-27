@@ -135,7 +135,7 @@ test('职业口径：传 lens 时分析用该身份的角色、影响角度、�
   assert.match(p, /5=央行利率或重大监管决定/);
   assert.match(p, /fi-policy=货币政策/);
   assert.doesNotMatch(p, /llm=大模型/, '只用当前身份的主题');
-  assert.match(p, /中文 金融情报分析师/);
+  assert.match(p, /你是严谨的中文金融情报分析师/);
   // 不传 lens：默认仍是「AI 技术」口径（与 fixture 一致）
   const seen2: Msg[][] = [];
   await analyzeItem(db, fakeLlm(ANALYSIS, seen2), topics, id);

@@ -286,11 +286,13 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   if (p === '/api/items' && method === 'GET') {
     const s = url.searchParams;
     const q = (s.get('q') ?? '').slice(0, 200);
-    const known = new Set(radar.topics.map((t) => t.id));
+    // 主题筛选只认当前身份的主题：切到别的身份后，旧链接里的主题不再生效
+    const known = new Set(activeTopics().map((t) => t.id));
     const items = listItems(db, {
       topic: s.get('topic')?.slice(0, 40) || undefined,
       topics: (s.get('topics') ?? '').split(',').filter((t) => known.has(t)),
       grp: s.get('grp')?.slice(0, 40) || undefined,
+      enabledOnly: true,
       source: s.get('source')?.slice(0, 80) || undefined,
       q: q.trim() || undefined,
       days: intParam(s.get('days'), 1, 365),

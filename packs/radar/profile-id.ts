@@ -9,3 +9,8 @@ export function normalizeProfileId(v: string | null | undefined): string {
   return LEGACY[v] ?? v;
 }
 export const isLegacyProfileId = (v: string | null | undefined): boolean => !!v && v in LEGACY;
+
+/** 某个信息源 / 主题属于哪些档案；省略 profiles 表示只属于默认档案 */
+export function profilesOf(def: { profiles?: string[] }): string[] {
+  return def.profiles?.length ? def.profiles : [DEFAULT_PROFILE];
+}

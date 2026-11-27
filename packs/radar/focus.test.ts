@@ -96,6 +96,22 @@ test('多主题筛选（任一命中）+ 重要度', () => {
   done();
 });
 
+test('切换身份后动态只看该身份的源：enabledOnly 只保留启用中的信息源', () => {
+  const { db, done } = tmpDb();
+  const ins = db.prepare(
+    "INSERT INTO items(source_id, url, title, norm_title, published_at, fetched_at, topics, importance) VALUES (?, ?, ?, '', ?, ?, ?, 3)",
+  );
+  const now = Date.now();
+  ins.run('openai', 'https://x.com/1', 'tech item', now, now, '["llm"]');
+  ins.run('edpb', 'https://x.com/2', 'legal item', now, now, '["lg-privacy"]');
+  db.prepare("UPDATE sources SET enabled = 0 WHERE id = 'edpb'").run();
+  assert.equal(listItems(db, {}).length, 2, '不过滤时两条都在');
+  assert.deepEqual(listItems(db, { enabledOnly: true }).map((r) => r.source_id), ['openai']);
+  db.prepare("UPDATE sources SET enabled = 1 WHERE id = 'edpb'").run();
+  assert.equal(listItems(db, { enabledOnly: true }).length, 2, '启用后又能看到');
+  done();
+});
+
 test('主题校准：按新主题清单重新归类，完成后不再重复', async () => {
   const { db, done } = tmpDb();
   const ins = db.prepare(
